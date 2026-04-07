@@ -170,6 +170,52 @@ async function fetchAllOrders(
   return allOrders;
 }
 
+// ─── Enrich orders with reliable lifetime order counts ─────────
+// The embedded `customer.orders_count` on the orders endpoint is unreliable
+// (often missing/zero). Fetch each unique customer directly to get the
+// authoritative lifetime count, then stamp it on every order in this window.
+async function enrichCustomerOrderCounts(
+  domain: string,
+  token: string,
+  orders: ShopifyOrder[]
+): Promise<void> {
+  const uniqueCustomerIds = new Set<number>();
+  for (const o of orders) {
+    if (o.customer?.id) uniqueCustomerIds.add(o.customer.id);
+  }
+
+  const counts = new Map<number, number>();
+  // Fetch sequentially with small delay to respect Shopify 2 req/sec
+  for (const cid of uniqueCustomerIds) {
+    try {
+      const res = await fetch(
+        `https://${domain}/admin/api/2024-01/customers/${cid}.json`,
+        {
+          headers: {
+            'X-Shopify-Access-Token': token,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+      if (!res.ok) continue;
+      const j = (await res.json()) as { customer?: { orders_count?: number } };
+      if (typeof j.customer?.orders_count === 'number') {
+        counts.set(cid, j.customer.orders_count);
+      }
+    } catch {
+      // Skip on individual failure — those orders will fall back to RC
+    }
+    await new Promise((r) => setTimeout(r, 120));
+  }
+
+  for (const o of orders) {
+    if (o.customer?.id && counts.has(o.customer.id)) {
+      (o as ShopifyOrder & { lifetimeOrdersCount?: number }).lifetimeOrdersCount =
+        counts.get(o.customer.id);
+    }
+  }
+}
+
 // ─── Aggregation ────────────────────────────────────────────────
 
 function aggregateOrdersByDay(orders: ShopifyOrder[]): Map<string, DayBucket> {
@@ -213,18 +259,16 @@ function aggregateOrdersByDay(orders: ShopifyOrder[]): Map<string, DayBucket> {
     }
   }
 
-  // Build set of first-order IDs per customer (only when their first order
-  // actually falls inside this sync window).
+  // Build set of first-order IDs per customer. We rely on lifetimeOrdersCount
+  // which is populated by the caller (fetched via /customers/{id}.json — the
+  // embedded customer object on orders is unreliable for orders_count).
   const firstOrderIds = new Set<number>();
   for (const [, custOrds] of customerOrders) {
     custOrds.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-    const lifetimeCount = (custOrds[0].customer as { orders_count?: number } | undefined)?.orders_count ?? 0;
-    // If lifetime count equals what we see in the window, the earliest one
-    // we saw IS their first ever order → mark as NC.
+    const lifetimeCount = (custOrds[0] as ShopifyOrder & { lifetimeOrdersCount?: number }).lifetimeOrdersCount ?? 0;
     if (lifetimeCount > 0 && lifetimeCount <= custOrds.length) {
       firstOrderIds.add(custOrds[0].id);
     }
-    // Otherwise lifetimeCount > window count → all are returning, none flagged.
   }
 
   // Process all non-voided orders
@@ -379,6 +423,9 @@ export async function POST(request: NextRequest) {
       sinceDate,
       untilDate
     );
+
+    // Enrich with reliable lifetime order counts (per-customer fetch)
+    await enrichCustomerOrderCounts(brand.shopify_store_domain, shopifyToken, orders);
 
     // Aggregate by day
     const dayBuckets = aggregateOrdersByDay(orders);
