@@ -104,10 +104,10 @@ export default function DashboardPage() {
       }));
 
   return (
-    <div className="min-h-screen flex flex-col" style={{ backgroundColor: '#0a0a0a', color: '#F5F5F8' }}>
+    <div className="min-h-screen" style={{ backgroundColor: '#0a0a0a', color: '#F5F5F8' }}>
       <Navbar />
 
-      <main className="flex-1 px-8 py-10 pb-24 max-w-7xl mx-auto w-full">
+      <main className="px-8 pt-10 pb-32 max-w-7xl mx-auto w-full">
         <header className="mb-10">
           <h1 className="text-3xl font-semibold mb-2">
             Welcome back{userName ? `, ${userName}` : ''}
