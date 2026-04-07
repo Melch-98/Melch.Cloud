@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   FileText,
@@ -98,6 +98,7 @@ export default function CopyTemplatesPage() {
   const [brands, setBrands] = useState<Brand[]>([]);
   const [selectedBrandId, setSelectedBrandId] = useState<string>('');
   const [templates, setTemplates] = useState<CopyTemplate[]>([]);
+  const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'title'>('newest');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -175,6 +176,19 @@ export default function CopyTemplatesPage() {
   useEffect(() => {
     fetchTemplates();
   }, [fetchTemplates]);
+
+  // Sorted view of templates based on user selection
+  const sortedTemplates = useMemo(() => {
+    const arr = [...templates];
+    if (sortBy === 'newest') {
+      arr.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    } else if (sortBy === 'oldest') {
+      arr.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    } else {
+      arr.sort((a, b) => a.title.localeCompare(b.title));
+    }
+    return arr;
+  }, [templates, sortBy]);
 
   // ─── Brand switch (admin) ───────────────────────────────────────
   const handleBrandChange = (id: string) => {
@@ -506,8 +520,22 @@ export default function CopyTemplatesPage() {
             </button>
           </div>
         ) : (
-          <div className="grid gap-4">
-            {templates.map((t) => (
+          <div>
+            <div className="flex items-center justify-end mb-3 gap-2">
+              <label className="text-xs uppercase tracking-wider" style={{ color: TEXT_DIM }}>Sort</label>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as 'newest' | 'oldest' | 'title')}
+                className="text-sm px-3 py-1.5 rounded-lg focus:outline-none"
+                style={{ background: BG_CARD, border: `1px solid ${BORDER}`, color: TEXT_MUTED }}
+              >
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+                <option value="title">Title (A–Z)</option>
+              </select>
+            </div>
+            <div className="grid gap-4">
+            {sortedTemplates.map((t) => (
               <TemplateCard
                 key={t.id}
                 template={t}
@@ -515,6 +543,7 @@ export default function CopyTemplatesPage() {
                 onDelete={() => handleDelete(t.id)}
               />
             ))}
+            </div>
           </div>
         )}
       </div>
