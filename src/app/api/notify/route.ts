@@ -1,20 +1,18 @@
+// ─── /api/notify ──────────────────────────────────────────────
+// Sends creative-upload notifications to Slack + email.
+// Email goes through the central email module. Slack stays inline.
+
 import { NextResponse } from 'next/server';
-import { Resend } from 'resend';
+import { sendEmail } from '@/lib/email';
+import type {
+  CreativeUploadBatch,
+  CreativeUploadData,
+} from '@/lib/email/templates/creative-upload';
 
 export const dynamic = 'force-dynamic';
 
-// ─── Slack Helper ──────────────────────────────────────────────
-async function sendSlackNotification({
-  batchName,
-  creatorName,
-  fileCount,
-  brandName,
-}: {
-  batchName: string;
-  creatorName: string;
-  fileCount: number;
-  brandName: string;
-}) {
+// ─── Slack notification ───────────────────────────────────────
+async function sendSlackNotification(body: CreativeUploadData) {
   const webhookUrl = process.env.SLACK_WEBHOOK_URL;
   if (!webhookUrl) {
     console.warn('SLACK_WEBHOOK_URL not set — skipping Slack notification');
@@ -22,26 +20,53 @@ async function sendSlackNotification({
   }
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://melch.cloud';
+  const { brandName, batchCount, totalFiles, batches } = body;
+
+  const headerText =
+    batchCount === 1
+      ? `🎨 New Creative Submission — ${brandName}`
+      : `🎨 ${batchCount} New Creative Batches — ${brandName}`;
+
+  const summaryFields = [
+    { type: 'mrkdwn', text: `*Brand*\n${brandName}` },
+    { type: 'mrkdwn', text: `*Batches*\n${batchCount}` },
+    { type: 'mrkdwn', text: `*Total Files*\n${totalFiles}` },
+    {
+      type: 'mrkdwn',
+      text: `*Creators*\n${Array.from(new Set(batches.map((b) => b.creatorName))).join(', ')}`,
+    },
+  ];
+
+  const batchBlocks = batches.flatMap((b) => {
+    const fileList =
+      b.fileNames.length > 0
+        ? b.fileNames
+            .slice(0, 8)
+            .map((n) => `• ${n}`)
+            .join('\n') +
+          (b.fileNames.length > 8 ? `\n…and ${b.fileNames.length - 8} more` : '')
+        : '_no files_';
+
+    const meta: string[] = [
+      `*${b.batchName}*`,
+      `Type: ${b.creativeType || '—'}`,
+      `Creator: ${b.creatorName}${b.creatorSocialHandle ? ` (${b.creatorSocialHandle})` : ''}`,
+      `Files: ${b.fileCount}`,
+    ];
+    if (b.landingPageUrl) meta.push(`LP: ${b.landingPageUrl}`);
+
+    return [
+      { type: 'divider' },
+      { type: 'section', text: { type: 'mrkdwn', text: meta.join('\n') } },
+      { type: 'section', text: { type: 'mrkdwn', text: fileList } },
+    ];
+  });
 
   const payload = {
     blocks: [
-      {
-        type: 'header',
-        text: {
-          type: 'plain_text',
-          text: '🎨 New Creative Submission',
-          emoji: true,
-        },
-      },
-      {
-        type: 'section',
-        fields: [
-          { type: 'mrkdwn', text: `*Batch*\n${batchName}` },
-          { type: 'mrkdwn', text: `*Brand*\n${brandName}` },
-          { type: 'mrkdwn', text: `*Creator*\n${creatorName}` },
-          { type: 'mrkdwn', text: `*Files*\n${fileCount} file${fileCount !== 1 ? 's' : ''}` },
-        ],
-      },
+      { type: 'header', text: { type: 'plain_text', text: headerText, emoji: true } },
+      { type: 'section', fields: summaryFields },
+      ...batchBlocks,
       {
         type: 'actions',
         elements: [
@@ -73,81 +98,31 @@ async function sendSlackNotification({
   }
 }
 
-// ─── Main Handler ──────────────────────────────────────────────
+// ─── Main handler ─────────────────────────────────────────────
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const { batchName, creatorName, fileCount, brandName } = body;
+    const raw = await request.json();
 
-    // Fire both notifications in parallel
+    const data: CreativeUploadData = {
+      brandName: raw.brandName || 'Unknown brand',
+      batchCount: raw.batchCount ?? (raw.batches?.length || 1),
+      totalFiles:
+        raw.totalFiles ??
+        (raw.batches?.reduce(
+          (s: number, b: CreativeUploadBatch) => s + (b.fileCount || 0),
+          0
+        ) || 0),
+      batches: Array.isArray(raw.batches) ? raw.batches : [],
+    };
+
+    const adminEmail = process.env.ADMIN_NOTIFICATION_EMAIL || 'melch@melch.media';
+
     const [emailResult, slackResult] = await Promise.allSettled([
-      // Email via Resend
-      (async () => {
-        const apiKey = process.env.RESEND_API_KEY;
-        if (!apiKey) {
-          console.warn('RESEND_API_KEY not set — skipping email notification');
-          return { skipped: true };
-        }
-
-        const resend = new Resend(apiKey);
-        const adminEmail = process.env.ADMIN_NOTIFICATION_EMAIL || 'melch@melch.media';
-        const fromEmail = process.env.NOTIFICATION_FROM_EMAIL || 'noreply@melch.cloud';
-
-        const { data, error } = await resend.emails.send({
-          from: `melch.cloud <${fromEmail}>`,
-          to: [adminEmail],
-          subject: `New Creative Submission: ${batchName}`,
-          html: `
-            <div style="font-family: 'Helvetica Neue', sans-serif; background-color: #0A0A0A; color: #F5F5F8; padding: 40px; border-radius: 12px;">
-              <div style="max-width: 500px; margin: 0 auto;">
-                <h1 style="font-size: 24px; font-weight: 700; margin-bottom: 4px;">
-                  <span style="color: #F5F5F8;">melch</span><span style="color: #C8B89A;">.cloud</span>
-                </h1>
-                <p style="color: #ABABAB; font-size: 13px; margin-bottom: 32px;">New creative submission received</p>
-
-                <div style="background: #222222; border-radius: 12px; padding: 24px; border: 1px solid rgba(255,255,255,0.1);">
-                  <table style="width: 100%; border-collapse: collapse;">
-                    <tr>
-                      <td style="color: #ABABAB; font-size: 13px; padding: 8px 0;">Batch</td>
-                      <td style="color: #F5F5F8; font-size: 13px; font-weight: 600; text-align: right;">${batchName}</td>
-                    </tr>
-                    <tr>
-                      <td style="color: #ABABAB; font-size: 13px; padding: 8px 0;">Brand</td>
-                      <td style="color: #F5F5F8; font-size: 13px; font-weight: 600; text-align: right;">${brandName}</td>
-                    </tr>
-                    <tr>
-                      <td style="color: #ABABAB; font-size: 13px; padding: 8px 0;">Creator</td>
-                      <td style="color: #F5F5F8; font-size: 13px; font-weight: 600; text-align: right;">${creatorName}</td>
-                    </tr>
-                    <tr>
-                      <td style="color: #ABABAB; font-size: 13px; padding: 8px 0;">Files</td>
-                      <td style="color: #C8B89A; font-size: 13px; font-weight: 600; text-align: right;">${fileCount} file${fileCount !== 1 ? 's' : ''}</td>
-                    </tr>
-                  </table>
-                </div>
-
-                <a href="${process.env.NEXT_PUBLIC_APP_URL || 'https://melch.cloud'}/admin"
-                   style="display: block; text-align: center; background-color: #C8B89A; color: #0A0A0A; padding: 12px 24px; border-radius: 12px; text-decoration: none; font-weight: 600; font-size: 14px; margin-top: 24px;">
-                  Review in Dashboard
-                </a>
-
-                <p style="color: #666; font-size: 11px; text-align: center; margin-top: 32px;">
-                  melch.cloud Creative Upload Portal
-                </p>
-              </div>
-            </div>
-          `,
-        });
-
-        if (error) {
-          console.error('Resend error:', error);
-          return { error: 'Email failed' };
-        }
-        return { success: true, id: data?.id };
-      })(),
-
-      // Slack webhook
-      sendSlackNotification({ batchName, creatorName, fileCount, brandName }),
+      sendEmail({
+        to: adminEmail,
+        template: { name: 'creative-upload', data },
+      }),
+      sendSlackNotification(data),
     ]);
 
     return NextResponse.json({

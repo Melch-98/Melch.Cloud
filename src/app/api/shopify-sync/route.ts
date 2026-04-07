@@ -589,6 +589,32 @@ export async function POST(request: NextRequest) {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     console.error('Shopify sync error:', message);
+
+    // Fire-and-forget alert email (rate-limited 1h per brand)
+    try {
+      const { sendEmail } = await import('@/lib/email');
+      await sendEmail({
+        to: process.env.ADMIN_NOTIFICATION_EMAIL || 'melch@melch.media',
+        template: {
+          name: 'sync-failure',
+          data: {
+            brandName: brand.name,
+            brandId: brand.id,
+            source: 'shopify',
+            errorMessage: message,
+            context: {
+              'Since Date': sinceDate.split('T')[0],
+              'Until Date': untilDate.split('T')[0],
+            },
+          },
+        },
+        dedupeKey: `sync-failure:shopify:${brand.id}`,
+        dedupeTtlSeconds: 3600,
+      });
+    } catch (alertErr) {
+      console.error('Failed to send sync failure alert:', alertErr);
+    }
+
     return NextResponse.json({ error: 'Shopify sync failed', details: message }, { status: 500 });
   } finally {
     await releaseSyncLock(brand.id);

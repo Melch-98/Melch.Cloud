@@ -442,13 +442,25 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
 
       // Call notify endpoint
       setUploadProgress('Sending notification...');
+      const brandName =
+        brands.find((b) => b.id === selectedBrandId)?.name || 'Unknown brand';
       await fetch('/api/notify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          brandName,
           brandId: selectedBrandId,
           batchCount: batches.length,
           totalFiles: batches.reduce((sum, b) => sum + b.files.length, 0),
+          batches: batches.map((b) => ({
+            batchName: b.batchName,
+            creativeType: b.creativeType,
+            creatorName: b.creatorName || 'Unknown',
+            creatorSocialHandle: b.creatorSocialHandle || null,
+            landingPageUrl: b.landingPageUrl || null,
+            fileCount: b.files.length,
+            fileNames: b.files.map((f) => f.name),
+          })),
         }),
       });
 

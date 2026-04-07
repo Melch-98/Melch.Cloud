@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { sendEmail } from '@/lib/email';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,7 +49,7 @@ export async function POST(request: NextRequest) {
 
   // ── Parse body ──
   const body = await request.json();
-  const { email, fullName, role, brandId, tempPassword } = body;
+  const { email, fullName, role, brandId, tempPassword, sendWelcomeEmail } = body;
 
   if (!email || !tempPassword || !role) {
     return NextResponse.json(
@@ -170,9 +171,39 @@ export async function POST(request: NextRequest) {
     console.error('Permissions upsert failed (non-fatal):', permsError.message);
   }
 
+  // ── Optional welcome email ──
+  let welcomeEmailResult: { sent: boolean; error?: string } | null = null;
+  if (sendWelcomeEmail) {
+    let brandName: string | undefined;
+    if (brandId) {
+      const { data: brand } = await supabase
+        .from('brands')
+        .select('name')
+        .eq('id', brandId)
+        .single();
+      brandName = brand?.name;
+    }
+
+    const result = await sendEmail({
+      to: email,
+      template: {
+        name: 'welcome',
+        data: {
+          name: fullName || email.split('@')[0],
+          role,
+          brandName,
+          loginUrl: process.env.NEXT_PUBLIC_APP_URL || 'https://melch.cloud',
+          invitedBy: caller.email || undefined,
+        },
+      },
+    });
+    welcomeEmailResult = { sent: result.sent, error: result.error };
+  }
+
   return NextResponse.json({
     ok: true,
     isExisting,
+    welcomeEmail: welcomeEmailResult,
     user: {
       id: userId,
       email,

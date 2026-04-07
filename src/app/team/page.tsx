@@ -842,6 +842,7 @@ function InviteMemberModal({
   const [brandId, setBrandId] = useState<string>('');
   const [tempPassword, setTempPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [sendWelcomeEmail, setSendWelcomeEmail] = useState(true);
 
   // Success state
   const [result, setResult] = useState<InviteResult | null>(null);
@@ -855,6 +856,7 @@ function InviteMemberModal({
     setBrandId('');
     setTempPassword('');
     setShowPassword(false);
+    setSendWelcomeEmail(true);
     setError(null);
     setResult(null);
     setCopied(null);
@@ -903,6 +905,7 @@ function InviteMemberModal({
           role,
           brandId: brandId || undefined,
           tempPassword,
+          sendWelcomeEmail,
         }),
       });
 
@@ -1137,6 +1140,27 @@ function InviteMemberModal({
                 User will change this on their first login via Account Settings
               </p>
             </div>
+
+            {/* Welcome Email Toggle */}
+            <label
+              className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer select-none transition-colors hover:bg-white/[0.03]"
+              style={{ backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}
+            >
+              <input
+                type="checkbox"
+                checked={sendWelcomeEmail}
+                onChange={(e) => setSendWelcomeEmail(e.target.checked)}
+                className="w-4 h-4 rounded cursor-pointer accent-[#C8B89A]"
+              />
+              <div className="flex-1">
+                <p className="text-xs font-medium" style={{ color: '#F5F5F8' }}>
+                  Send welcome email
+                </p>
+                <p className="text-[10px]" style={{ color: '#555' }}>
+                  Emails the user a branded intro with their sign-in link
+                </p>
+              </div>
+            </label>
 
             {/* Submit */}
             <div className="flex justify-end gap-3 pt-3" style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
