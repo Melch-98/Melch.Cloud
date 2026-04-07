@@ -165,6 +165,10 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
 }) => {
   const [batches, setBatches] = useState<BatchFormState[]>([]);
   const [existingBatchNames, setExistingBatchNames] = useState<string[]>([]);
+  // Track batch IDs that successfully committed during this form session,
+  // so that if a later batch fails, retrying the submit skips already-saved
+  // batches instead of re-uploading and creating duplicates.
+  const [savedBatchIds, setSavedBatchIds] = useState<Set<string>>(new Set());
   const [submitMessage, setSubmitMessage] = useState<{
     type: 'success' | 'error';
     text: string;
@@ -340,6 +344,13 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
 
       for (let bIdx = 0; bIdx < batches.length; bIdx++) {
         const batch = batches[bIdx];
+
+        // Skip batches already committed in a prior submit attempt this session.
+        if (savedBatchIds.has(batch.id)) {
+          setUploadProgress(`Batch ${bIdx + 1} of ${totalBatches} already saved — skipping`);
+          continue;
+        }
+
         setUploadProgress(`Uploading batch ${bIdx + 1} of ${totalBatches}...`);
 
         // Upload files to Supabase Storage
@@ -355,7 +366,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
             .upload(storagePath, file, { upsert: true });
 
           if (uploadError) {
-            throw new Error(`File upload failed: ${uploadError.message}`);
+            throw new Error(`Batch ${bIdx + 1} (${batch.batchName}) — file upload failed for "${file.name}": ${uploadError.message}`);
           }
 
           uploadedFiles.push({
@@ -392,7 +403,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
           .single();
 
         if (submissionError) {
-          throw new Error(`Submission failed: ${submissionError.message}`);
+          throw new Error(`Batch ${bIdx + 1} (${batch.batchName}) — submission insert failed: ${submissionError.message}`);
         }
 
         // Create file records
@@ -417,8 +428,16 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
           });
           if (fileError) {
             console.error(`File insert error for ${batch.files[i].name}:`, fileError);
+            throw new Error(`Batch ${bIdx + 1} (${batch.batchName}) — file record insert failed for "${batch.files[i].name}": ${fileError.message}`);
           }
         }
+
+        // Mark batch as fully saved so a retry skips it.
+        setSavedBatchIds((prev) => {
+          const next = new Set(prev);
+          next.add(batch.id);
+          return next;
+        });
       }
 
       // Call notify endpoint
@@ -451,6 +470,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
         text: `${batches.length} batch${batches.length > 1 ? 'es' : ''} submitted — ${batches.reduce((s, b) => s + b.files.length, 0)} files uploaded`,
       });
       setBatches([createEmptyBatch(nextBatchName(refreshedNames))]);
+      setSavedBatchIds(new Set());
 
       if (onSubmit) {
         onSubmit(batches);
