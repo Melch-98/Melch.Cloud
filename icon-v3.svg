@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="gold3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#D4C8AE"/>
+      <stop offset="50%" stop-color="#C8B89A"/>
+      <stop offset="100%" stop-color="#A89474"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect x="32" y="32" width="448" height="448" rx="96" ry="96" fill="#0A0A0A"/>
+
+  <!-- Integrated M-Cloud: The M's peaks form cloud-like curves -->
+  <path d="
+    M 130 390
+    L 130 220
+    C 130 180, 160 145, 195 145
+    C 220 145, 240 158, 250 178
+    C 260 155, 280 140, 310 140
+    C 350 140, 382 175, 382 215
+    L 382 390
+    L 340 390
+    L 340 260
+    L 275 360
+    L 237 360
+    L 172 260
+    L 172 390
+    Z
+  " fill="url(#gold3)"/>
+
+  <!-- Cloud highlight — soft arc across the top of the M peaks -->
+  <path d="
+    M 145 220
+    C 145 175, 170 150, 200 150
+    C 225 150, 242 165, 252 182
+    C 262 158, 285 145, 312 145
+    C 348 145, 375 172, 375 210
+  " fill="none" stroke="#D4C8AE" stroke-width="3" opacity="0.4"/>
+</svg>

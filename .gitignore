@@ -1,0 +1,54 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# next.js build output
+.next/
+out/
+build/
+dist/
+
+# environment & secrets
+.env
+.env.*
+!.env.example
+.env.local
+.env.local.example
+.env.prod
+.env.pulled
+.env.vercel
+.vercel-token
+.vercel/
+
+# typescript
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+next-env.d.ts
+
+# logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# editor
+.vscode/
+.idea/
+
+# misc large/non-code files in repo root
+*.pptx
+*.docx
+*.xlsx
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.mp4
+*.mov
+
+# sentry
+.sentryclirc

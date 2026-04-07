@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>melch.cloud Icon Concepts</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0A0A0A;
+    color: #F5F5F8;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    padding: 60px 40px;
+    min-height: 100vh;
+  }
+  h1 {
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    letter-spacing: -0.5px;
+  }
+  h1 span { color: #C8B89A; }
+  .subtitle {
+    color: #666;
+    font-size: 14px;
+    margin-bottom: 60px;
+  }
+  .concepts {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 48px;
+    max-width: 1100px;
+  }
+  .concept {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 24px;
+  }
+  .concept h2 {
+    font-size: 14px;
+    font-weight: 600;
+    color: #C8B89A;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+  }
+  .concept p {
+    font-size: 13px;
+    color: #777;
+    text-align: center;
+    line-height: 1.5;
+    max-width: 280px;
+  }
+  .icon-large {
+    width: 200px;
+    height: 200px;
+    border-radius: 40px;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+  .icon-large img { width: 100%; height: 100%; }
+  .sizes {
+    display: flex;
+    gap: 20px;
+    align-items: flex-end;
+  }
+  .size-preview {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+  .size-preview span {
+    font-size: 10px;
+    color: #555;
+    font-family: monospace;
+  }
+  .size-preview img {
+    border-radius: 20%;
+  }
+  .divider {
+    width: 100%;
+    height: 1px;
+    background: rgba(255,255,255,0.06);
+    margin: 48px 0;
+    max-width: 1100px;
+  }
+</style>
+</head>
+<body>
+  <h1>melch<span>.cloud</span> — Icon Concepts</h1>
+  <p class="subtitle">M + Cloud hybrid · Favicon & app icon</p>
+
+  <div class="concepts">
+    <!-- V1 -->
+    <div class="concept">
+      <h2>Version 1</h2>
+      <div class="icon-large"><img src="public/icon-v1.svg" alt="V1"></div>
+      <p>Classic bold M with a small cloud accent floating top-right. Clean separation between letterform and cloud motif.</p>
+      <div class="sizes">
+        <div class="size-preview">
+          <img src="public/icon-v1.svg" width="64" height="64" alt="">
+          <span>64px</span>
+        </div>
+        <div class="size-preview">
+          <img src="public/icon-v1.svg" width="32" height="32" alt="">
+          <span>32px</span>
+        </div>
+        <div class="size-preview">
+          <img src="public/icon-v1.svg" width="16" height="16" alt="">
+          <span>16px</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- V2 -->
+    <div class="concept">
+      <h2>Version 2</h2>
+      <div class="icon-large"><img src="public/icon-v2.svg" alt="V2"></div>
+      <p>Cloud morphs into the M — the cloud body IS the top of the letterform, with legs dropping down. One unified shape.</p>
+      <div class="sizes">
+        <div class="size-preview">
+          <img src="public/icon-v2.svg" width="64" height="64" alt="">
+          <span>64px</span>
+        </div>
+        <div class="size-preview">
+          <img src="public/icon-v2.svg" width="32" height="32" alt="">
+          <span>32px</span>
+        </div>
+        <div class="size-preview">
+          <img src="public/icon-v2.svg" width="16" height="16" alt="">
+          <span>16px</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- V3 -->
+    <div class="concept">
+      <h2>Version 3</h2>
+      <div class="icon-large"><img src="public/icon-v3.svg" alt="V3"></div>
+      <p>The M's peaks curve into cloud-like arcs — the letterform itself suggests a cloud silhouette. Minimal and elegant.</p>
+      <div class="sizes">
+        <div class="size-preview">
+          <img src="public/icon-v3.svg" width="64" height="64" alt="">
+          <span>64px</span>
+        </div>
+        <div class="size-preview">
+          <img src="public/icon-v3.svg" width="32" height="32" alt="">
+          <span>32px</span>
+        </div>
+        <div class="size-preview">
+          <img src="public/icon-v3.svg" width="16" height="16" alt="">
+          <span>16px</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

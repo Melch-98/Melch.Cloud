@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="g3" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#C8B89A"/>
+      <stop offset="100%" stop-color="#A89474"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#0D0D0D"/>
+  <!-- Minimal M-cloud: M strokes with rounded cloud tops, open/airy feel -->
+  <path d="
+    M13 46
+    L13 26
+    C13 19 17 15 22 15
+    C26 15 28 19 32 26
+    C36 19 38 15 42 15
+    C47 15 51 19 51 26
+    L51 46
+    L45 46
+    L45 28
+    C45 22 44 21 42 21
+    C40 21 38 23 35 28
+    L32 36
+    L29 28
+    C26 23 24 21 22 21
+    C20 21 19 22 19 28
+    L19 46
+    Z
+  " fill="url(#g3)"/>
+</svg>

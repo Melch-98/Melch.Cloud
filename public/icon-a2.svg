@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#D4C8AE"/>
+      <stop offset="50%" stop-color="#C8B89A"/>
+      <stop offset="100%" stop-color="#A89474"/>
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <rect x="32" y="32" width="448" height="448" rx="96" fill="#0A0A0A"/>
+
+  <!-- Flowing wave/ribbon — suggests creative flow, movement, media streaming -->
+  <!-- Three flowing ribbons stacked, getting bolder -->
+  <path d="M 110 200 C 180 150, 280 280, 400 190" fill="none" stroke="url(#g)" stroke-width="6" opacity="0.2" stroke-linecap="round"/>
+  <path d="M 110 255 C 200 190, 310 330, 400 245" fill="none" stroke="url(#g)" stroke-width="10" opacity="0.45" stroke-linecap="round"/>
+  <path d="M 110 315 C 210 240, 320 380, 400 300" fill="none" stroke="url(#g)" stroke-width="16" opacity="0.9" stroke-linecap="round"/>
+</svg>

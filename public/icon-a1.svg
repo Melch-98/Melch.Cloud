@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#D4C8AE"/>
+      <stop offset="50%" stop-color="#C8B89A"/>
+      <stop offset="100%" stop-color="#A89474"/>
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <rect x="32" y="32" width="448" height="448" rx="96" fill="#0A0A0A"/>
+
+  <!-- Three stacked layers/cards fanning out — represents creative assets in a queue -->
+  <!-- Back card -->
+  <rect x="175" y="120" width="200" height="260" rx="16" fill="none" stroke="url(#g)" stroke-width="4" opacity="0.2" transform="rotate(-8 275 250)"/>
+  <!-- Middle card -->
+  <rect x="165" y="115" width="200" height="260" rx="16" fill="none" stroke="url(#g)" stroke-width="4" opacity="0.45" transform="rotate(-3 265 245)"/>
+  <!-- Front card -->
+  <rect x="155" y="110" width="200" height="260" rx="16" fill="url(#g)" opacity="0.12" stroke="url(#g)" stroke-width="4" transform="rotate(2 255 240)"/>
+
+  <!-- Play/creative spark in center of front card -->
+  <polygon points="238,215 238,275 285,245" fill="url(#g)" opacity="0.9"/>
+</svg>

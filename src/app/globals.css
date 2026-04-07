@@ -1,0 +1,143 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Import Satoshi font from FontShare */
+@import url('https://api.fontshare.com/v2/css?f[]=satoshi@500,400,700&display=swap');
+
+/* Import Inter as fallback */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+/* Brand Color Variables */
+:root {
+  --color-bg-primary: #0a0a0a;
+  --color-bg-secondary: #0d0d0d;
+  --color-bg-card: rgba(13, 13, 13, 0.5);
+  --color-accent-gold: #c8b89a;
+  --color-text-primary: #f5f5f8;
+  --color-text-secondary: #ababab;
+  --color-border-white: rgba(255, 255, 255, 0.1);
+  --color-overlay-dark: rgba(34, 34, 34, 0.8);
+  --color-surface: #222222;
+}
+
+* {
+  @apply scroll-smooth;
+}
+
+html {
+  scroll-behavior: smooth;
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
+}
+
+body {
+  font-family: 'Satoshi', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* Custom scrollbar - Dark theme */
+::-webkit-scrollbar {
+  @apply w-2;
+}
+
+::-webkit-scrollbar-track {
+  background-color: var(--color-bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--color-surface);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-accent-gold);
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-color: var(--color-surface) var(--color-bg-secondary);
+  scrollbar-width: thin;
+}
+
+/* Focus styles with gold accent */
+:focus-visible {
+  @apply outline-none;
+  box-shadow: 0 0 0 2px var(--color-bg-primary), 0 0 0 4px var(--color-accent-gold);
+}
+
+button:focus-visible {
+  @apply outline-none;
+  box-shadow: 0 0 0 2px var(--color-bg-primary), 0 0 0 4px var(--color-accent-gold);
+}
+
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  @apply outline-none;
+  box-shadow: 0 0 0 2px var(--color-accent-gold);
+}
+
+/* Glass card utility class */
+.glass-card {
+  background-color: var(--color-bg-card);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--color-border-white);
+  border-radius: 12px;
+}
+
+.container-fluid {
+  @apply w-full px-4 sm:px-6 lg:px-8;
+}
+
+.btn-primary {
+  @apply px-4 py-2 font-medium rounded-xl transition-all duration-200;
+  background-color: var(--color-accent-gold);
+  color: var(--color-bg-primary);
+}
+
+.btn-primary:hover {
+  opacity: 0.9;
+  transform: translateY(-2px);
+}
+
+.btn-primary:disabled {
+  @apply opacity-50 cursor-not-allowed;
+  transform: none;
+}
+
+.btn-secondary {
+  @apply px-4 py-2 font-medium rounded-xl transition-all duration-200;
+  background-color: var(--color-surface);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-white);
+}
+
+.btn-secondary:hover {
+  border-color: var(--color-accent-gold);
+  color: var(--color-accent-gold);
+}
+
+.btn-secondary:disabled {
+  @apply opacity-50 cursor-not-allowed;
+}
+
+.input-base {
+  @apply w-full px-4 py-2 rounded-xl font-medium transition-colors;
+  background-color: var(--color-surface);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-white);
+}
+
+.input-base::placeholder {
+  color: var(--color-text-secondary);
+}
+
+.input-base:focus {
+  border-color: var(--color-accent-gold);
+  box-shadow: 0 0 0 2px var(--color-accent-gold);
+}
+
+.glass-card-elevated {
+  @apply glass-card p-6;
+  box-shadow: 0 4px 20px rgba(200, 184, 154, 0.1);
+}

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="g2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#D4C8AE"/>
+      <stop offset="100%" stop-color="#A89474"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#0D0D0D"/>
+  <!-- M with cloud-dome peaks: the letter M but the two peaks are soft cloud arcs -->
+  <path d="
+    M11 46 L11 30
+    C11 24 14 20 18 20
+    C22 20 24 24 26 28
+    L32 38
+    L38 28
+    C40 24 42 20 46 20
+    C50 20 53 24 53 30
+    L53 46
+    L47 46 L47 32 C47 28 46 26 44 26 C42 26 40 28 38 32
+    L32 44
+    L26 32 C24 28 22 26 20 26 C18 26 17 28 17 32
+    L17 46 Z
+  " fill="url(#g2)"/>
+  <!-- Three cloud bumps sitting on M peaks -->
+  <ellipse cx="18" cy="21" rx="8" ry="6.5" fill="url(#g2)"/>
+  <ellipse cx="46" cy="21" rx="8" ry="6.5" fill="url(#g2)"/>
+  <ellipse cx="32" cy="17" rx="10" ry="7.5" fill="url(#g2)"/>
+</svg>

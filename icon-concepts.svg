@@ -1,0 +1,257 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 550" width="1200" height="550">
+  <defs>
+    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#D4C8AE"/>
+      <stop offset="50%" stop-color="#C8B89A"/>
+      <stop offset="100%" stop-color="#A89474"/>
+    </linearGradient>
+    <linearGradient id="g1b" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#D4C8AE"/>
+      <stop offset="100%" stop-color="#C8B89A"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="550" fill="#0A0A0A" rx="16"/>
+
+  <!-- Title -->
+  <text x="600" y="42" text-anchor="middle" fill="#F5F5F8" font-family="-apple-system,BlinkMacSystemFont,sans-serif" font-size="22" font-weight="700">melch<tspan fill="#C8B89A">.cloud</tspan> — Icon Concepts</text>
+  <text x="600" y="64" text-anchor="middle" fill="#555" font-family="-apple-system,BlinkMacSystemFont,sans-serif" font-size="12">M + Cloud hybrid · Dark background with gold gradient</text>
+
+  <!-- ═══ CONCEPT 1 ═══ -->
+  <g transform="translate(60, 95)">
+    <text x="140" y="0" text-anchor="middle" fill="#C8B89A" font-family="-apple-system,sans-serif" font-size="11" font-weight="600" letter-spacing="2">VERSION 1</text>
+    <text x="140" y="16" text-anchor="middle" fill="#666" font-family="-apple-system,sans-serif" font-size="10">Classic M + floating cloud accent</text>
+
+    <!-- Icon background -->
+    <rect x="15" y="30" width="250" height="250" rx="50" fill="#0D0D0D" stroke="rgba(200,184,154,0.15)" stroke-width="1"/>
+
+    <!-- Cloud behind M — subtle -->
+    <g opacity="0.12" transform="translate(15,30) scale(0.488)">
+      <circle cx="220" cy="240" r="80" fill="url(#g1)"/>
+      <circle cx="300" cy="225" r="95" fill="url(#g1)"/>
+      <circle cx="365" cy="255" r="65" fill="url(#g1)"/>
+      <rect x="170" y="240" width="230" height="80" fill="url(#g1)"/>
+    </g>
+
+    <!-- M letterform -->
+    <path d="
+      M 83 215
+      L 83 115
+      L 105 115
+      L 140 171
+      L 175 115
+      L 197 115
+      L 197 215
+      L 177 215
+      L 177 150
+      L 147 200
+      L 135 200
+      L 105 150
+      L 105 215
+      Z
+    " fill="url(#g1)"/>
+
+    <!-- Small cloud accent top-right -->
+    <g>
+      <circle cx="181" cy="100" r="11" fill="url(#g1b)"/>
+      <circle cx="194" cy="96" r="14" fill="url(#g1b)"/>
+      <circle cx="208" cy="101" r="9" fill="url(#g1b)"/>
+      <rect x="179" y="100" width="32" height="11" fill="url(#g1b)"/>
+    </g>
+
+    <!-- Size previews -->
+    <g transform="translate(30, 310)">
+      <!-- 64px -->
+      <rect x="0" y="0" width="64" height="64" rx="14" fill="#0D0D0D" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+      <g opacity="0.12" transform="scale(0.125)">
+        <circle cx="220" cy="240" r="80" fill="url(#g1)"/>
+        <circle cx="300" cy="225" r="95" fill="url(#g1)"/>
+      </g>
+      <path d="M 17 50 L 17 22 L 23 22 L 32 36 L 41 22 L 47 22 L 47 50 L 42 50 L 42 32 L 34 44 L 30 44 L 22 32 L 22 50 Z" fill="url(#g1)"/>
+      <circle cx="44" cy="18" r="3" fill="url(#g1b)"/>
+      <circle cx="48" cy="17" r="4" fill="url(#g1b)"/>
+      <circle cx="52" cy="18.5" r="2.5" fill="url(#g1b)"/>
+      <rect x="43" y="18" width="10" height="3" fill="url(#g1b)"/>
+      <text x="32" y="80" text-anchor="middle" fill="#555" font-family="monospace" font-size="9">64px</text>
+
+      <!-- 32px -->
+      <rect x="90" y="16" width="32" height="32" rx="7" fill="#0D0D0D" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+      <path d="M 99 40 L 99 26 L 102 26 L 106 33 L 110 26 L 113 26 L 113 40 L 111 40 L 111 31 L 107 37 L 105 37 L 101 31 L 101 40 Z" fill="url(#g1)"/>
+      <text x="106" y="80" text-anchor="middle" fill="#555" font-family="monospace" font-size="9">32px</text>
+
+      <!-- 16px -->
+      <rect x="155" y="24" width="16" height="16" rx="3" fill="#0D0D0D" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+      <path d="M 159 37 L 159 28 L 161 28 L 163 32 L 165 28 L 167 28 L 167 37 L 166 37 L 166 31 L 164 34 L 162 34 L 160 31 L 160 37 Z" fill="url(#g1)"/>
+      <text x="163" y="80" text-anchor="middle" fill="#555" font-family="monospace" font-size="9">16px</text>
+    </g>
+  </g>
+
+  <!-- ═══ CONCEPT 2 ═══ -->
+  <g transform="translate(430, 95)">
+    <text x="140" y="0" text-anchor="middle" fill="#C8B89A" font-family="-apple-system,sans-serif" font-size="11" font-weight="600" letter-spacing="2">VERSION 2</text>
+    <text x="140" y="16" text-anchor="middle" fill="#666" font-family="-apple-system,sans-serif" font-size="10">Cloud merges into M — unified shape</text>
+
+    <!-- Icon background -->
+    <rect x="15" y="30" width="250" height="250" rx="50" fill="#0D0D0D" stroke="rgba(200,184,154,0.15)" stroke-width="1"/>
+
+    <!-- Unified cloud-M shape -->
+    <g fill="url(#g1)">
+      <!-- Cloud puffs -->
+      <circle cx="115" cy="118" r="30"/>
+      <circle cx="150" cy="108" r="37"/>
+      <circle cx="185" cy="121" r="25"/>
+      <!-- Cloud base -->
+      <rect x="88" y="118" width="118" height="24" rx="2"/>
+      <!-- M legs from cloud -->
+      <rect x="88" y="118" width="20" height="120" rx="2"/>
+      <rect x="186" y="118" width="20" height="120" rx="2"/>
+      <!-- M inner diagonals -->
+      <polygon points="98,118 140,185 130,185 88,118"/>
+      <polygon points="196,118 158,185 148,185 206,118"/>
+      <!-- M inner legs -->
+      <rect x="122" y="155" width="16" height="83" rx="2"/>
+      <rect x="154" y="155" width="16" height="83" rx="2"/>
+    </g>
+
+    <!-- Size previews -->
+    <g transform="translate(30, 310)">
+      <rect x="0" y="0" width="64" height="64" rx="14" fill="#0D0D0D" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+      <g fill="url(#g1)" transform="translate(8,6) scale(0.19)">
+        <circle cx="115" cy="118" r="30"/>
+        <circle cx="150" cy="108" r="37"/>
+        <circle cx="185" cy="121" r="25"/>
+        <rect x="88" y="118" width="118" height="24" rx="2"/>
+        <rect x="88" y="118" width="20" height="120" rx="2"/>
+        <rect x="186" y="118" width="20" height="120" rx="2"/>
+        <polygon points="98,118 140,185 130,185 88,118"/>
+        <polygon points="196,118 158,185 148,185 206,118"/>
+        <rect x="122" y="155" width="16" height="83" rx="2"/>
+        <rect x="154" y="155" width="16" height="83" rx="2"/>
+      </g>
+      <text x="32" y="80" text-anchor="middle" fill="#555" font-family="monospace" font-size="9">64px</text>
+
+      <rect x="90" y="16" width="32" height="32" rx="7" fill="#0D0D0D" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+      <g fill="url(#g1)" transform="translate(94,18) scale(0.095)">
+        <circle cx="115" cy="118" r="30"/>
+        <circle cx="150" cy="108" r="37"/>
+        <circle cx="185" cy="121" r="25"/>
+        <rect x="88" y="118" width="118" height="24" rx="2"/>
+        <rect x="88" y="118" width="20" height="120" rx="2"/>
+        <rect x="186" y="118" width="20" height="120" rx="2"/>
+        <polygon points="98,118 140,185 130,185 88,118"/>
+        <polygon points="196,118 158,185 148,185 206,118"/>
+        <rect x="122" y="155" width="16" height="83" rx="2"/>
+        <rect x="154" y="155" width="16" height="83" rx="2"/>
+      </g>
+      <text x="106" y="80" text-anchor="middle" fill="#555" font-family="monospace" font-size="9">32px</text>
+
+      <rect x="155" y="24" width="16" height="16" rx="3" fill="#0D0D0D" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+      <g fill="url(#g1)" transform="translate(157,25) scale(0.047)">
+        <circle cx="115" cy="118" r="30"/>
+        <circle cx="150" cy="108" r="37"/>
+        <circle cx="185" cy="121" r="25"/>
+        <rect x="88" y="118" width="118" height="24" rx="2"/>
+        <rect x="88" y="118" width="20" height="120" rx="2"/>
+        <rect x="186" y="118" width="20" height="120" rx="2"/>
+      </g>
+      <text x="163" y="80" text-anchor="middle" fill="#555" font-family="monospace" font-size="9">16px</text>
+    </g>
+  </g>
+
+  <!-- ═══ CONCEPT 3 ═══ -->
+  <g transform="translate(800, 95)">
+    <text x="140" y="0" text-anchor="middle" fill="#C8B89A" font-family="-apple-system,sans-serif" font-size="11" font-weight="600" letter-spacing="2">VERSION 3</text>
+    <text x="140" y="16" text-anchor="middle" fill="#666" font-family="-apple-system,sans-serif" font-size="10">M peaks curve into cloud arcs — minimal</text>
+
+    <!-- Icon background -->
+    <rect x="15" y="30" width="250" height="250" rx="50" fill="#0D0D0D" stroke="rgba(200,184,154,0.15)" stroke-width="1"/>
+
+    <!-- M with cloud-curved peaks -->
+    <path d="
+      M 78 238
+      L 78 135
+      C 78 115, 93 98, 110 98
+      C 122 98, 132 105, 137 115
+      C 142 103, 153 95, 167 95
+      C 187 95, 203 113, 203 135
+      L 203 238
+      L 183 238
+      L 183 160
+      L 150 215
+      L 134 215
+      L 100 160
+      L 100 238
+      Z
+    " fill="url(#g1)"/>
+
+    <!-- Cloud arc highlight -->
+    <path d="
+      M 86 135
+      C 86 112, 98 100, 113 100
+      C 125 100, 134 108, 138 118
+      C 143 105, 155 97, 169 97
+      C 186 97, 198 112, 198 132
+    " fill="none" stroke="#D4C8AE" stroke-width="2" opacity="0.35"/>
+
+    <!-- Size previews -->
+    <g transform="translate(30, 310)">
+      <rect x="0" y="0" width="64" height="64" rx="14" fill="#0D0D0D" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+      <path d="
+        M 17 50
+        L 17 24
+        C 17 18, 22 14, 27 14
+        C 30 14, 33 16, 34 19
+        C 36 15, 39 13, 43 13
+        C 48 13, 52 18, 52 24
+        L 52 50
+        L 47 50
+        L 47 32
+        L 36 45
+        L 32 45
+        L 22 32
+        L 22 50
+        Z
+      " fill="url(#g1)"/>
+      <text x="32" y="80" text-anchor="middle" fill="#555" font-family="monospace" font-size="9">64px</text>
+
+      <rect x="90" y="16" width="32" height="32" rx="7" fill="#0D0D0D" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+      <path d="
+        M 99 41
+        L 99 27
+        C 99 24, 101 22, 103 22
+        C 105 22, 106 23, 107 25
+        C 108 23, 109 22, 111 22
+        C 113 22, 115 24, 115 27
+        L 115 41
+        L 113 41
+        L 113 33
+        L 108 39
+        L 106 39
+        L 101 33
+        L 101 41
+        Z
+      " fill="url(#g1)"/>
+      <text x="106" y="80" text-anchor="middle" fill="#555" font-family="monospace" font-size="9">32px</text>
+
+      <rect x="155" y="24" width="16" height="16" rx="3" fill="#0D0D0D" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+      <path d="
+        M 159 37
+        L 159 29
+        C 159 28, 160 27, 161 27
+        C 162 27, 162.5 27.5, 163 28.5
+        C 163.5 27.5, 164 27, 165 27
+        C 166 27, 167 28, 167 29
+        L 167 37
+        L 166 37
+        L 166 32
+        L 164 35
+        L 162 35
+        L 160 32
+        L 160 37
+        Z
+      " fill="url(#g1)"/>
+      <text x="163" y="80" text-anchor="middle" fill="#555" font-family="monospace" font-size="9">16px</text>
+    </g>
+  </g>
+</svg>
