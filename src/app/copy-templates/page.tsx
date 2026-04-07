@@ -586,7 +586,7 @@ function TemplateCard({
             {t.title}
           </span>
           <span className="text-[10px] ml-1" style={{ color: TEXT_DIM }}>
-            {t.primary_texts.length}pt · {t.headlines.length}hl · {t.descriptions.length}desc
+            {t.primary_texts.length}pt · {t.headlines.length}hl · {t.descriptions.length}desc · {new Date(t.created_at).toLocaleDateString()}
           </span>
         </div>
         <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
