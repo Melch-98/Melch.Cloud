@@ -186,33 +186,51 @@ async function enrichCustomerOrderCounts(
 
   const counts = new Map<number, number>();
   const ids = Array.from(uniqueCustomerIds);
-  const CONCURRENCY = 4; // Shopify allows ~4 req/sec on standard plans
+  // Shopify GraphQL `nodes(ids: [...])` supports batch lookup. Chunk to 100
+  // per request to stay well under cost limits.
+  const CHUNK = 100;
 
-  const fetchOne = async (cid: number) => {
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const slice = ids.slice(i, i + CHUNK);
+    const gids = slice.map((id) => `gid://shopify/Customer/${id}`);
+    const query = `query($ids: [ID!]!) {
+      nodes(ids: $ids) {
+        ... on Customer {
+          id
+          numberOfOrders
+        }
+      }
+    }`;
     try {
       const res = await fetch(
-        `https://${domain}/admin/api/2024-01/customers/${cid}.json`,
+        `https://${domain}/admin/api/2024-01/graphql.json`,
         {
+          method: 'POST',
           headers: {
             'X-Shopify-Access-Token': token,
             'Content-Type': 'application/json',
           },
+          body: JSON.stringify({ query, variables: { ids: gids } }),
         }
       );
-      if (!res.ok) return;
-      const j = (await res.json()) as { customer?: { orders_count?: number } };
-      if (typeof j.customer?.orders_count === 'number') {
-        counts.set(cid, j.customer.orders_count);
+      if (!res.ok) continue;
+      const j = (await res.json()) as {
+        data?: { nodes?: Array<{ id?: string; numberOfOrders?: string | number } | null> };
+      };
+      const nodes = j.data?.nodes || [];
+      for (const n of nodes) {
+        if (!n?.id) continue;
+        const numericId = Number(n.id.split('/').pop());
+        const num = typeof n.numberOfOrders === 'string'
+          ? parseInt(n.numberOfOrders, 10)
+          : n.numberOfOrders;
+        if (numericId && typeof num === 'number' && !isNaN(num)) {
+          counts.set(numericId, num);
+        }
       }
     } catch {
-      // Skip on individual failure
+      // Skip chunk on failure
     }
-  };
-
-  for (let i = 0; i < ids.length; i += CONCURRENCY) {
-    const slice = ids.slice(i, i + CONCURRENCY);
-    await Promise.all(slice.map(fetchOne));
-    await new Promise((r) => setTimeout(r, 250));
   }
 
   for (const o of orders) {
