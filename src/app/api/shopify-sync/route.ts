@@ -135,7 +135,9 @@ async function fetchAllOrders(
     created_at_min: sinceDate,
     created_at_max: untilDate,
     limit: '250',
-    fields: 'id,created_at,financial_status,total_price,subtotal_price,total_discounts,total_tax,total_shipping_price_set,refunds,customer,line_items',
+    // NOTE: do NOT use the `fields` filter here — Shopify strips nested
+    // defaults (e.g. customer.orders_count) which we need for accurate
+    // NC vs RC classification. Full payload is fine.
   };
 
   const first = await shopifyFetch(domain, token, 'orders', params);
