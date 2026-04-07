@@ -44,7 +44,7 @@ export default function DashboardPage() {
         .eq('id', session.user.id)
         .single();
 
-      if (!profile || !['admin', 'founder'].includes(profile.role)) {
+      if (!profile || !['admin', 'founder', 'strategist'].includes(profile.role)) {
         router.push('/');
         return;
       }

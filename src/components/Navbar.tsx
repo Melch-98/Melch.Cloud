@@ -127,7 +127,7 @@ export default function Navbar({ children }: { children?: React.ReactNode }) {
       label: 'Dashboard',
       href: '/dashboard',
       icon: Home,
-      roles: ['founder', 'admin'],
+      roles: ['founder', 'admin', 'strategist'],
     },
     {
       label: 'Upload',
@@ -155,18 +155,19 @@ export default function Navbar({ children }: { children?: React.ReactNode }) {
       badge: 'Beta',
       children: [
         { label: 'Daily P&L', href: '/analytics/daily-pnl', icon: DollarSign, roles: ['admin', 'founder'] },
-        { label: 'Campaigns', href: '/analytics/campaigns', icon: Activity, roles: ['admin', 'founder'] },
+        { label: 'Campaigns', href: '/analytics/campaigns', icon: Activity, roles: ['admin', 'founder', 'strategist'] },
         { label: 'Top Creatives', href: '/analytics', icon: Sparkles },
         { label: 'Copy Analysis', href: '/analytics/copy-analysis', icon: Type },
         { label: 'Ad Perspective', href: '/analytics/ad-perspective', icon: TableProperties },
       ],
     },
-    {
-      label: 'Ad Changelog',
-      href: '/ad-changelog',
-      icon: Activity,
-      roles: ['admin', 'founder'],
-    },
+    // Hidden — Ad Changelog needs rework before re-enabling
+    // {
+    //   label: 'Ad Changelog',
+    //   href: '/ad-changelog',
+    //   icon: Activity,
+    //   roles: ['admin', 'founder'],
+    // },
     {
       label: 'Calendar',
       href: '/calendar',
@@ -206,12 +207,13 @@ export default function Navbar({ children }: { children?: React.ReactNode }) {
       roles: ['founder', 'strategist'],
       external: true,
     },
-    {
-      label: 'Change Log',
-      href: '/change-log',
-      icon: FileText,
-      roles: ['admin'],
-    },
+    // Hidden — under rework (Feature Requests pipeline)
+    // {
+    //   label: 'Change Log',
+    //   href: '/change-log',
+    //   icon: FileText,
+    //   roles: ['admin'],
+    // },
     {
       label: 'Account',
       href: '/account',

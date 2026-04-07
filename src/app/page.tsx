@@ -63,6 +63,8 @@ export default function LoginPage() {
           router.push("/admin");
         } else if (userRole === "founder") {
           router.push("/dashboard");
+        } else if (userRole === "strategist") {
+          router.push("/dashboard");
         } else {
           router.push("/upload");
         }
