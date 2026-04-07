@@ -185,8 +185,10 @@ async function enrichCustomerOrderCounts(
   }
 
   const counts = new Map<number, number>();
-  // Fetch sequentially with small delay to respect Shopify 2 req/sec
-  for (const cid of uniqueCustomerIds) {
+  const ids = Array.from(uniqueCustomerIds);
+  const CONCURRENCY = 4; // Shopify allows ~4 req/sec on standard plans
+
+  const fetchOne = async (cid: number) => {
     try {
       const res = await fetch(
         `https://${domain}/admin/api/2024-01/customers/${cid}.json`,
@@ -197,15 +199,20 @@ async function enrichCustomerOrderCounts(
           },
         }
       );
-      if (!res.ok) continue;
+      if (!res.ok) return;
       const j = (await res.json()) as { customer?: { orders_count?: number } };
       if (typeof j.customer?.orders_count === 'number') {
         counts.set(cid, j.customer.orders_count);
       }
     } catch {
-      // Skip on individual failure — those orders will fall back to RC
+      // Skip on individual failure
     }
-    await new Promise((r) => setTimeout(r, 120));
+  };
+
+  for (let i = 0; i < ids.length; i += CONCURRENCY) {
+    const slice = ids.slice(i, i + CONCURRENCY);
+    await Promise.all(slice.map(fetchOne));
+    await new Promise((r) => setTimeout(r, 250));
   }
 
   for (const o of orders) {
@@ -424,8 +431,13 @@ export async function POST(request: NextRequest) {
       untilDate
     );
 
-    // Enrich with reliable lifetime order counts (per-customer fetch)
-    await enrichCustomerOrderCounts(brand.shopify_store_domain, shopifyToken, orders);
+    // Enrich with reliable lifetime order counts (per-customer fetch).
+    // Wrapped — must NEVER fail the whole sync. Worst case NC stays 0.
+    try {
+      await enrichCustomerOrderCounts(brand.shopify_store_domain, shopifyToken, orders);
+    } catch (e) {
+      console.error('Customer enrichment failed (non-fatal):', e);
+    }
 
     // Aggregate by day
     const dayBuckets = aggregateOrdersByDay(orders);
