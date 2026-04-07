@@ -25,6 +25,7 @@ import {
   DollarSign,
   Activity,
   Video,
+  Home,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
 
@@ -122,6 +123,12 @@ export default function Navbar({ children }: { children?: React.ReactNode }) {
   }, [supabase]);
 
   const navLinks: NavLink[] = [
+    {
+      label: 'Dashboard',
+      href: '/dashboard',
+      icon: Home,
+      roles: ['founder', 'admin'],
+    },
     {
       label: 'Upload',
       href: '/upload',

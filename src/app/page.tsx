@@ -61,6 +61,8 @@ export default function LoginPage() {
       setTimeout(() => {
         if (userRole === "admin") {
           router.push("/admin");
+        } else if (userRole === "founder") {
+          router.push("/dashboard");
         } else {
           router.push("/upload");
         }
