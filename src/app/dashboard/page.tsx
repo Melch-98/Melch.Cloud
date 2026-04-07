@@ -85,9 +85,11 @@ export default function DashboardPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#0a0a0a' }}>
-        <Loader className="w-8 h-8 animate-spin" style={{ color: '#C8B89A' }} />
-      </div>
+      <Navbar>
+        <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#0a0a0a' }}>
+          <Loader className="w-8 h-8 animate-spin" style={{ color: '#C8B89A' }} />
+        </div>
+      </Navbar>
     );
   }
 
@@ -104,9 +106,8 @@ export default function DashboardPage() {
       }));
 
   return (
-    <div className="min-h-screen" style={{ backgroundColor: '#0a0a0a', color: '#F5F5F8' }}>
-      <Navbar />
-
+    <Navbar>
+      <div className="min-h-screen" style={{ backgroundColor: '#0a0a0a', color: '#F5F5F8' }}>
       <main className="px-8 pt-10 pb-32 max-w-7xl mx-auto w-full">
         <header className="mb-10">
           <h1 className="text-3xl font-semibold mb-2">
@@ -234,6 +235,7 @@ export default function DashboardPage() {
           }
         `}</style>
       </div>
-    </div>
+      </div>
+    </Navbar>
   );
 }
