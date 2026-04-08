@@ -15,6 +15,8 @@ import {
   Shuffle,
   Users,
   AtSign,
+  Copy,
+  Check,
 } from 'lucide-react';
 import FileUploader, { FileMediaInfo } from './FileUploader';
 import { createClient } from '@/lib/supabase';
@@ -57,38 +59,52 @@ interface SubmissionFormProps {
 
 const CREATIVE_TYPES = ['UGC', 'Static', 'Video', 'Other'];
 
-const MONTH_NAMES = [
-  'JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE',
-  'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER',
-];
+/** Map of brand slug → 3-letter brand code used in batch/file names */
+const BRAND_CODES: Record<string, string> = {
+  'tallow-twins': 'TLW',
+  'fond-regenerative': 'FND',
+  'nimi-skincare': 'NIM',
+  'seven-weeks-coffee-co': 'SWC',
+  'organic-jaguar': 'OJG',
+};
 
-/** Get the week-of-month (1–5, capped at 5) for a given date */
-function getWeekOfMonth(date: Date): number {
-  const day = date.getDate();
-  const week = Math.ceil(day / 7);
-  return Math.min(week, 5);
+/** Get 3-letter brand code for a slug, fallback = first 3 letters uppercased */
+function getBrandCode(slug: string | undefined): string {
+  if (!slug) return 'XXX';
+  return BRAND_CODES[slug] || slug.replace(/[^a-z]/g, '').slice(0, 3).toUpperCase() || 'XXX';
 }
 
-/** Build the base batch name for today, e.g. "APRIL_WEEK_1" */
-function baseBatchName(date: Date = new Date()): string {
-  const month = MONTH_NAMES[date.getMonth()];
-  const week = getWeekOfMonth(date);
-  return `${month}_WEEK_${week}`;
+/** YYMMDD for a given date */
+function yymmdd(date: Date = new Date()): string {
+  const yy = String(date.getFullYear()).slice(-2);
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${yy}${mm}${dd}`;
+}
+
+/** Build today's batch name prefix for a brand, e.g. "TLW_260408" */
+function batchNamePrefix(brandCode: string, date: Date = new Date()): string {
+  return `${brandCode}_${yymmdd(date)}`;
 }
 
 /**
- * Given existing batch names (from DB + current form), return the next
- * available name. First of the week → "APRIL_WEEK_1", second → "APRIL_WEEK_1.2", etc.
+ * Given existing batch names for this brand, return the next daily sequence.
+ * First batch of the day → "TLW_260408_0001", second → "TLW_260408_0002", etc.
  */
-function nextBatchName(existingNames: string[]): string {
-  const base = baseBatchName();
-  // Count how many names match this base (exact or with .N suffix)
-  const pattern = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\.\\d+)?$`);
-  const matches = existingNames.filter((n) => pattern.test(n));
-  if (matches.length === 0) return base;
-  // Next suffix is count + 1 (first = base, second = .2, third = .3 …)
-  return `${base}.${matches.length + 1}`;
+function nextBatchName(brandCode: string, existingNames: string[]): string {
+  const prefix = batchNamePrefix(brandCode);
+  const pattern = new RegExp(`^${prefix}_(\\d{4})$`);
+  let max = 0;
+  for (const n of existingNames) {
+    const m = n.match(pattern);
+    if (m) {
+      const num = parseInt(m[1], 10);
+      if (num > max) max = num;
+    }
+  }
+  return `${prefix}_${String(max + 1).padStart(4, '0')}`;
 }
+
 
 const createEmptyBatch = (batchName: string): BatchFormState => ({
   id: `batch-${Date.now()}-${Math.random()}`,
@@ -138,6 +154,31 @@ const Field = ({
     {error && <p className="text-xs text-red-400 mt-1">{error}</p>}
   </div>
 );
+
+const CopyButton: React.FC<{ text: string }> = ({ text }) => {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // ignore
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      title={copied ? 'Copied!' : 'Copy batch name'}
+      className="shrink-0 p-1 rounded-md hover:bg-[rgba(200,184,154,0.12)] transition-colors"
+      style={{ color: copied ? '#7FD48F' : '#C8B89A' }}
+    >
+      {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+    </button>
+  );
+};
 
 const inputClass =
   'w-full px-3.5 py-2.5 rounded-lg text-sm text-[#F5F5F8] placeholder-gray-600 focus:outline-none transition-all';
@@ -207,32 +248,40 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
     fetchCopyTemplates();
   }, [selectedBrandId]);
 
-  // Fetch existing batch names for the current month + week from DB
+  const selectedBrand = useMemo(
+    () => brands.find((b) => b.id === selectedBrandId),
+    [brands, selectedBrandId]
+  );
+  const brandCode = useMemo(
+    () => getBrandCode(selectedBrand?.slug),
+    [selectedBrand]
+  );
+
+  // Fetch existing batch names for this brand + today from DB
   useEffect(() => {
     const fetchExistingNames = async () => {
       if (!selectedBrandId) return;
       const supabase = createClient();
-      const base = baseBatchName();
-      const monthPrefix = base.split('_WEEK_')[0]; // e.g. "APRIL"
+      const prefix = batchNamePrefix(brandCode);
       const { data } = await supabase
         .from('submissions')
         .select('batch_name')
         .eq('brand_id', selectedBrandId)
-        .like('batch_name', `${monthPrefix}%`);
+        .like('batch_name', `${prefix}%`);
 
       const names = (data || []).map((r: { batch_name: string }) => r.batch_name);
       setExistingBatchNames(names);
     };
     fetchExistingNames();
-  }, [selectedBrandId]);
+  }, [selectedBrandId, brandCode]);
 
   // Initialize first batch once existing names are loaded
   useEffect(() => {
     if (batches.length === 0) {
-      const name = nextBatchName(existingBatchNames);
+      const name = nextBatchName(brandCode, existingBatchNames);
       setBatches([createEmptyBatch(name)]);
     }
-  }, [existingBatchNames]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [existingBatchNames, brandCode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-dismiss success messages
   useEffect(() => {
@@ -267,11 +316,11 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
         ...existingBatchNames,
         ...prev.map((b) => b.batchName),
       ];
-      const name = nextBatchName(allNames);
+      const name = nextBatchName(brandCode, allNames);
       const collapsed = prev.map((b) => ({ ...b, isExpanded: false }));
       return [...collapsed, createEmptyBatch(name)];
     });
-  }, [existingBatchNames]);
+  }, [existingBatchNames, brandCode]);
 
   const validateBatch = (batch: BatchFormState): boolean => {
     const errors: Record<string, string> = {};
@@ -467,13 +516,12 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
       setUploadProgress(null);
       // Refresh existing names from DB so the next batch name accounts for what was just uploaded
       const supabase2 = createClient();
-      const base2 = baseBatchName();
-      const monthPrefix2 = base2.split('_WEEK_')[0];
+      const prefix2 = batchNamePrefix(brandCode);
       const { data: refreshedData } = await supabase2
         .from('submissions')
         .select('batch_name')
         .eq('brand_id', selectedBrandId)
-        .like('batch_name', `${monthPrefix2}%`);
+        .like('batch_name', `${prefix2}%`);
       const refreshedNames = (refreshedData || []).map((r: { batch_name: string }) => r.batch_name);
       setExistingBatchNames(refreshedNames);
 
@@ -481,7 +529,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
         type: 'success',
         text: `${batches.length} batch${batches.length > 1 ? 'es' : ''} submitted — ${batches.reduce((s, b) => s + b.files.length, 0)} files uploaded`,
       });
-      setBatches([createEmptyBatch(nextBatchName(refreshedNames))]);
+      setBatches([createEmptyBatch(nextBatchName(brandCode, refreshedNames))]);
       setSavedBatchIds(new Set());
 
       if (onSubmit) {
@@ -640,7 +688,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                   {/* Row 1: Batch Name + Creative Type — ALL MODES */}
                   <Field label="Batch Name" error={batch.errors.batchName}>
                     <div
-                      className={`${inputClass} cursor-default`}
+                      className={`${inputClass} cursor-default flex items-center justify-between gap-2`}
                       style={{
                         ...inputStyle,
                         color: '#C8B89A',
@@ -648,7 +696,8 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                         letterSpacing: '0.03em',
                       }}
                     >
-                      {batch.batchName}
+                      <span className="truncate">{batch.batchName}</span>
+                      <CopyButton text={batch.batchName} />
                     </div>
                   </Field>
 
