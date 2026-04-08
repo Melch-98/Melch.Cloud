@@ -22,4 +22,33 @@ export type Events = {
       name: string;
     };
   };
+  'shopify/order.created': {
+    data: {
+      shop_domain: string;
+      order: Record<string, unknown>;
+    };
+  };
+  'shopify/order.updated': {
+    data: {
+      shop_domain: string;
+      order: Record<string, unknown>;
+    };
+  };
+  'shopify/order.cancelled': {
+    data: {
+      shop_domain: string;
+      order: Record<string, unknown>;
+    };
+  };
+  'shopify/refund.created': {
+    data: {
+      shop_domain: string;
+      refund: Record<string, unknown>;
+    };
+  };
+  'shopify/app.uninstalled': {
+    data: {
+      shop_domain: string;
+    };
+  };
 };
