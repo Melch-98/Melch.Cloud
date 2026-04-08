@@ -487,6 +487,23 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
           next.add(batch.id);
           return next;
         });
+
+        // Fire Drive sync (non-fatal if it fails — Inngest will retry, and it can be retriggered manually)
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session?.access_token) {
+            await fetch('/api/submissions/sync-drive', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${session.access_token}`,
+              },
+              body: JSON.stringify({ submission_id: submission.id }),
+            });
+          }
+        } catch (e) {
+          console.warn('Drive sync trigger failed (non-fatal):', e);
+        }
       }
 
       // Call notify endpoint

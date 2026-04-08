@@ -36,6 +36,8 @@ interface NewBatch {
   is_whitelist: boolean;
   file_count: number;
   created_at: string;
+  drive_folder_url: string | null;
+  drive_sync_status: string | null;
 }
 
 const fmtMoney = (n: number) =>
@@ -138,6 +140,8 @@ export default function DashboardPage() {
           file_count,
           created_at,
           batch_status,
+          drive_folder_url,
+          drive_sync_status,
           brands:brand_id (name)
         `)
         .eq('batch_status', 'new')
@@ -156,6 +160,8 @@ export default function DashboardPage() {
           is_whitelist: !!r.is_whitelist,
           file_count: r.file_count || 0,
           created_at: r.created_at,
+          drive_folder_url: r.drive_folder_url || null,
+          drive_sync_status: r.drive_sync_status || null,
         }));
         setNewBatches(mapped);
       }
@@ -402,13 +408,39 @@ export default function DashboardPage() {
                         <span>{timeAgo(b.created_at)}</span>
                       </div>
                     </div>
-                    <Link
-                      href="/admin"
-                      className="shrink-0 text-[11px] font-medium px-2.5 py-1 rounded transition-colors"
-                      style={{ color: '#C8B89A', backgroundColor: 'rgba(200,184,154,0.06)' }}
-                    >
-                      Open →
-                    </Link>
+                    {b.drive_sync_status === 'synced' && b.drive_folder_url ? (
+                      <a
+                        href={b.drive_folder_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="shrink-0 text-[11px] font-medium px-2.5 py-1 rounded transition-colors"
+                        style={{ color: '#22C55E', backgroundColor: 'rgba(34,197,94,0.08)' }}
+                      >
+                        Open in Drive →
+                      </a>
+                    ) : b.drive_sync_status === 'pending' || b.drive_sync_status === 'syncing' ? (
+                      <span
+                        className="shrink-0 text-[11px] font-medium px-2.5 py-1 rounded"
+                        style={{ color: '#6B6560', backgroundColor: 'rgba(255,255,255,0.03)' }}
+                      >
+                        Syncing…
+                      </span>
+                    ) : b.drive_sync_status === 'failed' ? (
+                      <span
+                        className="shrink-0 text-[11px] font-medium px-2.5 py-1 rounded"
+                        style={{ color: '#EF4444', backgroundColor: 'rgba(239,68,68,0.08)' }}
+                      >
+                        Sync failed
+                      </span>
+                    ) : (
+                      <Link
+                        href="/admin"
+                        className="shrink-0 text-[11px] font-medium px-2.5 py-1 rounded transition-colors"
+                        style={{ color: '#C8B89A', backgroundColor: 'rgba(200,184,154,0.06)' }}
+                      >
+                        Open →
+                      </Link>
+                    )}
                   </li>
                 );
               })}
