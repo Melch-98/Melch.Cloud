@@ -40,6 +40,7 @@ interface BatchSubmission {
   is_flexible: boolean;
   is_whitelist: boolean;
   batch_status: 'new' | 'building' | 'ready' | 'launched';
+  drive_folder_url?: string | null;
   launched_at: string | null;
   created_at: string;
   file_count: number;
@@ -215,24 +216,37 @@ function BatchCard({
 
           {/* Actions */}
           <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-            {/* NEW → Download (auto-ZIPs and moves to Building) */}
+            {/* Open in Dropbox (new/building/ready) */}
+            {batch.drive_folder_url && batch.batch_status !== 'launched' && (
+              <a
+                href={batch.drive_folder_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all hover:brightness-110"
+                style={{
+                  backgroundColor: 'rgba(0,97,254,0.15)',
+                  color: '#5B8DEF',
+                }}
+                title="Open batch folder in Dropbox"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                Dropbox
+              </a>
+            )}
+
+            {/* NEW → Start Building (advance status; Blip pulls from Dropbox) */}
             {batch.batch_status === 'new' && (
               <button
-                onClick={() => onDownload(batch.id)}
-                disabled={downloading === batch.id}
+                onClick={() => onStatusChange(batch.id, 'building')}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
                 style={{
-                  backgroundColor: 'rgba(255,193,7,0.15)',
-                  color: '#FFC107',
-                  opacity: downloading === batch.id ? 0.5 : 1,
+                  backgroundColor: 'rgba(154,173,204,0.15)',
+                  color: '#9AADCC',
                 }}
               >
-                {downloading === batch.id ? (
-                  <Loader className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <Download className="w-3.5 h-3.5" />
-                )}
-                {downloading === batch.id ? 'Zipping...' : 'Download'}
+                <Hammer className="w-3.5 h-3.5" />
+                Start Building
               </button>
             )}
 
