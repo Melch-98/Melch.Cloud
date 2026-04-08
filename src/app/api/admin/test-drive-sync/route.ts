@@ -71,12 +71,20 @@ async function runForSubmission(submissionId: string, supabase: ReturnType<typeo
     }
 
     // 2. Verify Drive client / service account email
-    let serviceEmail = 'unknown';
     try {
       const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '';
       const parsed = JSON.parse(raw);
-      serviceEmail = parsed.client_email;
-      record('parse-credentials', true, { client_email: serviceEmail });
+      const topKeys = Object.keys(parsed);
+      record('parse-credentials', true, {
+        top_level_keys: topKeys,
+        client_email: parsed.client_email || '(missing)',
+        private_key_length: parsed.private_key ? parsed.private_key.length : 0,
+        private_key_starts_with: parsed.private_key ? parsed.private_key.slice(0, 30) : null,
+        private_key_has_literal_backslash_n: parsed.private_key ? parsed.private_key.includes('\\n') : null,
+        private_key_has_real_newlines: parsed.private_key ? parsed.private_key.includes('\n') : null,
+        type: parsed.type,
+        project_id: parsed.project_id,
+      });
     } catch (e) {
       record('parse-credentials', false, null, e);
       return { submissionId, ok: false, steps };

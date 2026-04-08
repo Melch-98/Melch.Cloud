@@ -19,16 +19,29 @@ export function getDriveClient(): drive_v3.Drive {
     throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON env var not set');
   }
 
-  let credentials: { client_email: string; private_key: string };
+  let credentials: { client_email?: string; private_key?: string };
   try {
     credentials = JSON.parse(raw);
   } catch {
     throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON');
   }
 
+  if (!credentials.client_email || !credentials.private_key) {
+    throw new Error(
+      `GOOGLE_SERVICE_ACCOUNT_JSON missing required fields. Got keys: [${Object.keys(credentials).join(', ')}]. ` +
+      `Expected a service account key file with 'client_email' and 'private_key' at the top level.`
+    );
+  }
+
+  // Vercel env vars often convert real newlines in private_key to literal "\n"
+  // when pasted. Restore them so the PEM parser accepts the key.
+  const privateKey = credentials.private_key.includes('\\n')
+    ? credentials.private_key.replace(/\\n/g, '\n')
+    : credentials.private_key;
+
   const auth = new google.auth.JWT({
     email: credentials.client_email,
-    key: credentials.private_key,
+    key: privateKey,
     scopes: ['https://www.googleapis.com/auth/drive'],
   });
 
