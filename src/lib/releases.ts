@@ -43,6 +43,28 @@ export const CHANGE_TYPE_CONFIG: Record<ChangeType, { label: string; color: stri
 
 export const RELEASES: Release[] = [
   {
+    version: '1.4.0',
+    date: 'April 8, 2026',
+    title: 'Dropbox Creative Pipeline',
+    description:
+      'Killed the Google Drive service-account-zero-quota trap. Creative batches now sync straight from client uploads into a user-owned Dropbox (google@melch.media, 2TB) via OAuth refresh token, sandboxed to /Apps/Melch.Cloud/{Brand}/{Batch}. Blip pulls from there. No more daily sign-ins, no more shared drive dead ends.',
+    icon: Rocket,
+    iconColor: '#C8B89A',
+    tags: ['Infrastructure', 'Dropbox', 'Creative Pipeline'],
+    changes: [
+      { text: 'Replaced Google Drive sync with Dropbox as single creative destination — OAuth2 refresh token stored in integrations table, no service account', type: 'integration' },
+      { text: 'Fetch-based Dropbox client (src/lib/dropbox.ts) with access-token caching, 2-min refresh buffer, and chunked upload for files >150MB', type: 'feature' },
+      { text: '/api/auth/dropbox/start + /callback OAuth consent flow with offline access — connect once, never sign in again', type: 'feature' },
+      { text: '/api/submissions/sync-drive rewritten as synchronous Supabase Storage → Dropbox push, eliminating Inngest drive-functions backlog', type: 'improvement' },
+      { text: '/api/submissions/mark-launched admin endpoint + launched_at column for manual Submitted → Launched status flip (no approve/reject gate)', type: 'feature' },
+      { text: '/admin/dropbox status page with Connect button, token status, and setup checklist', type: 'feature' },
+      { text: 'brands.dropbox_folder_path per-brand mapping — FOND Regenerative, Organic Jaguar, Seven Weeks Coffee Co, Tallow Twins all wired', type: 'feature' },
+      { text: 'integrations table with service-scoped refresh/access tokens + RLS enabled for any future OAuth integration', type: 'feature' },
+      { text: 'Callback route hardened — structured logging on every step, graceful handling of missing refresh_token on re-consent, explicit upsert error surfacing', type: 'fix' },
+      { text: 'Removed src/lib/google-drive.ts, src/lib/inngest/drive-functions.ts, and /api/admin/test-drive-sync — Drive era fully retired', type: 'improvement' },
+    ],
+  },
+  {
     version: '1.3.0',
     date: 'April 7, 2026',
     title: 'Inngest Background Jobs & Real-Time Shopify Pipeline',
