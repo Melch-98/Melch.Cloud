@@ -418,12 +418,19 @@ export default function DashboardPage() {
                       >
                         Open in Dropbox →
                       </a>
-                    ) : b.drive_sync_status === 'pending' || b.drive_sync_status === 'syncing' ? (
+                    ) : b.drive_sync_status === 'syncing' ? (
                       <span
                         className="shrink-0 text-[11px] font-medium px-2.5 py-1 rounded"
-                        style={{ color: '#6B6560', backgroundColor: 'rgba(255,255,255,0.03)' }}
+                        style={{ color: '#9AADCC', backgroundColor: 'rgba(154,173,204,0.08)' }}
                       >
                         Syncing…
+                      </span>
+                    ) : b.drive_sync_status === 'pending' ? (
+                      <span
+                        className="shrink-0 text-[11px] font-medium px-2.5 py-1 rounded"
+                        style={{ color: '#C8B89A', backgroundColor: 'rgba(200,184,154,0.06)' }}
+                      >
+                        Queued
                       </span>
                     ) : b.drive_sync_status === 'failed' ? (
                       <span
