@@ -18,6 +18,8 @@ import {
   TrendingUp,
   CalendarDays,
   FileText,
+  Lightbulb,
+  Rocket,
   FlaskConical,
   Sparkles,
   Type,
@@ -207,13 +209,18 @@ export default function Navbar({ children }: { children?: React.ReactNode }) {
       roles: ['founder', 'strategist'],
       external: true,
     },
-    // Hidden — under rework (Feature Requests pipeline)
-    // {
-    //   label: 'Change Log',
-    //   href: '/change-log',
-    //   icon: FileText,
-    //   roles: ['admin'],
-    // },
+    {
+      label: 'Releases',
+      href: '/releases',
+      icon: Rocket,
+      roles: ['admin', 'founder', 'strategist'],
+    },
+    {
+      label: 'Feature Requests',
+      href: '/feature-requests',
+      icon: Lightbulb,
+      roles: ['admin', 'founder', 'strategist'],
+    },
     {
       label: 'Account',
       href: '/account',

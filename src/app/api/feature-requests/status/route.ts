@@ -5,7 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { authenticateRequest } from '@/lib/auth';
 
-const VALID_STATUSES = ['open', 'planned', 'in_progress', 'shipped', 'declined'];
+const VALID_STATUSES = ['triage', 'spec_ready', 'building', 'shipped', 'declined'];
 
 export async function PATCH(request: NextRequest) {
   const { auth, error, status: authStatus } = await authenticateRequest(request);
