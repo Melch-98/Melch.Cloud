@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
 import { createServiceClient } from '@/lib/supabase-server';
 import {
   ensureDropboxFolder,
@@ -23,21 +22,9 @@ export const maxDuration = 300;
  * the destination is now Dropbox (not Google Drive).
  */
 export async function POST(req: NextRequest) {
-  const authHeader = req.headers.get('authorization');
-  if (!authHeader) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  const authSupabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
-  const token = authHeader.replace('Bearer ', '');
-  const { data: { user }, error: authError } = await authSupabase.auth.getUser(token);
-  if (authError || !user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
+  // No auth: client submissions are public (no session) so requiring auth
+  // silently skipped every single client upload. The submission row already
+  // exists — worst case is re-triggering a sync, which is idempotent.
   let body: { submission_id?: string };
   try {
     body = await req.json();
