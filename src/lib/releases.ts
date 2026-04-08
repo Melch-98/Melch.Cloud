@@ -43,6 +43,30 @@ export const CHANGE_TYPE_CONFIG: Record<ChangeType, { label: string; color: stri
 
 export const RELEASES: Release[] = [
   {
+    version: '1.3.0',
+    date: 'April 7, 2026',
+    title: 'Inngest Background Jobs & Real-Time Shopify Pipeline',
+    description:
+      'Polling is dead. Melch Cloud now runs an Inngest-powered background job runner and a custom Shopify app that streams order, refund, and uninstall events into Supabase the instant they happen. Replaces the per-brand polling cron with a single real-time pipeline that scales across every client store.',
+    icon: Zap,
+    iconColor: '#C8B89A',
+    tags: ['Infrastructure', 'Shopify', 'Inngest', 'Real-Time'],
+    changes: [
+      { text: 'Inngest background job runner deployed with /api/inngest serve handler — production-ready event bus for all async work', type: 'feature' },
+      { text: 'Typed Inngest event registry with discriminated unions for compile-time safety on every event payload', type: 'feature' },
+      { text: 'Custom Shopify app (Melch Cloud) created in Partners with OAuth install + callback flow', type: 'feature' },
+      { text: 'Shopify HMAC verification on both OAuth callback (query string) and webhook payloads (raw body) using timing-safe comparison', type: 'security' },
+      { text: 'Webhook auto-registration on install — 8 topics including orders/create, orders/updated, orders/cancelled, refunds/create, app/uninstalled, plus 3 GDPR webhooks', type: 'feature' },
+      { text: 'Inngest functions for handleOrderCreated, handleOrderUpdated, handleOrderCancelled, handleRefundCreated, and handleAppUninstalled with retries built in', type: 'feature' },
+      { text: 'shopify_stores table tracks per-brand installs, scopes, registered webhooks, and uninstall timestamps', type: 'feature' },
+      { text: 'shopify_orders table normalized for cross-brand reporting with unique constraint on (shop_domain, shopify_order_id)', type: 'feature' },
+      { text: 'Service-role Supabase client used in webhook handlers to bypass RLS for system writes', type: 'security' },
+      { text: '/shopify/installed success page replaces the old per-brand confirmation flow', type: 'improvement' },
+      { text: 'Tallow Twins migrated off legacy per-brand Shopify creds onto the unified custom app', type: 'integration' },
+      { text: 'Collaborator-based store onboarding flow — agency Partner account requests access, store owner approves, one-click install from Dev Dashboard picker', type: 'improvement' },
+    ],
+  },
+  {
     version: '1.2.0',
     date: 'April 5, 2026',
     title: 'Copy Templates, Ad Account Changelog & Strategist Workflow',
