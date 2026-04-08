@@ -60,7 +60,7 @@ export default function LoginPage() {
       // Redirect based on role
       setTimeout(() => {
         if (userRole === "admin") {
-          router.push("/admin");
+          router.push("/dashboard");
         } else if (userRole === "founder") {
           router.push("/dashboard");
         } else if (userRole === "strategist") {
