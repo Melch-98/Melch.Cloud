@@ -416,7 +416,7 @@ export default function DashboardPage() {
                         className="shrink-0 text-[11px] font-medium px-2.5 py-1 rounded transition-colors"
                         style={{ color: '#22C55E', backgroundColor: 'rgba(34,197,94,0.08)' }}
                       >
-                        Open in Drive →
+                        Open in Dropbox →
                       </a>
                     ) : b.drive_sync_status === 'pending' || b.drive_sync_status === 'syncing' ? (
                       <span

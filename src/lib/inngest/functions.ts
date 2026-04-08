@@ -1,6 +1,5 @@
 import { inngest } from './client';
 import { shopifyFunctions } from './shopify-functions';
-import { driveFunctions } from './drive-functions';
 
 /**
  * Hello-world test function.
@@ -27,4 +26,4 @@ export const helloWorld = inngest.createFunction(
 );
 
 // Add new functions to this array as we build them.
-export const functions = [helloWorld, ...shopifyFunctions, ...driveFunctions];
+export const functions = [helloWorld, ...shopifyFunctions];
