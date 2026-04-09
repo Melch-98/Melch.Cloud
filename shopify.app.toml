@@ -5,8 +5,8 @@
 client_id = "379ad0c5fe46c693184a6a8f3477436f"
 name = "Melch.Cloud"
 handle = "melch-cloud"
-application_url = "https://melch.cloud"
-embedded = false
+application_url = "https://melch.cloud/app"
+embedded = true
 
 [build]
 include_config_on_deploy = true
