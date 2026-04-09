@@ -8,6 +8,19 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
+  async headers() {
+    const csp = "frame-ancestors https://*.myshopify.com https://admin.shopify.com";
+    return [
+      {
+        source: '/app',
+        headers: [{ key: 'Content-Security-Policy', value: csp }],
+      },
+      {
+        source: '/app/:path*',
+        headers: [{ key: 'Content-Security-Policy', value: csp }],
+      },
+    ];
+  },
 };
 
 export default withSentryConfig(nextConfig, {
