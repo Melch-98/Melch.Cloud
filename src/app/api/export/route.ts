@@ -30,8 +30,8 @@ export async function GET(request: NextRequest) {
       .select('*')
       .order('submitted_at', { ascending: false });
 
-    // Strategists can only export their own brand's data
-    if (auth.role === 'strategist' && auth.brand_id) {
+    // Non-admins can only export their own brand's data
+    if (auth.role !== 'admin' && auth.brand_id) {
       query = query.eq('brand_id', auth.brand_id);
     }
 

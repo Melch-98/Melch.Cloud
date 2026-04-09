@@ -1,0 +1,42 @@
+# Shopify app config for Melch.Cloud
+# Deploy changes with: shopify app deploy
+# Docs: https://shopify.dev/docs/apps/build/cli-for-apps/app-configuration
+
+client_id = "379ad0c5fe46c693184a6a8f3477436f"
+name = "Melch.Cloud"
+handle = "melch-cloud"
+application_url = "https://melch.cloud"
+embedded = false
+
+[build]
+include_config_on_deploy = true
+
+[access_scopes]
+scopes = "read_customers,read_price_rules,read_discounts,read_fulfillments,read_inventory,read_locations,read_marketing_events,read_orders,read_products,read_returns"
+
+[auth]
+redirect_urls = [
+  "https://melch.cloud/api/shopify/callback"
+]
+
+[webhooks]
+api_version = "2026-04"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "https://melch.cloud/api/shopify/webhooks/app-uninstalled"
+
+  [[webhooks.subscriptions]]
+  topics = [ "orders/create", "orders/updated", "orders/cancelled" ]
+  uri = "https://melch.cloud/api/shopify/webhooks/orders"
+
+  [[webhooks.subscriptions]]
+  topics = [ "refunds/create" ]
+  uri = "https://melch.cloud/api/shopify/webhooks/refunds-create"
+
+  # Mandatory GDPR / privacy compliance webhooks.
+  # Our single handler reads X-Shopify-Topic from headers and routes internally,
+  # so all three compliance topics point at the same URI.
+  [[webhooks.subscriptions]]
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+  uri = "https://melch.cloud/api/shopify/webhooks/compliance"

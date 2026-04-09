@@ -29,8 +29,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Missing submissionId' }, { status: 400 });
     }
 
-    // Verify brand ownership for strategists
-    if (auth.role === 'strategist' && auth.brand_id) {
+    // Verify brand ownership for non-admins
+    if (auth.role !== 'admin' && auth.brand_id) {
       const { data: sub } = await supabase
         .from('submissions')
         .select('brand_id')

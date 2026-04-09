@@ -30,8 +30,8 @@ export async function GET(request: NextRequest) {
     .select('brand_id, api_key, brands:brand_id(name)')
     .eq('provider', 'klaviyo');
 
-  // Strategists can only see their own brand
-  if (auth.role === 'strategist' && auth.brand_id) {
+  // Non-admins can only see their own brand
+  if (auth.role !== 'admin' && auth.brand_id) {
     brandQuery = brandQuery.eq('brand_id', auth.brand_id);
   } else if (brandFilter && brandFilter !== 'all') {
     brandQuery = brandQuery.eq('brand_id', brandFilter);

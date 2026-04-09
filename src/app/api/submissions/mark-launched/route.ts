@@ -35,6 +35,26 @@ export async function POST(req: NextRequest) {
 
   const launched = body.launched !== false;
   const supabase = createServiceClient();
+
+  // Check caller's role and brand, enforce scoping
+  const { data: profile } = await supabase
+    .from('users_profile')
+    .select('role, brand_id')
+    .eq('id', user.id)
+    .single();
+  if (!profile) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
+  if (profile.role !== 'admin') {
+    const { data: sub } = await supabase
+      .from('submissions')
+      .select('brand_id')
+      .eq('id', body.submission_id)
+      .single();
+    if (!sub || sub.brand_id !== profile.brand_id) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+  }
+
   const { error } = await supabase
     .from('submissions')
     .update({ launched_at: launched ? new Date().toISOString() : null })

@@ -30,7 +30,7 @@ export async function GET(request: NextRequest) {
     .eq('id', user.id)
     .single();
 
-  if (!profile || !['admin', 'strategist'].includes(profile.role)) {
+  if (!profile || !['admin', 'strategist', 'founder'].includes(profile.role)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
@@ -64,8 +64,8 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // Strategists can only access their assigned brand
-  if (profile.role === 'strategist' && profile.brand_id) {
+  // Non-admins can only access their assigned brand
+  if (profile.role !== 'admin' && profile.brand_id) {
     const { data: brand } = await supabase
       .from('brands')
       .select('meta_ad_account_id')

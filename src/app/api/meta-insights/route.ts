@@ -67,7 +67,7 @@ export async function GET(request: NextRequest) {
         .order('name');
 
       // Strategists only see their assigned brand
-      if (profile.role === 'strategist' && profile.brand_id) {
+      if (profile.role !== 'admin' && profile.brand_id) {
         brandsQuery = brandsQuery.eq('id', profile.brand_id);
       }
 
@@ -102,7 +102,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Strategists can only access their assigned brand's ad account
-    if (profile.role === 'strategist' && profile.brand_id) {
+    if (profile.role !== 'admin' && profile.brand_id) {
       const { data: brand } = await supabase
         .from('brands')
         .select('meta_ad_account_id')

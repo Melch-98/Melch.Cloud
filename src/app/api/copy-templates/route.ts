@@ -28,8 +28,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'brand_id required' }, { status: 400 });
   }
 
-  // Strategists can only see their own brand
-  if (auth.role === 'strategist' && auth.brand_id !== brandId) {
+  // Non-admins can only see their own brand
+  if (auth.role !== 'admin' && auth.brand_id !== brandId) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
@@ -48,10 +48,6 @@ export async function POST(request: NextRequest) {
   const { auth, error, status } = await authenticateRequest(request);
   if (!auth) return NextResponse.json({ error }, { status: status || 401 });
 
-  if (!['admin', 'strategist'].includes(auth.role)) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
-
   const body = await request.json();
   const { brand_id, title, primary_texts, headlines, descriptions, landing_page_url } = body;
 
@@ -59,8 +55,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'brand_id and title required' }, { status: 400 });
   }
 
-  // Strategists can only create for their brand
-  if (auth.role === 'strategist' && auth.brand_id !== brand_id) {
+  // Non-admins can only create for their brand
+  if (auth.role !== 'admin' && auth.brand_id !== brand_id) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
@@ -87,10 +83,6 @@ export async function PUT(request: NextRequest) {
   const { auth, error, status } = await authenticateRequest(request);
   if (!auth) return NextResponse.json({ error }, { status: status || 401 });
 
-  if (!['admin', 'strategist'].includes(auth.role)) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
-
   const body = await request.json();
   const { id, ...updates } = body;
 
@@ -98,8 +90,8 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: 'id required' }, { status: 400 });
   }
 
-  // If strategist, verify template belongs to their brand
-  if (auth.role === 'strategist') {
+  // Non-admins: verify template belongs to their brand
+  if (auth.role !== 'admin') {
     const { data: existing } = await supabase()
       .from('copy_templates')
       .select('brand_id')
@@ -126,17 +118,13 @@ export async function DELETE(request: NextRequest) {
   const { auth, error, status } = await authenticateRequest(request);
   if (!auth) return NextResponse.json({ error }, { status: status || 401 });
 
-  if (!['admin', 'strategist'].includes(auth.role)) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
-
   const id = new URL(request.url).searchParams.get('id');
   if (!id) {
     return NextResponse.json({ error: 'id required' }, { status: 400 });
   }
 
-  // If strategist, verify template belongs to their brand
-  if (auth.role === 'strategist') {
+  // Non-admins: verify template belongs to their brand
+  if (auth.role !== 'admin') {
     const { data: existing } = await supabase()
       .from('copy_templates')
       .select('brand_id')

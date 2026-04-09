@@ -57,6 +57,11 @@ export async function GET(request: NextRequest) {
 
   if (!brandId) return NextResponse.json({ error: 'brandId required' }, { status: 400 });
 
+  // Non-admins can only fetch their own brand
+  if (profile.role !== 'admin' && profile.brand_id !== brandId) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+
   // Get brand config (ad account IDs) — select ALL columns to avoid missing-column bugs
   const { data: brand, error: brandError } = await supabase
     .from('brands')

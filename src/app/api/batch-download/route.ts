@@ -43,8 +43,8 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Strategists can only download their own brand's submissions
-    if (auth.role === 'strategist' && auth.brand_id && submission.brand_id !== auth.brand_id) {
+    // Non-admins can only download their own brand's submissions
+    if (auth.role !== 'admin' && auth.brand_id && submission.brand_id !== auth.brand_id) {
       return NextResponse.json(
         { error: 'You can only download submissions for your assigned brand.' },
         { status: 403 }

@@ -21,6 +21,14 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  // Brand scoping: non-admins can only view ads that belong to their brand
+  const { data: profile } = await supabase
+    .from('users_profile')
+    .select('role, brand_id')
+    .eq('id', user.id)
+    .single();
+  if (!profile) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
   let metaToken = process.env.META_ACCESS_TOKEN || '';
   if (!metaToken) {
     const { data: settings } = await supabase
@@ -39,6 +47,19 @@ export async function GET(request: NextRequest) {
 
   if (!adId) {
     return NextResponse.json({ error: 'Missing ad_id' }, { status: 400 });
+  }
+
+  // Enforce brand scoping: non-admins must own this ad via ad_snapshots
+  if (profile.role !== 'admin') {
+    const { data: snap } = await supabase
+      .from('ad_snapshots')
+      .select('brand_id')
+      .eq('ad_id', adId)
+      .limit(1)
+      .maybeSingle();
+    if (!snap || snap.brand_id !== profile.brand_id) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
   }
 
   try {
