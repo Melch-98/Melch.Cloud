@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   Loader,
-  Inbox,
+  Hammer,
   FileText,
   Package,
   Shuffle,
@@ -15,9 +15,27 @@ import {
   Copy,
   Check,
   Globe,
+  ExternalLink,
+  CheckCircle,
+  Rocket,
+  Play,
 } from 'lucide-react';
 import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
+
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const getStorageUrl = (path: string) =>
+  `${SUPABASE_URL}/storage/v1/object/public/creatives/${path}`;
+const isImage = (f: SubmissionFile) => {
+  if (f.media_format === 'STATIC') return true;
+  const n = (f.file_name || '').toLowerCase();
+  return /\.(jpe?g|png|webp|gif)$/.test(n);
+};
+const isVideo = (f: SubmissionFile) => {
+  if (f.media_format === 'VIDEO') return true;
+  const n = (f.file_name || '').toLowerCase();
+  return /\.(mp4|mov|webm)$/.test(n);
+};
 
 // ─── Types ──────────────────────────────────────────────────────
 interface Brand {
@@ -25,7 +43,15 @@ interface Brand {
   name: string;
 }
 
-interface NewBatch {
+interface SubmissionFile {
+  id: string;
+  file_name: string;
+  file_url: string | null;
+  media_format: string | null;
+  aspect_ratio: string | null;
+}
+
+interface BuildingBatch {
   id: string;
   batch_name: string;
   brand_id: string;
@@ -38,6 +64,8 @@ interface NewBatch {
   created_at: string;
   drive_folder_url: string | null;
   drive_sync_status: string | null;
+  notes: string | null;
+  files: SubmissionFile[];
 }
 
 interface CopyTemplate {
@@ -99,10 +127,11 @@ export default function AdLabPage() {
   const [brands, setBrands] = useState<Brand[]>([]);
   const [selectedBrandId, setSelectedBrandId] = useState<string>('');
 
-  const [batches, setBatches] = useState<NewBatch[]>([]);
+  const [batches, setBatches] = useState<BuildingBatch[]>([]);
   const [templates, setTemplates] = useState<CopyTemplate[]>([]);
   const [batchPage, setBatchPage] = useState(1);
   const [tplPage, setTplPage] = useState(1);
+  const [expandedBatch, setExpandedBatch] = useState<string | null>(null);
   const [expandedTpl, setExpandedTpl] = useState<string | null>(null);
 
   // ─── Auth + brand bootstrap ───────────────────────────────────
@@ -177,10 +206,18 @@ export default function AdLabPage() {
             batch_status,
             drive_folder_url,
             drive_sync_status,
-            brands:brand_id (name)
+            notes,
+            brands:brand_id (name),
+            submission_files (
+              id,
+              file_name,
+              file_url,
+              media_format,
+              aspect_ratio
+            )
           `)
           .eq('brand_id', selectedBrandId)
-          .eq('batch_status', 'new')
+          .eq('batch_status', 'building')
           .order('created_at', { ascending: false }),
         supabase
           .from('copy_templates')
@@ -205,11 +242,14 @@ export default function AdLabPage() {
           created_at: r.created_at,
           drive_folder_url: r.drive_folder_url || null,
           drive_sync_status: r.drive_sync_status || null,
+          notes: r.notes || null,
+          files: (r.submission_files || []) as SubmissionFile[],
         }))
       );
       setTemplates((tplRows as CopyTemplate[]) || []);
       setBatchPage(1);
       setTplPage(1);
+      setExpandedBatch(null);
       setExpandedTpl(null);
     })();
 
@@ -217,6 +257,23 @@ export default function AdLabPage() {
       cancelled = true;
     };
   }, [selectedBrandId, supabase]);
+
+  const advanceStatus = async (id: string, status: 'ready' | 'launched') => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
+    const res = await fetch('/api/batch-status', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ submissionId: id, status }),
+    });
+    if (res.ok) {
+      // Building list: any advance removes the row
+      setBatches((prev) => prev.filter((b) => b.id !== id));
+    }
+  };
 
   const selectedBrandName = useMemo(
     () => brands.find((b) => b.id === selectedBrandId)?.name || '',
@@ -287,7 +344,7 @@ export default function AdLabPage() {
             </div>
           ) : (
             <>
-              {/* SECTION A — Ready to Build */}
+              {/* SECTION A — Building */}
               <section
                 className="rounded-2xl border overflow-hidden mb-8"
                 style={{
@@ -300,11 +357,11 @@ export default function AdLabPage() {
                   style={{ borderColor: 'rgba(255,255,255,0.06)' }}
                 >
                   <div className="flex items-center gap-2.5">
-                    <Inbox className="w-4 h-4" style={{ color: '#C8B89A' }} />
+                    <Hammer className="w-4 h-4" style={{ color: '#C8B89A' }} />
                     <div>
-                      <h2 className="text-base font-semibold tracking-tight">Ready to Build</h2>
+                      <h2 className="text-base font-semibold tracking-tight">Building</h2>
                       <p className="text-xs mt-0.5" style={{ color: '#6B6560' }}>
-                        {batches.length} awaiting build
+                        {batches.length} in progress
                       </p>
                     </div>
                   </div>
@@ -312,7 +369,7 @@ export default function AdLabPage() {
 
                 {visibleBatches.length === 0 ? (
                   <div className="px-6 py-12 text-center text-xs" style={{ color: '#6B6560' }}>
-                    No batches ready to build for {selectedBrandName}.
+                    No batches building for {selectedBrandName}.
                   </div>
                 ) : (
                   <ul>
@@ -331,74 +388,198 @@ export default function AdLabPage() {
                         : b.is_whitelist
                         ? 'Whitelist'
                         : b.creative_type || 'Standard';
+                      const isOpen = expandedBatch === b.id;
                       return (
                         <li
                           key={b.id}
-                          className="flex items-center gap-4 px-6 py-3.5 hover:bg-[rgba(255,255,255,0.02)] transition-colors"
                           style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}
                         >
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-sm font-semibold truncate" style={{ color: '#F5F5F8' }}>
-                                {b.brand_name}
-                              </span>
-                              <span
-                                className="text-[11px] font-mono px-1.5 py-0.5 rounded"
-                                style={{ color: '#C8B89A', backgroundColor: 'rgba(200,184,154,0.08)' }}
-                              >
-                                {b.batch_name}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-3 text-[11px]" style={{ color: '#6B6560' }}>
-                              {typeIcon ? (
-                                <span className="flex items-center gap-1">
-                                  {(() => {
-                                    const Icon = typeIcon;
-                                    return <Icon className="w-3 h-3" />;
-                                  })()}
-                                  {typeLabel}
+                          <div
+                            className="flex items-center gap-4 px-6 py-3.5 hover:bg-[rgba(255,255,255,0.02)] transition-colors cursor-pointer"
+                            onClick={() => setExpandedBatch(isOpen ? null : b.id)}
+                          >
+                            {isOpen ? (
+                              <ChevronDown className="w-4 h-4 shrink-0" style={{ color: '#C8B89A' }} />
+                            ) : (
+                              <ChevronRight className="w-4 h-4 shrink-0" style={{ color: '#6B6560' }} />
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="text-sm font-semibold truncate" style={{ color: '#F5F5F8' }}>
+                                  {b.brand_name}
                                 </span>
-                              ) : (
-                                <span>{typeLabel}</span>
-                              )}
-                              <span>·</span>
-                              <span>{b.file_count} file{b.file_count === 1 ? '' : 's'}</span>
-                              <span>·</span>
-                              <span>{timeAgo(b.created_at)}</span>
+                                <span
+                                  className="text-[11px] font-mono px-1.5 py-0.5 rounded"
+                                  style={{ color: '#C8B89A', backgroundColor: 'rgba(200,184,154,0.08)' }}
+                                >
+                                  {b.batch_name}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-3 text-[11px]" style={{ color: '#6B6560' }}>
+                                {typeIcon ? (
+                                  <span className="flex items-center gap-1">
+                                    {(() => {
+                                      const Icon = typeIcon;
+                                      return <Icon className="w-3 h-3" />;
+                                    })()}
+                                    {typeLabel}
+                                  </span>
+                                ) : (
+                                  <span>{typeLabel}</span>
+                                )}
+                                <span>·</span>
+                                <span>{b.file_count} file{b.file_count === 1 ? '' : 's'}</span>
+                                <span>·</span>
+                                <span>{timeAgo(b.created_at)}</span>
+                              </div>
                             </div>
+                            {b.drive_folder_url && (
+                              <a
+                                href={b.drive_folder_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="shrink-0 text-[11px] font-medium px-2.5 py-1 rounded transition-colors"
+                                style={{ color: '#22C55E', backgroundColor: 'rgba(34,197,94,0.08)' }}
+                              >
+                                Open in Dropbox →
+                              </a>
+                            )}
                           </div>
-                          {b.drive_sync_status === 'synced' && b.drive_folder_url ? (
-                            <a
-                              href={b.drive_folder_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="shrink-0 text-[11px] font-medium px-2.5 py-1 rounded transition-colors"
-                              style={{ color: '#22C55E', backgroundColor: 'rgba(34,197,94,0.08)' }}
+
+                          {isOpen && (
+                            <div
+                              className="px-6 pb-5 pt-2 space-y-4"
+                              style={{ backgroundColor: 'rgba(255,255,255,0.015)' }}
                             >
-                              Open in Dropbox →
-                            </a>
-                          ) : b.drive_sync_status === 'syncing' ? (
-                            <span
-                              className="shrink-0 text-[11px] font-medium px-2.5 py-1 rounded"
-                              style={{ color: '#9AADCC', backgroundColor: 'rgba(154,173,204,0.08)' }}
-                            >
-                              Syncing…
-                            </span>
-                          ) : b.drive_sync_status === 'pending' ? (
-                            <span
-                              className="shrink-0 text-[11px] font-medium px-2.5 py-1 rounded"
-                              style={{ color: '#C8B89A', backgroundColor: 'rgba(200,184,154,0.06)' }}
-                            >
-                              Queued
-                            </span>
-                          ) : b.drive_sync_status === 'failed' ? (
-                            <span
-                              className="shrink-0 text-[11px] font-medium px-2.5 py-1 rounded"
-                              style={{ color: '#EF4444', backgroundColor: 'rgba(239,68,68,0.08)' }}
-                            >
-                              Sync failed
-                            </span>
-                          ) : null}
+                              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs">
+                                <div>
+                                  <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: '#6B6560' }}>Brand</div>
+                                  <div style={{ color: '#F5F5F8' }}>{b.brand_name}</div>
+                                </div>
+                                <div>
+                                  <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: '#6B6560' }}>Batch</div>
+                                  <div className="font-mono" style={{ color: '#C8B89A' }}>{b.batch_name}</div>
+                                </div>
+                                {b.drive_folder_url && (
+                                  <div>
+                                    <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: '#6B6560' }}>Dropbox</div>
+                                    <a
+                                      href={b.drive_folder_url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center gap-1 hover:underline"
+                                      style={{ color: '#5B8DEF' }}
+                                    >
+                                      Open folder <ExternalLink className="w-3 h-3" />
+                                    </a>
+                                  </div>
+                                )}
+                              </div>
+
+                              {b.notes && (
+                                <div>
+                                  <div className="text-[10px] uppercase tracking-wider mb-1" style={{ color: '#6B6560' }}>Notes</div>
+                                  <div
+                                    className="text-xs px-3 py-2 rounded whitespace-pre-wrap"
+                                    style={{
+                                      backgroundColor: 'rgba(255,255,255,0.025)',
+                                      border: '1px solid rgba(255,255,255,0.04)',
+                                      color: '#F5F5F8',
+                                    }}
+                                  >
+                                    {b.notes}
+                                  </div>
+                                </div>
+                              )}
+
+                              {b.files.length > 0 && (
+                                <div>
+                                  <div className="text-[10px] uppercase tracking-wider mb-2" style={{ color: '#6B6560' }}>
+                                    Files ({b.files.length})
+                                  </div>
+                                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
+                                    {b.files.map((f) => {
+                                      const url = f.file_url ? getStorageUrl(f.file_url) : '';
+                                      const img = isImage(f);
+                                      const vid = isVideo(f);
+                                      return (
+                                        <div
+                                          key={f.id}
+                                          className="rounded-lg overflow-hidden"
+                                          style={{
+                                            backgroundColor: 'rgba(255,255,255,0.03)',
+                                            border: '1px solid rgba(255,255,255,0.06)',
+                                          }}
+                                        >
+                                          <a
+                                            href={url || undefined}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="block aspect-square w-full relative bg-black/20 flex items-center justify-center"
+                                          >
+                                            {img && url ? (
+                                              <img src={url} alt={f.file_name} className="w-full h-full object-cover" />
+                                            ) : vid && url ? (
+                                              <>
+                                                <video src={`${url}#t=0.5`} className="w-full h-full object-cover" muted playsInline preload="metadata" />
+                                                <div className="absolute inset-0 flex items-center justify-center">
+                                                  <div className="w-7 h-7 rounded-full flex items-center justify-center" style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
+                                                    <Play className="w-3.5 h-3.5 text-white ml-0.5" />
+                                                  </div>
+                                                </div>
+                                              </>
+                                            ) : (
+                                              <FileText className="w-6 h-6 text-gray-600" />
+                                            )}
+                                          </a>
+                                          <div className="p-1.5">
+                                            <p className="text-[10px] truncate" style={{ color: '#D5D5D5' }}>{f.file_name}</p>
+                                            <div className="flex items-center justify-between mt-0.5">
+                                              <div className="flex gap-1">
+                                                {f.media_format && <span className="text-[9px] uppercase" style={{ color: '#6B6560' }}>{f.media_format}</span>}
+                                                {f.aspect_ratio && <span className="text-[9px]" style={{ color: '#C8B89A' }}>{f.aspect_ratio}</span>}
+                                              </div>
+                                              {url && (
+                                                <a
+                                                  href={url}
+                                                  target="_blank"
+                                                  rel="noopener noreferrer"
+                                                  className="text-[9px] inline-flex items-center gap-0.5 hover:underline"
+                                                  style={{ color: '#5B8DEF' }}
+                                                >
+                                                  Open <ExternalLink className="w-2.5 h-2.5" />
+                                                </a>
+                                              )}
+                                            </div>
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+
+                              <div className="flex items-center gap-2 pt-1">
+                                <button
+                                  onClick={() => advanceStatus(b.id, 'ready')}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                                  style={{ backgroundColor: 'rgba(76,175,80,0.15)', color: '#4CAF50' }}
+                                >
+                                  <CheckCircle className="w-3.5 h-3.5" />
+                                  Mark Ready
+                                </button>
+                                <button
+                                  onClick={() => advanceStatus(b.id, 'launched')}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                                  style={{ backgroundColor: 'rgba(200,184,154,0.2)', color: '#C8B89A' }}
+                                >
+                                  <Rocket className="w-3.5 h-3.5" />
+                                  Mark Launched
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </li>
                       );
                     })}
