@@ -13,6 +13,7 @@ include_config_on_deploy = true
 
 [access_scopes]
 scopes = "read_customers,read_price_rules,read_discounts,read_fulfillments,read_inventory,read_locations,read_marketing_events,read_orders,read_products,read_returns"
+use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [

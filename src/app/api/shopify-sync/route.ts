@@ -396,9 +396,30 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Brand not found' }, { status: 404 });
   }
 
-  if (!brand.shopify_store_domain || !brand.shopify_client_id || !brand.shopify_client_secret) {
+  if (!brand.shopify_store_domain) {
     return NextResponse.json(
-      { error: 'Shopify not connected for this brand. Add store domain, client ID, and client secret first.' },
+      { error: 'Shopify not connected for this brand. Install the Melch.Cloud app on your store first.' },
+      { status: 400 }
+    );
+  }
+
+  // Resolve auth: prefer public-app OAuth token from shopify_stores (the App
+  // Store install flow), fall back to custom distribution client credentials.
+  let oauthAccessToken: string | null = null;
+  {
+    const { data: storeRow } = await supabase
+      .from('shopify_stores')
+      .select('access_token, uninstalled_at')
+      .eq('shop_domain', brand.shopify_store_domain)
+      .maybeSingle();
+    if (storeRow?.access_token && !storeRow.uninstalled_at) {
+      oauthAccessToken = storeRow.access_token;
+    }
+  }
+
+  if (!oauthAccessToken && (!brand.shopify_client_id || !brand.shopify_client_secret)) {
+    return NextResponse.json(
+      { error: 'Shopify not connected for this brand. Install the Melch.Cloud app on your store first.' },
       { status: 400 }
     );
   }
@@ -434,12 +455,15 @@ export async function POST(request: NextRequest) {
   const untilDate = until_date || now.toISOString();
 
   try {
-    // Exchange client credentials for access token (valid 24h)
-    const shopifyToken = await getShopifyToken(
-      brand.shopify_store_domain,
-      brand.shopify_client_id,
-      brand.shopify_client_secret
-    );
+    // Use OAuth offline token when available (public App Store install flow);
+    // otherwise exchange custom-distribution client credentials for a short-lived token.
+    const shopifyToken = oauthAccessToken
+      ? oauthAccessToken
+      : await getShopifyToken(
+          brand.shopify_store_domain,
+          brand.shopify_client_id!,
+          brand.shopify_client_secret!
+        );
 
     // Fetch orders from Shopify
     const orders = await fetchAllOrders(
@@ -688,16 +712,30 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to fetch data', details: error.message }, { status: 500 });
     }
 
-    // Also get brand's Shopify connection status
+    // Also get brand's Shopify connection status. A brand is "connected" if
+    // it has either (a) a live public-app OAuth install in shopify_stores, or
+    // (b) custom-distribution client credentials on the brand row.
     const { data: brand } = await supabase
       .from('brands')
       .select('shopify_store_domain, shopify_client_id, shopify_gross_margin_pct')
       .eq('id', brandId)
       .single();
 
+    let hasOauthInstall = false;
+    if (brand?.shopify_store_domain) {
+      const { data: storeRow } = await supabase
+        .from('shopify_stores')
+        .select('access_token, uninstalled_at')
+        .eq('shop_domain', brand.shopify_store_domain)
+        .maybeSingle();
+      hasOauthInstall = !!(storeRow?.access_token && !storeRow.uninstalled_at);
+    }
+
     const payload = {
       rows: rows || [],
-      shopify_connected: !!(brand?.shopify_store_domain && brand?.shopify_client_id),
+      shopify_connected: !!(
+        brand?.shopify_store_domain && (hasOauthInstall || brand.shopify_client_id)
+      ),
       gross_margin_pct: brand?.shopify_gross_margin_pct || 62,
     };
 
