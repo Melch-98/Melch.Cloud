@@ -1,7 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { createServiceClient } from '@/lib/supabase-server';
 
 export const dynamic = 'force-dynamic';
+
+async function getBrandIdForShop(
+  supabase: SupabaseClient,
+  shopDomain: string
+): Promise<string | null> {
+  const { data: brand } = await supabase
+    .from('brands')
+    .select('id')
+    .eq('shopify_store_domain', shopDomain)
+    .maybeSingle();
+  return (brand?.id as string | undefined) ?? null;
+}
 
 /**
  * POST /api/external/shopify-ingest/<sub-path>
@@ -64,17 +77,13 @@ export async function POST(
           return NextResponse.json({ error: 'Missing shopDomain' }, { status: 400 });
         }
         // Link to an existing brand by shopify_store_domain (mirrors token-exchange).
-        const { data: brand } = await supabase
-          .from('brands')
-          .select('id')
-          .eq('shopify_store_domain', shopDomain)
-          .maybeSingle();
+        const brandId = await getBrandIdForShop(supabase, shopDomain);
 
         const { error } = await supabase
           .from('shopify_stores')
           .upsert(
             {
-              brand_id: brand?.id ?? null,
+              brand_id: brandId,
               shop_domain: shopDomain,
               access_token: 'gadget-managed',
               scopes: 'gadget-managed',
@@ -106,88 +115,105 @@ export async function POST(
       }
 
       case '/order': {
-        const order = (body.order ?? {}) as Record<string, unknown>;
-        const orderShopDomain =
-          shopDomain ?? (typeof order.shop_domain === 'string' ? order.shop_domain : undefined);
-        if (!orderShopDomain) {
+        if (!shopDomain) {
           return NextResponse.json({ error: 'Missing shopDomain' }, { status: 400 });
         }
-        const shopifyOrderId = Number(body.orderId ?? order.id);
+        const shopifyOrderId = Number(body.id);
         if (!Number.isFinite(shopifyOrderId)) {
-          return NextResponse.json({ error: 'Missing orderId' }, { status: 400 });
+          return NextResponse.json({ error: 'Missing id' }, { status: 400 });
         }
 
-        const { data: store } = await supabase
-          .from('shopify_stores')
-          .select('brand_id')
-          .eq('shop_domain', orderShopDomain)
-          .maybeSingle();
+        const brandId = await getBrandIdForShop(supabase, shopDomain);
+        const customer = body.customer as { id?: unknown } | undefined;
 
         const row = {
-          shop_domain: orderShopDomain,
-          brand_id: store?.brand_id ?? null,
+          shop_domain: shopDomain,
+          brand_id: brandId,
           shopify_order_id: shopifyOrderId,
-          order_number: order.name != null ? String(order.name) : null,
-          email: typeof order.email === 'string' ? order.email : null,
-          total_price: order.total_price != null ? Number(order.total_price) : null,
-          subtotal_price: order.subtotal_price != null ? Number(order.subtotal_price) : null,
-          total_tax: order.total_tax != null ? Number(order.total_tax) : null,
-          total_discounts: order.total_discounts != null ? Number(order.total_discounts) : null,
-          currency: typeof order.currency === 'string' ? order.currency : null,
-          financial_status:
-            typeof order.financial_status === 'string' ? order.financial_status : null,
-          fulfillment_status:
-            typeof order.fulfillment_status === 'string' ? order.fulfillment_status : null,
-          customer_id:
-            order.customer && typeof (order.customer as { id?: unknown }).id === 'number'
-              ? ((order.customer as { id: number }).id as number)
-              : null,
-          line_items: (order.line_items as unknown) ?? null,
-          shipping_address: (order.shipping_address as unknown) ?? null,
-          billing_address: (order.billing_address as unknown) ?? null,
-          source_name: typeof order.source_name === 'string' ? order.source_name : null,
-          landing_site: typeof order.landing_site === 'string' ? order.landing_site : null,
-          referring_site: typeof order.referring_site === 'string' ? order.referring_site : null,
-          shopify_created_at:
-            typeof order.created_at === 'string' ? order.created_at : null,
-          shopify_updated_at:
-            typeof order.updated_at === 'string' ? order.updated_at : null,
-          raw: order,
+          order_number: body.orderNumber ?? body.name ?? null,
+          email: body.email ?? null,
+          total_price: body.totalPrice ?? null,
+          subtotal_price: body.subtotalPrice ?? null,
+          total_tax: body.totalTax ?? null,
+          total_discounts: body.totalDiscounts ?? null,
+          currency: body.currency ?? null,
+          financial_status: body.financialStatus ?? null,
+          fulfillment_status: body.fulfillmentStatus ?? null,
+          customer_id: customer?.id ?? body.customerId ?? null,
+          line_items: body.lineItems ?? [],
+          shipping_address: body.shippingAddress ?? null,
+          billing_address: body.billingAddress ?? null,
+          source_name: body.sourceName ?? null,
+          landing_site: body.landingSite ?? null,
+          referring_site: body.referringSite ?? null,
+          shopify_created_at: body.shopifyCreatedAt ?? body.createdAt ?? null,
+          shopify_updated_at: body.shopifyUpdatedAt ?? body.updatedAt ?? null,
+          raw: body,
           updated_at: new Date().toISOString(),
         };
 
-        // No unique constraint on (shop_domain, shopify_order_id) yet, so
-        // do a manual upsert: look up existing row, then update or insert.
-        const { data: existing, error: lookupErr } = await supabase
-          .from('shopify_orders')
-          .select('id')
-          .eq('shop_domain', orderShopDomain)
-          .eq('shopify_order_id', shopifyOrderId)
-          .maybeSingle();
-        if (lookupErr) throw lookupErr;
+        console.log('[shopify-ingest] order upsert', {
+          shop_domain: shopDomain,
+          shopify_order_id: shopifyOrderId,
+        });
 
-        if (existing?.id) {
-          const { error } = await supabase
-            .from('shopify_orders')
-            .update(row)
-            .eq('id', existing.id);
-          if (error) throw error;
-        } else {
-          const { error } = await supabase.from('shopify_orders').insert(row);
-          if (error) throw error;
-        }
-        return NextResponse.json({ ok: true });
+        const { data, error } = await supabase
+          .from('shopify_orders')
+          .upsert(row, { onConflict: 'shop_domain,shopify_order_id' })
+          .select('id')
+          .maybeSingle();
+        if (error) throw error;
+        return NextResponse.json({ ok: true, id: data?.id });
       }
 
       case '/product': {
-        // TODO: persist products once a shopify_products table exists.
-        // For now, log and ack so shop install/uninstall + orders work end-to-end.
-        console.log('[shopify-ingest] product event (not persisted)', {
-          event,
-          shopDomain,
-          productId: body.productId,
+        if (!shopDomain) {
+          return NextResponse.json({ error: 'Missing shopDomain' }, { status: 400 });
+        }
+        const shopifyProductId = Number(body.id);
+        if (!Number.isFinite(shopifyProductId)) {
+          return NextResponse.json({ error: 'Missing id' }, { status: 400 });
+        }
+
+        const brandId = await getBrandIdForShop(supabase, shopDomain);
+        const rawTags = body.tags;
+        const tags = Array.isArray(rawTags)
+          ? rawTags
+          : String(rawTags ?? '')
+              .split(',')
+              .map((s) => s.trim())
+              .filter(Boolean);
+
+        const row = {
+          shop_domain: shopDomain,
+          brand_id: brandId,
+          shopify_product_id: shopifyProductId,
+          title: body.title ?? null,
+          handle: body.handle ?? null,
+          status: body.status ?? null,
+          product_type: body.productType ?? null,
+          vendor: body.vendor ?? null,
+          tags,
+          variants: body.variants ?? [],
+          images: body.images ?? [],
+          shopify_created_at: body.shopifyCreatedAt ?? body.createdAt ?? null,
+          shopify_updated_at: body.shopifyUpdatedAt ?? body.updatedAt ?? null,
+          raw: body,
+          updated_at: new Date().toISOString(),
+        };
+
+        console.log('[shopify-ingest] product upsert', {
+          shop_domain: shopDomain,
+          shopify_product_id: shopifyProductId,
         });
-        return NextResponse.json({ ok: true, persisted: false });
+
+        const { data, error } = await supabase
+          .from('shopify_products')
+          .upsert(row, { onConflict: 'shop_domain,shopify_product_id' })
+          .select('id')
+          .maybeSingle();
+        if (error) throw error;
+        return NextResponse.json({ ok: true, id: data?.id });
       }
 
       default:
