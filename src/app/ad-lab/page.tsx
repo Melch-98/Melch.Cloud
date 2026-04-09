@@ -65,6 +65,10 @@ interface BuildingBatch {
   drive_folder_url: string | null;
   drive_sync_status: string | null;
   notes: string | null;
+  landing_page_url: string | null;
+  copy_title: string | null;
+  creator_name: string | null;
+  creator_social_handle: string | null;
   files: SubmissionFile[];
 }
 
@@ -207,6 +211,10 @@ export default function AdLabPage() {
             drive_folder_url,
             drive_sync_status,
             notes,
+            landing_page_url,
+            copy_title,
+            creator_name,
+            creator_social_handle,
             brands:brand_id (name),
             submission_files (
               id,
@@ -243,6 +251,10 @@ export default function AdLabPage() {
           drive_folder_url: r.drive_folder_url || null,
           drive_sync_status: r.drive_sync_status || null,
           notes: r.notes || null,
+          landing_page_url: r.landing_page_url || null,
+          copy_title: r.copy_title || null,
+          creator_name: r.creator_name || null,
+          creator_social_handle: r.creator_social_handle || null,
           files: (r.submission_files || []) as SubmissionFile[],
         }))
       );
@@ -257,6 +269,18 @@ export default function AdLabPage() {
       cancelled = true;
     };
   }, [selectedBrandId, supabase]);
+
+  const assignTemplate = async (submissionId: string, templateTitle: string) => {
+    const { error } = await supabase
+      .from('submissions')
+      .update({ copy_title: templateTitle })
+      .eq('id', submissionId);
+    if (!error) {
+      setBatches((prev) =>
+        prev.map((b) => (b.id === submissionId ? { ...b, copy_title: templateTitle } : b))
+      );
+    }
+  };
 
   const advanceStatus = async (id: string, status: 'ready' | 'launched') => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -447,32 +471,41 @@ export default function AdLabPage() {
                             )}
                           </div>
 
-                          {isOpen && (
+                          {isOpen && (() => {
+                            const linkedTemplate = b.copy_title
+                              ? templates.find((t) => t.title === b.copy_title)
+                              : undefined;
+                            return (
                             <div
                               className="px-6 pb-5 pt-2 space-y-4"
                               style={{ backgroundColor: 'rgba(255,255,255,0.015)' }}
                             >
-                              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs">
-                                <div>
-                                  <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: '#6B6560' }}>Brand</div>
-                                  <div style={{ color: '#F5F5F8' }}>{b.brand_name}</div>
-                                </div>
-                                <div>
-                                  <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: '#6B6560' }}>Batch</div>
-                                  <div className="font-mono" style={{ color: '#C8B89A' }}>{b.batch_name}</div>
-                                </div>
-                                {b.drive_folder_url && (
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                                {b.landing_page_url && (
                                   <div>
-                                    <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: '#6B6560' }}>Dropbox</div>
+                                    <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: '#6B6560' }}>Landing page</div>
                                     <a
-                                      href={b.drive_folder_url}
+                                      href={b.landing_page_url}
                                       target="_blank"
                                       rel="noopener noreferrer"
-                                      className="inline-flex items-center gap-1 hover:underline"
+                                      className="inline-flex items-center gap-1 hover:underline break-all"
                                       style={{ color: '#5B8DEF' }}
                                     >
-                                      Open folder <ExternalLink className="w-3 h-3" />
+                                      {b.landing_page_url.replace(/^https?:\/\//, '')}
+                                      <ExternalLink className="w-3 h-3 shrink-0" />
                                     </a>
+                                  </div>
+                                )}
+                                {b.creator_name && (
+                                  <div>
+                                    <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: '#6B6560' }}>Creator</div>
+                                    <div style={{ color: '#F5F5F8' }}>{b.creator_name}</div>
+                                  </div>
+                                )}
+                                {b.creator_social_handle && (
+                                  <div>
+                                    <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: '#6B6560' }}>Social handle</div>
+                                    <div style={{ color: '#F5F5F8' }}>{b.creator_social_handle}</div>
                                   </div>
                                 )}
                               </div>
@@ -492,6 +525,76 @@ export default function AdLabPage() {
                                   </div>
                                 </div>
                               )}
+
+                              <div>
+                                <div className="text-[10px] uppercase tracking-wider mb-1.5" style={{ color: '#6B6560' }}>Copy template</div>
+                                {linkedTemplate ? (
+                                  <div
+                                    className="rounded-lg p-3 space-y-3"
+                                    style={{
+                                      backgroundColor: 'rgba(255,255,255,0.025)',
+                                      border: '1px solid rgba(255,255,255,0.04)',
+                                    }}
+                                  >
+                                    <div className="text-xs font-semibold" style={{ color: '#C8B89A' }}>
+                                      {linkedTemplate.title}
+                                    </div>
+                                    {linkedTemplate.landing_page_url && (
+                                      <FieldRow
+                                        label="Landing page"
+                                        icon={<Globe className="w-3 h-3" />}
+                                        items={[linkedTemplate.landing_page_url]}
+                                      />
+                                    )}
+                                    {linkedTemplate.primary_texts.length > 0 && (
+                                      <FieldRow label="Primary texts" items={linkedTemplate.primary_texts} />
+                                    )}
+                                    {linkedTemplate.headlines.length > 0 && (
+                                      <FieldRow label="Headlines" items={linkedTemplate.headlines} />
+                                    )}
+                                    {linkedTemplate.descriptions.length > 0 && (
+                                      <FieldRow label="Descriptions" items={linkedTemplate.descriptions} />
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div
+                                    className="rounded-lg p-3 flex items-center gap-3 flex-wrap"
+                                    style={{
+                                      backgroundColor: 'rgba(255,255,255,0.025)',
+                                      border: '1px solid rgba(255,255,255,0.04)',
+                                    }}
+                                  >
+                                    <span className="text-xs" style={{ color: '#6B6560' }}>
+                                      {b.copy_title
+                                        ? `"${b.copy_title}" — no matching template`
+                                        : 'No copy template assigned'}
+                                    </span>
+                                    {templates.length > 0 ? (
+                                      <select
+                                        value=""
+                                        onChange={(e) => {
+                                          if (e.target.value) assignTemplate(b.id, e.target.value);
+                                        }}
+                                        className="text-xs px-2 py-1 rounded focus:outline-none"
+                                        style={{
+                                          backgroundColor: 'rgba(255,255,255,0.04)',
+                                          border: '1px solid rgba(255,255,255,0.08)',
+                                          color: '#F5F5F8',
+                                        }}
+                                      >
+                                        <option value="">Link a template…</option>
+                                        {templates.map((t) => (
+                                          <option key={t.id} value={t.title}>{t.title || 'Untitled'}</option>
+                                        ))}
+                                      </select>
+                                    ) : (
+                                      <span className="text-[11px]" style={{ color: '#6B6560' }}>
+                                        (no templates exist for this brand)
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
 
                               {b.files.length > 0 && (
                                 <div>
@@ -579,7 +682,8 @@ export default function AdLabPage() {
                                 </button>
                               </div>
                             </div>
-                          )}
+                            );
+                          })()}
                         </li>
                       );
                     })}
