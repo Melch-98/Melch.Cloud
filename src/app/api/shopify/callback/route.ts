@@ -113,8 +113,14 @@ export async function GET(req: NextRequest) {
     .update({ registered_webhooks: webhookResults })
     .eq('shop_domain', shop);
 
-  // 7. Redirect merchant to success page.
-  const res = NextResponse.redirect(`${SHOPIFY_CONFIG.appUrl}/shopify/installed?shop=${shop}`);
+  // 7. Redirect the merchant into the embedded app inside Shopify admin.
+  //    That loads /app in an iframe, which runs App Bridge → token
+  //    exchange, which overwrites this non-expiring auth-code-grant token
+  //    with an expiring offline token that the Admin API will actually
+  //    accept. Without this hop, the embedded /app flow never runs.
+  const shopHandle = shop.replace(/\.myshopify\.com$/, '');
+  const embeddedUrl = `https://admin.shopify.com/store/${shopHandle}/apps/melch-cloud`;
+  const res = NextResponse.redirect(embeddedUrl);
   res.cookies.delete('shopify_oauth_state');
   return res;
 }
