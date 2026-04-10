@@ -74,18 +74,24 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // Parse landing_site to just the path (strip query params + domain)
+    // Parse landing_site to a normalised path so variants collapse into one row.
+    // Strips: domain, query string, fragment, trailing slash, UTM-style params,
+    // and lowercases the path so /Pages/Foo and /pages/foo merge.
     function parsePath(landingSite: string): string {
       try {
-        // landing_site can be a full URL or just a path
+        let path: string;
         if (landingSite.startsWith('http')) {
           const url = new URL(landingSite);
-          return url.pathname;
+          path = url.pathname;
+        } else {
+          path = landingSite.split('?')[0].split('#')[0];
         }
-        // Strip query string
-        return landingSite.split('?')[0] || '/';
+        // Lowercase, strip trailing slash (but keep bare "/")
+        path = path.toLowerCase().replace(/\/+$/, '') || '/';
+        return path;
       } catch {
-        return landingSite.split('?')[0] || '/';
+        const path = landingSite.split('?')[0].split('#')[0];
+        return path.toLowerCase().replace(/\/+$/, '') || '/';
       }
     }
 
@@ -140,7 +146,7 @@ export async function GET(request: NextRequest) {
 
       return {
         page_path: path,
-        page_name: path === '/' ? 'Homepage' : path,
+        page_name: path === '/' ? 'Homepage' : path.replace(/^\//, '').replace(/\//g, ' / '),
         conversions,
         revenue,
         aov,
