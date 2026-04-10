@@ -16,12 +16,16 @@ export const maxDuration = 120; // Shopify pagination can take a while
 
 interface ShopifyOrder {
   id: number;
+  name: string;
   created_at: string;
+  updated_at: string;
   financial_status: string;
+  fulfillment_status: string | null;
   total_price: string;
   subtotal_price: string;
   total_discounts: string;
   total_tax: string;
+  currency: string;
   total_shipping_price_set: {
     shop_money: { amount: string };
   };
@@ -30,10 +34,16 @@ interface ShopifyOrder {
     id: number;
     orders_count: number;
   } | null;
+  email: string | null;
   line_items: {
     price: string;
     quantity: number;
   }[];
+  shipping_address: Record<string, unknown> | null;
+  billing_address: Record<string, unknown> | null;
+  source_name: string | null;
+  landing_site: string | null;
+  referring_site: string | null;
 }
 
 interface ShopifyRefund {
@@ -508,6 +518,50 @@ export async function POST(request: NextRequest) {
       if (upsertError) {
         console.error('Upsert error:', upsertError);
         return NextResponse.json({ error: 'Failed to save data', details: upsertError.message }, { status: 500 });
+      }
+    }
+
+    // ── Upsert raw orders into shopify_orders for landing page analytics ──
+    if (orders.length > 0) {
+      const CHUNK_SIZE = 200;
+      let orderUpsertErrors = 0;
+      for (let i = 0; i < orders.length; i += CHUNK_SIZE) {
+        const chunk = orders.slice(i, i + CHUNK_SIZE);
+        const orderRows = chunk.map((o) => ({
+          shop_domain: brand.shopify_store_domain,
+          brand_id: brand.id,
+          shopify_order_id: o.id,
+          order_number: o.name ?? null,
+          email: o.email ?? null,
+          total_price: o.total_price ?? null,
+          subtotal_price: o.subtotal_price ?? null,
+          total_tax: o.total_tax ?? null,
+          total_discounts: o.total_discounts ?? null,
+          currency: o.currency ?? null,
+          financial_status: o.financial_status ?? null,
+          fulfillment_status: o.fulfillment_status ?? null,
+          customer_id: o.customer?.id ?? null,
+          line_items: o.line_items ?? [],
+          shipping_address: o.shipping_address ?? null,
+          billing_address: o.billing_address ?? null,
+          source_name: o.source_name ?? null,
+          landing_site: o.landing_site ?? null,
+          referring_site: o.referring_site ?? null,
+          shopify_created_at: o.created_at,
+          shopify_updated_at: o.updated_at,
+          raw: o,
+          updated_at: new Date().toISOString(),
+        }));
+        const { error: rawErr } = await supabase
+          .from('shopify_orders')
+          .upsert(orderRows, { onConflict: 'shop_domain,shopify_order_id' });
+        if (rawErr) {
+          console.error('Raw order upsert error (chunk):', rawErr.message);
+          orderUpsertErrors++;
+        }
+      }
+      if (orderUpsertErrors > 0) {
+        console.warn(`shopify_orders upsert: ${orderUpsertErrors} chunk(s) failed`);
       }
     }
 
