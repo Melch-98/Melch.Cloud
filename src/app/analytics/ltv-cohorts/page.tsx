@@ -230,27 +230,42 @@ export default function LTVCohortPage() {
     init();
   }, []);
 
-  // Load data when brand changes
+  // Load data when brand changes — paginate shopify_orders (Supabase default limit is 1000)
   useEffect(() => {
     if (!selectedBrand) return;
     async function fetchData() {
       setLoading(true);
 
-      const [ordersRes, pnlRes] = await Promise.all([
-        supabase
+      // Fetch ALL orders with pagination
+      const allOrders: OrderRow[] = [];
+      const PAGE_SIZE = 1000;
+      let from = 0;
+      let hasMore = true;
+      while (hasMore) {
+        const { data } = await supabase
           .from('shopify_orders')
           .select('customer_id, total_price, shopify_created_at')
           .eq('brand_id', selectedBrand)
-          .order('shopify_created_at', { ascending: true }),
-        supabase
-          .from('daily_pnl')
-          .select('date, nc_orders, nc_revenue, meta_spend, google_spend, other_spend')
-          .eq('brand_id', selectedBrand)
-          .order('date', { ascending: true }),
-      ]);
+          .order('shopify_created_at', { ascending: true })
+          .range(from, from + PAGE_SIZE - 1);
 
-      if (ordersRes.data) setOrders(ordersRes.data);
-      if (pnlRes.data) setDailyPnl(pnlRes.data);
+        if (data && data.length > 0) {
+          allOrders.push(...data);
+          from += PAGE_SIZE;
+          hasMore = data.length === PAGE_SIZE;
+        } else {
+          hasMore = false;
+        }
+      }
+
+      const { data: pnlData } = await supabase
+        .from('daily_pnl')
+        .select('date, nc_orders, nc_revenue, meta_spend, google_spend, other_spend')
+        .eq('brand_id', selectedBrand)
+        .order('date', { ascending: true });
+
+      setOrders(allOrders);
+      if (pnlData) setDailyPnl(pnlData);
       setLoading(false);
     }
     fetchData();
