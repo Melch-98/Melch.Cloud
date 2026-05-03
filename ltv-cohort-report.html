@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LTV Cohort Report — Melch.Cloud</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0A0A0A; --card: #111111; --border: #1a1a1a;
+    --gold: #C8B89A; --green: #10B981; --red: #ef4444; --amber: #f59e0b;
+    --text: #e5e5e5; --muted: #737373; --dim: #404040;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; padding:24px; }
+  h1 { font-size:24px; font-weight:600; margin-bottom:4px; }
+  .subtitle { color:var(--muted); font-size:14px; margin-bottom:24px; }
+
+  /* KPI Cards */
+  .kpi-row { display:grid; grid-template-columns:repeat(6,1fr); gap:12px; margin-bottom:24px; }
+  .kpi { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:16px; }
+  .kpi-label { font-size:11px; text-transform:uppercase; letter-spacing:0.5px; color:var(--muted); margin-bottom:6px; }
+  .kpi-value { font-size:22px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .kpi-sub { font-size:11px; color:var(--muted); margin-top:4px; }
+
+  /* Cohort Table */
+  .table-wrap { background:var(--card); border:1px solid var(--border); border-radius:10px; overflow-x:auto; margin-bottom:24px; }
+  .table-title { padding:16px 16px 8px; font-size:15px; font-weight:600; }
+  .table-subtitle { padding:0 16px 12px; font-size:12px; color:var(--muted); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th { text-align:left; padding:8px 12px; border-bottom:1px solid var(--border); color:var(--muted); font-weight:500; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; white-space:nowrap; }
+  td { padding:8px 12px; border-bottom:1px solid var(--border); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  tr:last-child td { border-bottom:none; }
+  .num { text-align:right; }
+  .heat { border-radius:4px; padding:4px 8px; text-align:center; font-weight:500; }
+
+  /* LTV:CAC badge */
+  .ltvcac-badge { display:inline-block; padding:2px 8px; border-radius:4px; font-weight:600; font-size:12px; }
+  .ltvcac-green { background:rgba(16,185,129,0.15); color:var(--green); }
+  .ltvcac-gold { background:rgba(200,184,154,0.15); color:var(--gold); }
+  .ltvcac-red { background:rgba(239,68,68,0.15); color:var(--red); }
+
+  /* Charts row */
+  .charts-row { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:24px; }
+  .chart-card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:16px; }
+  .chart-title { font-size:14px; font-weight:600; margin-bottom:12px; }
+  canvas { width:100%!important; }
+
+  /* Settings */
+  .settings { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:16px; margin-bottom:24px; }
+  .settings-title { font-size:14px; font-weight:600; margin-bottom:12px; }
+  .settings-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+  .field label { display:block; font-size:11px; color:var(--muted); margin-bottom:4px; text-transform:uppercase; letter-spacing:0.3px; }
+  .field input, .field select { width:100%; background:#1a1a1a; border:1px solid var(--dim); color:var(--text); padding:6px 10px; border-radius:6px; font-size:13px; }
+  .field input:focus, .field select:focus { outline:none; border-color:var(--gold); }
+
+  @media(max-width:900px) {
+    .kpi-row { grid-template-columns:repeat(3,1fr); }
+    .charts-row { grid-template-columns:1fr; }
+    .settings-grid { grid-template-columns:repeat(2,1fr); }
+  }
+</style>
+</head>
+<body>
+
+<h1>LTV Cohort Report</h1>
+<p class="subtitle">Customer lifetime value by acquisition cohort — cumulative revenue per customer over time</p>
+
+<!-- Settings -->
+<div class="settings">
+  <div class="settings-title">Settings</div>
+  <div class="settings-grid">
+    <div class="field"><label>Brand</label>
+      <select id="brand" onchange="rebuildAll()">
+        <option value="all">All Brands</option>
+        <option value="tallow-twins" selected>Tallow Twins</option>
+        <option value="fond">FOND Regenerative</option>
+      </select>
+    </div>
+    <div class="field"><label>Date Range</label>
+      <select id="dateRange" onchange="rebuildAll()">
+        <option value="12">Last 12 months</option>
+        <option value="6">Last 6 months</option>
+        <option value="3">Last 3 months</option>
+      </select>
+    </div>
+    <div class="field"><label>Daily Ad Spend (avg)</label>
+      <input type="number" id="avgDailySpend" value="1200" step="50" onchange="rebuildAll()">
+    </div>
+    <div class="field"><label>NC Share %</label>
+      <input type="number" id="ncShare" value="60" min="1" max="100" onchange="rebuildAll()">
+    </div>
+  </div>
+</div>
+
+<!-- KPI Cards -->
+<div class="kpi-row" id="kpiRow"></div>
+
+<!-- Cohort Table -->
+<div class="table-wrap">
+  <div class="table-title">Cohort Analysis — Cumulative Revenue per Customer</div>
+  <div class="table-subtitle">Each cell shows average cumulative spend per customer at that age, colored by LTV multiplier vs first order</div>
+  <table><thead id="cohortHead"></thead><tbody id="cohortBody"></tbody></table>
+</div>
+
+<!-- Charts -->
+<div class="charts-row">
+  <div class="chart-card">
+    <div class="chart-title">Cumulative LTV Curves by Cohort</div>
+    <canvas id="ltvChart" height="280"></canvas>
+  </div>
+  <div class="chart-card">
+    <div class="chart-title">LTV:CAC Ratio by Cohort</div>
+    <canvas id="ltvCacChart" height="280"></canvas>
+  </div>
+</div>
+<div class="charts-row">
+  <div class="chart-card">
+    <div class="chart-title">Repeat Purchase Rate by Cohort</div>
+    <canvas id="repeatChart" height="260"></canvas>
+  </div>
+  <div class="chart-card">
+    <div class="chart-title">New Customers vs CAC Trend</div>
+    <canvas id="cacTrendChart" height="260"></canvas>
+  </div>
+</div>
+
+<script>
+// ── Demo Data Generator ──
+function generateCohortData() {
+  const months = parseInt(document.getElementById('dateRange').value);
+  const brand = document.getElementById('brand').value;
+  const avgSpend = parseFloat(document.getElementById('avgDailySpend').value) || 1200;
+  const ncPct = (parseFloat(document.getElementById('ncShare').value) || 60) / 100;
+
+  // Brand-specific profiles
+  const profiles = {
+    'tallow-twins': { aov: 95, repeatRate: 0.057, ltvMult30: 1.09, ltvMult60: 1.10, ltvMult90: 1.12, ncPerDay: 28 },
+    'fond':         { aov: 102, repeatRate: 0.22, ltvMult30: 1.29, ltvMult60: 1.32, ltvMult90: 1.42, ncPerDay: 18 },
+    'all':          { aov: 98, repeatRate: 0.13, ltvMult30: 1.18, ltvMult60: 1.20, ltvMult90: 1.26, ncPerDay: 46 },
+  };
+  const p = profiles[brand] || profiles['all'];
+
+  const now = new Date();
+  const cohorts = [];
+
+  for (let i = months - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const label = d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+    const daysInMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+    const monthsAge = i; // how many months ago
+
+    // Seasonal variation
+    const monthIdx = d.getMonth();
+    const seasonality = [0.85, 0.80, 0.90, 0.95, 1.0, 0.95, 0.90, 0.95, 1.05, 1.10, 1.30, 1.20][monthIdx];
+
+    const ncCustomers = Math.round(p.ncPerDay * daysInMonth * seasonality * (0.9 + Math.random() * 0.2));
+    const firstOrderAOV = p.aov * (0.95 + Math.random() * 0.1);
+    const adSpendMonth = avgSpend * daysInMonth * seasonality;
+    const cac = adSpendMonth * ncPct / ncCustomers;
+
+    // Build cumulative revenue at each month mark
+    // Revenue per customer grows following a log curve
+    const cumRevPerCust = [firstOrderAOV]; // Month 0 = first order
+    for (let m = 1; m <= 12; m++) {
+      if (m > (months - 1 - i)) { cumRevPerCust.push(null); continue; } // future = null
+      const ltvGrowth = 1 + (p.repeatRate * 2.5) * Math.log(1 + m * 0.8) * (0.9 + Math.random() * 0.2);
+      cumRevPerCust.push(firstOrderAOV * ltvGrowth);
+    }
+
+    // Repeat rate for this cohort (slightly random)
+    const repeatRate = Math.min(0.95, p.repeatRate * (0.85 + Math.random() * 0.3));
+
+    // Latest LTV = last non-null cumulative value
+    const latestLTV = cumRevPerCust.filter(v => v !== null).pop() || firstOrderAOV;
+    const ltvCacRatio = latestLTV / cac;
+
+    cohorts.push({
+      label, ncCustomers, firstOrderAOV, cumRevPerCust, repeatRate,
+      adSpendMonth, cac, latestLTV, ltvCacRatio,
+      monthsAge: months - 1 - i
+    });
+  }
+  return cohorts;
+}
+
+// ── Formatting helpers ──
+const fmt = (n,d=0) => n==null ? '—' : n.toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
+const fmtCur = n => n==null ? '—' : '$'+fmt(n,2);
+const fmtPct = n => n==null ? '—' : fmt(n*100,1)+'%';
+
+function heatColor(val, base) {
+  if (val === null) return '';
+  const ratio = val / base;
+  if (ratio >= 1.5) return 'background:rgba(16,185,129,0.2); color:#10B981';
+  if (ratio >= 1.2) return 'background:rgba(16,185,129,0.1); color:#6ee7b7';
+  if (ratio >= 1.05) return 'background:rgba(200,184,154,0.1); color:#C8B89A';
+  return '';
+}
+
+function ltvCacClass(ratio) {
+  if (ratio >= 3) return 'ltvcac-green';
+  if (ratio >= 2) return 'ltvcac-gold';
+  return 'ltvcac-red';
+}
+
+function ltvCacLabel(ratio) {
+  if (ratio >= 3) return 'Healthy';
+  if (ratio >= 2) return 'Acceptable';
+  return 'Over-Acquiring';
+}
+
+// ── Render ──
+let ltvChartInst, repeatChartInst, ltvCacChartInst, cacTrendChartInst;
+
+function rebuildAll() {
+  const cohorts = generateCohortData();
+  renderKPIs(cohorts);
+  renderTable(cohorts);
+  renderLTVChart(cohorts);
+  renderRepeatChart(cohorts);
+  renderLTVCacChart(cohorts);
+  renderCACTrendChart(cohorts);
+}
+
+function renderKPIs(cohorts) {
+  const totalNC = cohorts.reduce((s,c) => s + c.ncCustomers, 0);
+  const avgAOV = cohorts.reduce((s,c) => s + c.firstOrderAOV, 0) / cohorts.length;
+  const avgRepeat = cohorts.reduce((s,c) => s + c.repeatRate, 0) / cohorts.length;
+  const avgLTV = cohorts.reduce((s,c) => s + c.latestLTV, 0) / cohorts.length;
+  const avgLTVMult = avgLTV / avgAOV;
+  const avgCAC = cohorts.reduce((s,c) => s + c.cac, 0) / cohorts.length;
+  const avgLTVCAC = avgLTV / avgCAC;
+
+  document.getElementById('kpiRow').innerHTML = `
+    <div class="kpi"><div class="kpi-label">Total New Customers</div><div class="kpi-value">${fmt(totalNC)}</div><div class="kpi-sub">across ${cohorts.length} cohorts</div></div>
+    <div class="kpi"><div class="kpi-label">Avg First Order</div><div class="kpi-value">${fmtCur(avgAOV)}</div><div class="kpi-sub">AOV at acquisition</div></div>
+    <div class="kpi"><div class="kpi-label">Repeat Rate</div><div class="kpi-value">${fmtPct(avgRepeat)}</div><div class="kpi-sub">2+ orders</div></div>
+    <div class="kpi"><div class="kpi-label">Avg LTV</div><div class="kpi-value">${fmtCur(avgLTV)}</div><div class="kpi-sub">${fmt(avgLTVMult,2)}× first order</div></div>
+    <div class="kpi"><div class="kpi-label">Avg CAC</div><div class="kpi-value">${fmtCur(avgCAC)}</div><div class="kpi-sub">ad spend ÷ NC</div></div>
+    <div class="kpi"><div class="kpi-label">LTV : CAC</div><div class="kpi-value"><span class="ltvcac-badge ${ltvCacClass(avgLTVCAC)}">${fmt(avgLTVCAC,1)}×</span></div><div class="kpi-sub">${ltvCacLabel(avgLTVCAC)}</div></div>
+  `;
+}
+
+function renderTable(cohorts) {
+  const periods = ['1st Order','M1','M2','M3','M6','M9','M12'];
+  const periodIdx = [0, 1, 2, 3, 6, 9, 12];
+
+  let headHTML = '<tr><th>Cohort</th><th class="num">NC</th><th class="num">CAC</th>';
+  periods.forEach(p => headHTML += `<th class="num">${p}</th>`);
+  headHTML += '<th class="num">LTV:CAC</th><th>Status</th></tr>';
+  document.getElementById('cohortHead').innerHTML = headHTML;
+
+  let bodyHTML = '';
+  cohorts.forEach(c => {
+    bodyHTML += `<tr><td style="color:var(--gold);font-weight:500">${c.label}</td>`;
+    bodyHTML += `<td class="num">${fmt(c.ncCustomers)}</td>`;
+    bodyHTML += `<td class="num">${fmtCur(c.cac)}</td>`;
+    periodIdx.forEach(pi => {
+      const val = c.cumRevPerCust[pi];
+      const style = pi === 0 ? '' : heatColor(val, c.cumRevPerCust[0]);
+      bodyHTML += `<td class="num heat" style="${style}">${fmtCur(val)}</td>`;
+    });
+    bodyHTML += `<td class="num"><span class="ltvcac-badge ${ltvCacClass(c.ltvCacRatio)}">${fmt(c.ltvCacRatio,1)}×</span></td>`;
+    bodyHTML += `<td><span style="font-size:11px;color:${c.ltvCacRatio >= 3 ? 'var(--green)' : c.ltvCacRatio >= 2 ? 'var(--gold)' : 'var(--red)'}">${ltvCacLabel(c.ltvCacRatio)}</span></td>`;
+    bodyHTML += '</tr>';
+  });
+  document.getElementById('cohortBody').innerHTML = bodyHTML;
+}
+
+function renderLTVChart(cohorts) {
+  if (ltvChartInst) ltvChartInst.destroy();
+  const labels = ['M0','M1','M2','M3','M4','M5','M6','M7','M8','M9','M10','M11','M12'];
+  const colors = ['#C8B89A','#10B981','#3b82f6','#a855f7','#f59e0b','#ef4444','#06b6d4','#ec4899','#84cc16','#f97316','#6366f1','#14b8a6'];
+
+  const datasets = cohorts.slice(-6).map((c,i) => ({
+    label: c.label,
+    data: c.cumRevPerCust.slice(0,13),
+    borderColor: colors[i % colors.length],
+    backgroundColor: 'transparent',
+    tension: 0.3,
+    pointRadius: 2,
+    borderWidth: 2,
+    spanGaps: false,
+  }));
+
+  ltvChartInst = new Chart(document.getElementById('ltvChart'), {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      plugins: { legend: { position:'bottom', labels:{ color:'#737373', font:{size:11} } } },
+      scales: {
+        x: { grid:{color:'#1a1a1a'}, ticks:{color:'#737373'} },
+        y: { grid:{color:'#1a1a1a'}, ticks:{color:'#737373', callback: v=>'$'+v} }
+      }
+    }
+  });
+}
+
+function renderLTVCacChart(cohorts) {
+  if (ltvCacChartInst) ltvCacChartInst.destroy();
+  const labels = cohorts.map(c => c.label);
+  const data = cohorts.map(c => c.ltvCacRatio);
+  const bgColors = data.map(v => v >= 3 ? 'rgba(16,185,129,0.6)' : v >= 2 ? 'rgba(200,184,154,0.6)' : 'rgba(239,68,68,0.6)');
+  const borderColors = data.map(v => v >= 3 ? '#10B981' : v >= 2 ? '#C8B89A' : '#ef4444');
+
+  ltvCacChartInst = new Chart(document.getElementById('ltvCacChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'LTV:CAC',
+        data,
+        backgroundColor: bgColors,
+        borderColor: borderColors,
+        borderWidth: 1,
+        borderRadius: 4,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        annotation: {}
+      },
+      scales: {
+        x: { grid:{display:false}, ticks:{color:'#737373', font:{size:11}} },
+        y: {
+          grid:{color:'#1a1a1a'}, ticks:{color:'#737373', callback: v => v+'×'},
+          suggestedMin: 0,
+        }
+      }
+    },
+    plugins: [{
+      id: 'thresholdLines',
+      afterDraw(chart) {
+        const ctx = chart.ctx;
+        const yScale = chart.scales.y;
+        const xScale = chart.scales.x;
+        // 3x line (healthy threshold)
+        const y3 = yScale.getPixelForValue(3);
+        ctx.save();
+        ctx.setLineDash([6,4]);
+        ctx.strokeStyle = '#10B981';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(xScale.left, y3);
+        ctx.lineTo(xScale.right, y3);
+        ctx.stroke();
+        // 2x line (acceptable threshold)
+        const y2 = yScale.getPixelForValue(2);
+        ctx.strokeStyle = '#C8B89A';
+        ctx.beginPath();
+        ctx.moveTo(xScale.left, y2);
+        ctx.lineTo(xScale.right, y2);
+        ctx.stroke();
+        ctx.restore();
+        // Labels
+        ctx.fillStyle = '#10B981';
+        ctx.font = '10px sans-serif';
+        ctx.fillText('3× Healthy', xScale.right - 60, y3 - 4);
+        ctx.fillStyle = '#C8B89A';
+        ctx.fillText('2× Min', xScale.right - 42, y2 - 4);
+      }
+    }]
+  });
+}
+
+function renderRepeatChart(cohorts) {
+  if (repeatChartInst) repeatChartInst.destroy();
+  repeatChartInst = new Chart(document.getElementById('repeatChart'), {
+    type: 'bar',
+    data: {
+      labels: cohorts.map(c => c.label),
+      datasets: [{
+        label: 'Repeat Rate',
+        data: cohorts.map(c => c.repeatRate * 100),
+        backgroundColor: 'rgba(200,184,154,0.5)',
+        borderColor: '#C8B89A',
+        borderWidth: 1,
+        borderRadius: 4,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend:{display:false} },
+      scales: {
+        x: { grid:{display:false}, ticks:{color:'#737373', font:{size:11}} },
+        y: { grid:{color:'#1a1a1a'}, ticks:{color:'#737373', callback:v=>v+'%'}, suggestedMin:0 }
+      }
+    }
+  });
+}
+
+function renderCACTrendChart(cohorts) {
+  if (cacTrendChartInst) cacTrendChartInst.destroy();
+  cacTrendChartInst = new Chart(document.getElementById('cacTrendChart'), {
+    type: 'line',
+    data: {
+      labels: cohorts.map(c => c.label),
+      datasets: [
+        {
+          label: 'CAC',
+          data: cohorts.map(c => c.cac),
+          borderColor: '#ef4444',
+          backgroundColor: 'rgba(239,68,68,0.1)',
+          fill: true,
+          tension: 0.3,
+          yAxisID: 'y',
+          pointRadius: 3,
+          borderWidth: 2,
+        },
+        {
+          label: 'New Customers',
+          data: cohorts.map(c => c.ncCustomers),
+          borderColor: '#10B981',
+          backgroundColor: 'transparent',
+          tension: 0.3,
+          yAxisID: 'y1',
+          pointRadius: 3,
+          borderWidth: 2,
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      interaction: { mode:'index', intersect:false },
+      plugins: { legend:{position:'bottom', labels:{color:'#737373', font:{size:11}}} },
+      scales: {
+        x: { grid:{display:false}, ticks:{color:'#737373', font:{size:11}} },
+        y: { position:'left', grid:{color:'#1a1a1a'}, ticks:{color:'#ef4444', callback:v=>'$'+v}, title:{display:true, text:'CAC', color:'#ef4444'} },
+        y1: { position:'right', grid:{display:false}, ticks:{color:'#10B981'}, title:{display:true, text:'NC', color:'#10B981'} },
+      }
+    }
+  });
+}
+
+// ── Init ──
+rebuildAll();
+</script>
+</body>
+</html>

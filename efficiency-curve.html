@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Marginal Efficiency Curve — Melch.Cloud</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg:#0A0A0A; --card:#111111; --border:#1a1a1a;
+    --gold:#C8B89A; --green:#10B981; --red:#ef4444; --amber:#f59e0b; --blue:#3b82f6;
+    --text:#e5e5e5; --muted:#737373; --dim:#404040;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:24px}
+  h1{font-size:24px;font-weight:600;margin-bottom:4px}
+  .subtitle{color:var(--muted);font-size:14px;margin-bottom:24px}
+
+  /* Layout */
+  .settings{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:20px}
+  .settings-title{font-size:14px;font-weight:600;margin-bottom:12px}
+  .settings-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+  .field label{display:block;font-size:10px;color:var(--muted);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.3px}
+  .field input,.field select{width:100%;background:#1a1a1a;border:1px solid var(--dim);color:var(--text);padding:5px 8px;border-radius:6px;font-size:13px}
+  .field input:focus,.field select:focus{outline:none;border-color:var(--gold)}
+
+  .goal-tabs{display:flex;gap:6px;margin-bottom:20px;flex-wrap:wrap}
+  .goal-tab{padding:6px 14px;border-radius:6px;background:var(--card);border:1px solid var(--border);color:var(--muted);font-size:12px;cursor:pointer;transition:all 0.15s}
+  .goal-tab.active{background:var(--gold);color:#0A0A0A;border-color:var(--gold);font-weight:600}
+  .goal-tab:hover:not(.active){border-color:var(--gold);color:var(--gold)}
+
+  .kpi-row{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px}
+  .kpi{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
+  .kpi-label{font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:4px}
+  .kpi-value{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+  .kpi-sub{font-size:11px;color:var(--muted);margin-top:3px}
+
+  .main-grid{display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-bottom:20px}
+  .chart-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px}
+  .chart-title{font-size:14px;font-weight:600;margin-bottom:4px}
+  .chart-sub{font-size:11px;color:var(--muted);margin-bottom:12px}
+
+  .table-wrap{background:var(--card);border:1px solid var(--border);border-radius:10px;overflow-x:auto}
+  .table-title{padding:14px 14px 6px;font-size:14px;font-weight:600}
+  .table-sub{padding:0 14px 10px;font-size:11px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{text-align:left;padding:6px 10px;border-bottom:1px solid var(--border);color:var(--muted);font-weight:500;font-size:10px;text-transform:uppercase;letter-spacing:0.4px;white-space:nowrap}
+  td{padding:6px 10px;border-bottom:1px solid var(--border);font-variant-numeric:tabular-nums;white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  .num{text-align:right}
+  .opt-row{background:rgba(200,184,154,0.08)}
+
+  .fit-info{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:20px}
+  .fit-title{font-size:13px;font-weight:600;margin-bottom:8px}
+  .fit-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+  .fit-item{font-size:12px;color:var(--muted)}
+  .fit-val{font-weight:600;color:var(--text)}
+
+  @media(max-width:1000px){
+    .settings-grid{grid-template-columns:repeat(3,1fr)}
+    .kpi-row{grid-template-columns:repeat(3,1fr)}
+    .main-grid{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+
+<h1>Marginal Efficiency Curve</h1>
+<p class="subtitle">Hill saturation model — find optimal daily Meta spend for each business goal</p>
+
+<!-- Settings Panel -->
+<div class="settings">
+  <div class="settings-title">Parameters</div>
+  <div class="settings-grid">
+    <div class="field"><label>Current Daily Spend</label><input type="number" id="curSpend" value="1200" step="50" onchange="rebuild()"></div>
+    <div class="field"><label>VC % (COGS)</label><input type="number" id="vc" value="35" min="0" max="100" onchange="rebuild()"></div>
+    <div class="field"><label>NC Share %</label><input type="number" id="nc" value="60" min="1" max="100" onchange="rebuild()"></div>
+    <div class="field"><label>AOV ($)</label><input type="number" id="aov" value="95" step="1" onchange="rebuild()"></div>
+    <div class="field"><label>Target ROAS</label><input type="number" id="tr" value="1.2" step="0.1" onchange="rebuild()"></div>
+  </div>
+  <div class="settings-grid" style="margin-top:10px">
+    <div class="field"><label>LTV 3m ×</label><input type="number" id="l3" value="1.4" step="0.05" onchange="rebuild()"></div>
+    <div class="field"><label>LTV 6m ×</label><input type="number" id="l6" value="1.8" step="0.05" onchange="rebuild()"></div>
+    <div class="field"><label>LTV 12m ×</label><input type="number" id="l12" value="2.5" step="0.05" onchange="rebuild()"></div>
+    <div class="field"><label>Recency Half-Life (d)</label><input type="number" id="hl" value="60" min="7" max="365" onchange="rebuild()"></div>
+    <div class="field"><label>Adstock λ</label><input type="number" id="lam" value="0" step="0.05" min="0" max="0.95" onchange="rebuild()"></div>
+  </div>
+</div>
+
+<!-- Goal Tabs -->
+<div class="goal-tabs" id="goalTabs"></div>
+
+<!-- KPI Row -->
+<div class="kpi-row" id="kpiRow"></div>
+
+<!-- Main Chart + Mini Curve -->
+<div class="main-grid">
+  <div class="chart-card">
+    <div class="chart-title">Revenue vs Spend — Hill Saturation Curve</div>
+    <div class="chart-sub" id="chartSub"></div>
+    <canvas id="mainChart" height="320"></canvas>
+  </div>
+  <div class="chart-card">
+    <div class="chart-title">Marginal ROAS Decay</div>
+    <div class="chart-sub">Each additional dollar returns less revenue</div>
+    <canvas id="mroasChart" height="320"></canvas>
+  </div>
+</div>
+
+<!-- Curve Fit Info -->
+<div class="fit-info">
+  <div class="fit-title">Hill Curve Fit: r = V·s<sup>h</sup> / (K<sup>h</sup> + s<sup>h</sup>)</div>
+  <div class="fit-grid" id="fitGrid"></div>
+</div>
+
+<!-- Spend Ladder -->
+<div class="table-wrap">
+  <div class="table-title">Spend Ladder — Incremental Analysis</div>
+  <div class="table-sub">Green row = optimal for selected goal</div>
+  <table><thead id="ladderHead"></thead><tbody id="ladderBody"></tbody></table>
+</div>
+
+<script>
+// ── Hill Model Math ──
+function hillRev(s, V, K, h) {
+  if (s <= 0) return 0;
+  return (V * Math.pow(s, h)) / (Math.pow(K, h) + Math.pow(s, h));
+}
+function hillMargRoas(s, V, K, h) {
+  if (s <= 0) return Infinity;
+  const sh = Math.pow(s, h), Kh = Math.pow(K, h);
+  return (V * h * Kh * Math.pow(s, h - 1)) / Math.pow(Kh + sh, 2);
+}
+function hillMargCM(s, V, K, h, margin) {
+  return hillMargRoas(s, V, K, h) * margin - 1;
+}
+
+// ── Generate synthetic daily data for fitting ──
+function generateDailyData() {
+  const curSpend = parseFloat(document.getElementById('curSpend').value) || 1200;
+  const days = [];
+  const now = new Date();
+  // True underlying Hill params (simulated)
+  const trueV = curSpend * 4.5, trueK = curSpend * 0.85, trueH = 1.6;
+  for (let i = 120; i >= 0; i--) {
+    const d = new Date(now - i * 86400000);
+    const monthIdx = d.getMonth();
+    const seasonality = [0.85,0.80,0.90,0.95,1.0,0.95,0.90,0.95,1.05,1.10,1.30,1.20][monthIdx];
+    const spend = curSpend * seasonality * (0.7 + Math.random() * 0.6);
+    const noise = 0.85 + Math.random() * 0.3;
+    const rev = hillRev(spend, trueV * seasonality, trueK, trueH) * noise;
+    days.push({ date: d, spend, rev, daysBack: i });
+  }
+  return days;
+}
+
+// ── Fit Hill Curve (two-pass grid search with recency weighting) ──
+function fitHillCurve(points, halfLifeDays) {
+  const maxS = Math.max(...points.map(p => p.spend));
+  const maxR = Math.max(...points.map(p => p.rev));
+  if (maxS === 0 || maxR === 0) return { V: 1, K: 1, h: 1, r2: 0 };
+
+  const weights = points.map(p => Math.pow(0.5, p.daysBack / halfLifeDays));
+
+  function sse(V, K, h) {
+    let s = 0, tw = 0;
+    for (let i = 0; i < points.length; i++) {
+      const pred = hillRev(points[i].spend, V, K, h);
+      const err = points[i].rev - pred;
+      s += weights[i] * err * err;
+      tw += weights[i];
+    }
+    return s / tw;
+  }
+
+  // Coarse grid
+  let bestV, bestK, bestH, bestSSE = Infinity;
+  for (let vi = 1; vi <= 16; vi++) {
+    const V = maxR * 0.5 * vi;
+    for (let ki = 1; ki <= 16; ki++) {
+      const K = maxS * 0.1 * ki;
+      for (let hi = 1; hi <= 8; hi++) {
+        const h = 0.3 + hi * 0.3;
+        const e = sse(V, K, h);
+        if (e < bestSSE) { bestSSE = e; bestV = V; bestK = K; bestH = h; }
+      }
+    }
+  }
+
+  // Fine grid around best
+  const fV = bestV, fK = bestK, fH = bestH;
+  const vStep = maxR * 0.5 * 0.8;
+  const kStep = maxS * 0.1 * 0.8;
+  for (let vi = -5; vi <= 5; vi++) {
+    const V = Math.max(1, fV + vi * vStep / 5);
+    for (let ki = -5; ki <= 5; ki++) {
+      const K = Math.max(1, fK + ki * kStep / 5);
+      for (let hi = -3; hi <= 3; hi++) {
+        const h = Math.max(0.3, fH + hi * 0.1);
+        const e = sse(V, K, h);
+        if (e < bestSSE) { bestSSE = e; bestV = V; bestK = K; bestH = h; }
+      }
+    }
+  }
+
+  // R²
+  let ssTot = 0, ssRes = 0, tw = 0;
+  const meanR = points.reduce((s,p,i) => s + weights[i]*p.rev, 0) / weights.reduce((a,b) => a+b, 0);
+  for (let i = 0; i < points.length; i++) {
+    const pred = hillRev(points[i].spend, bestV, bestK, bestH);
+    ssRes += weights[i] * (points[i].rev - pred) ** 2;
+    ssTot += weights[i] * (points[i].rev - meanR) ** 2;
+  }
+  const r2 = ssTot === 0 ? 0 : 1 - ssRes / ssTot;
+
+  return { V: bestV, K: bestK, h: bestH, r2 };
+}
+
+// ── Goal Definitions ──
+const GOALS = [
+  { key: 'maxCM', label: 'Max CM Today', desc: 'Maximize contribution margin today' },
+  { key: 'max3m', label: 'Max 3m CM', desc: 'Max CM with 3-month LTV' },
+  { key: 'max6m', label: 'Max 6m CM', desc: 'Max CM with 6-month LTV' },
+  { key: 'max12m', label: 'Max 12m CM', desc: 'Max CM with 12-month LTV' },
+  { key: 'maxRev', label: 'Max Revenue', desc: 'Maximize total revenue' },
+  { key: 'maxNCRev', label: 'Max NC Revenue', desc: 'Max new customer revenue' },
+  { key: 'targetRoas', label: 'Target ROAS', desc: 'Spend to target ROAS' },
+];
+
+let selectedGoal = 'maxCM';
+let mainChartInst, mroasChartInst;
+
+function renderGoalTabs() {
+  document.getElementById('goalTabs').innerHTML = GOALS.map(g =>
+    `<div class="goal-tab ${g.key===selectedGoal?'active':''}" onclick="selectedGoal='${g.key}';rebuild()">${g.label}</div>`
+  ).join('');
+}
+
+// ── Find Optimal Spend for Goal ──
+function findOptimalSpend(V, K, h, params) {
+  const { vc, nc, l3, l6, l12, tr, lam } = params;
+  const margin = 1 - vc / 100;
+  const ncPct = nc / 100;
+  const maxSearch = V * 2;
+  const steps = 500;
+
+  function cmAt(s, ltvMult) {
+    const rev = hillRev(s, V, K, h);
+    return rev * margin * ltvMult - s;
+  }
+
+  switch (selectedGoal) {
+    case 'maxCM': return bruteMax(s => cmAt(s, 1), maxSearch, steps);
+    case 'max3m': return bruteMax(s => cmAt(s, l3), maxSearch, steps);
+    case 'max6m': return bruteMax(s => cmAt(s, l6), maxSearch, steps);
+    case 'max12m': return bruteMax(s => cmAt(s, l12), maxSearch, steps);
+    case 'maxRev': return bruteMax(s => hillRev(s, V, K, h), maxSearch, steps);
+    case 'maxNCRev': return bruteMax(s => hillRev(s, V, K, h) * ncPct, maxSearch, steps);
+    case 'targetRoas': {
+      // Find spend where ROAS = target
+      for (let i = 1; i <= steps; i++) {
+        const s = maxSearch * i / steps;
+        const rev = hillRev(s, V, K, h);
+        if (s > 0 && rev / s <= tr) return s;
+      }
+      return maxSearch;
+    }
+  }
+}
+
+function bruteMax(fn, maxS, steps) {
+  let bestS = 0, bestVal = -Infinity;
+  for (let i = 1; i <= steps; i++) {
+    const s = maxS * i / steps;
+    const v = fn(s);
+    if (v > bestVal) { bestVal = v; bestS = s; }
+  }
+  return bestS;
+}
+
+// ── Main Rebuild ──
+function rebuild() {
+  renderGoalTabs();
+  const params = {
+    curSpend: parseFloat(document.getElementById('curSpend').value) || 1200,
+    vc: parseFloat(document.getElementById('vc').value) || 35,
+    nc: parseFloat(document.getElementById('nc').value) || 60,
+    aov: parseFloat(document.getElementById('aov').value) || 95,
+    tr: parseFloat(document.getElementById('tr').value) || 1.2,
+    l3: parseFloat(document.getElementById('l3').value) || 1.4,
+    l6: parseFloat(document.getElementById('l6').value) || 1.8,
+    l12: parseFloat(document.getElementById('l12').value) || 2.5,
+    hl: parseFloat(document.getElementById('hl').value) || 60,
+    lam: parseFloat(document.getElementById('lam').value) || 0,
+  };
+
+  const days = generateDailyData();
+  // Apply adstock
+  if (params.lam > 0) {
+    days.forEach(d => { d.spend = d.spend / (1 - params.lam); });
+  }
+
+  const fit = fitHillCurve(days, params.hl);
+  const { V, K, h, r2 } = fit;
+  const margin = 1 - params.vc / 100;
+
+  const optSpend = findOptimalSpend(V, K, h, params);
+  const optRev = hillRev(optSpend, V, K, h);
+  const curRev = hillRev(params.curSpend, V, K, h);
+  const curROAS = params.curSpend > 0 ? curRev / params.curSpend : 0;
+  const optROAS = optSpend > 0 ? optRev / optSpend : 0;
+  const curCM = curRev * margin - params.curSpend;
+  const optCM = optRev * margin - optSpend;
+  const curMROAS = hillMargRoas(params.curSpend, V, K, h);
+
+  const goalInfo = GOALS.find(g => g.key === selectedGoal);
+
+  // KPIs
+  document.getElementById('kpiRow').innerHTML = `
+    <div class="kpi"><div class="kpi-label">Optimal Daily Spend</div><div class="kpi-value" style="color:var(--gold)">$${fmt(optSpend)}</div><div class="kpi-sub">vs current $${fmt(params.curSpend)}</div></div>
+    <div class="kpi"><div class="kpi-label">Expected Revenue</div><div class="kpi-value">$${fmt(optRev)}</div><div class="kpi-sub">ROAS ${fmt(optROAS,2)}×</div></div>
+    <div class="kpi"><div class="kpi-label">Contribution Margin</div><div class="kpi-value" style="color:var(--green)">$${fmt(optCM)}</div><div class="kpi-sub">vs $${fmt(curCM)} today</div></div>
+    <div class="kpi"><div class="kpi-label">Current Marginal ROAS</div><div class="kpi-value">${fmt(curMROAS,2)}×</div><div class="kpi-sub">next $ return</div></div>
+    <div class="kpi"><div class="kpi-label">Spend Change</div><div class="kpi-value" style="color:${optSpend>params.curSpend?'var(--green)':'var(--red)'}">${optSpend>params.curSpend?'+':''}${fmt(((optSpend/params.curSpend)-1)*100,1)}%</div><div class="kpi-sub">${optSpend>params.curSpend?'Scale up':'Pull back'}</div></div>
+  `;
+
+  // Chart subtitle
+  document.getElementById('chartSub').textContent = `${goalInfo.label}: ${goalInfo.desc}`;
+
+  // Fit info
+  document.getElementById('fitGrid').innerHTML = `
+    <div class="fit-item">V (ceiling) = <span class="fit-val">$${fmt(V)}</span></div>
+    <div class="fit-item">K (half-sat) = <span class="fit-val">$${fmt(K)}</span></div>
+    <div class="fit-item">h (shape) = <span class="fit-val">${fmt(h,2)}</span></div>
+    <div class="fit-item">R² = <span class="fit-val">${fmt(r2,4)}</span></div>
+  `;
+
+  renderMainChart(days, V, K, h, params, optSpend);
+  renderMROASChart(V, K, h, params, optSpend);
+  renderSpendLadder(V, K, h, params, optSpend);
+}
+
+const fmt = (n,d=0) => n==null?'—':n.toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
+
+function renderMainChart(days, V, K, h, params, optSpend) {
+  if (mainChartInst) mainChartInst.destroy();
+  // Build curve line
+  const maxS = Math.max(...days.map(d=>d.spend), optSpend) * 1.3;
+  const curvePoints = [];
+  for (let i = 0; i <= 200; i++) {
+    const s = maxS * i / 200;
+    curvePoints.push({ x: s, y: hillRev(s, V, K, h) });
+  }
+
+  mainChartInst = new Chart(document.getElementById('mainChart'), {
+    type: 'scatter',
+    data: {
+      datasets: [
+        {
+          label: 'Daily Actuals',
+          data: days.map(d => ({x:d.spend, y:d.rev})),
+          backgroundColor: 'rgba(200,184,154,0.3)',
+          pointRadius: 3,
+        },
+        {
+          label: 'Hill Fit',
+          data: curvePoints,
+          type: 'line',
+          borderColor: '#C8B89A',
+          backgroundColor: 'transparent',
+          pointRadius: 0,
+          borderWidth: 2,
+          order: -1,
+        },
+        {
+          label: 'Current',
+          data: [{x: params.curSpend, y: hillRev(params.curSpend, V, K, h)}],
+          backgroundColor: '#3b82f6',
+          pointRadius: 8,
+          pointStyle: 'circle',
+        },
+        {
+          label: 'Optimal',
+          data: [{x: optSpend, y: hillRev(optSpend, V, K, h)}],
+          backgroundColor: '#10B981',
+          pointRadius: 8,
+          pointStyle: 'triangle',
+        },
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend:{position:'bottom', labels:{color:'#737373', font:{size:11}}} },
+      scales: {
+        x: { title:{display:true,text:'Daily Spend ($)',color:'#737373'}, grid:{color:'#1a1a1a'}, ticks:{color:'#737373',callback:v=>'$'+v} },
+        y: { title:{display:true,text:'Revenue ($)',color:'#737373'}, grid:{color:'#1a1a1a'}, ticks:{color:'#737373',callback:v=>'$'+v} }
+      }
+    }
+  });
+}
+
+function renderMROASChart(V, K, h, params, optSpend) {
+  if (mroasChartInst) mroasChartInst.destroy();
+  const margin = 1 - params.vc / 100;
+  const maxS = Math.max(params.curSpend, optSpend) * 2;
+  const labels = [], mroasData = [], cmData = [];
+  for (let i = 1; i <= 100; i++) {
+    const s = maxS * i / 100;
+    labels.push(s);
+    mroasData.push(hillMargRoas(s, V, K, h));
+    cmData.push(hillMargRoas(s, V, K, h) * margin);
+  }
+
+  mroasChartInst = new Chart(document.getElementById('mroasChart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Marginal ROAS',
+          data: mroasData,
+          borderColor: '#C8B89A',
+          backgroundColor: 'rgba(200,184,154,0.1)',
+          fill: true,
+          tension: 0.3,
+          pointRadius: 0,
+          borderWidth: 2,
+        },
+        {
+          label: 'Marginal CM ROAS',
+          data: cmData,
+          borderColor: '#10B981',
+          borderDash: [4,4],
+          backgroundColor: 'transparent',
+          tension: 0.3,
+          pointRadius: 0,
+          borderWidth: 1.5,
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend:{position:'bottom', labels:{color:'#737373', font:{size:11}}} },
+      scales: {
+        x: { grid:{color:'#1a1a1a'}, ticks:{color:'#737373', callback:v=>'$'+Math.round(v), maxTicksLimit:8} },
+        y: { grid:{color:'#1a1a1a'}, ticks:{color:'#737373', callback:v=>v.toFixed(1)+'×'}, suggestedMin:0 }
+      }
+    },
+    plugins: [{
+      id: 'breakeven',
+      afterDraw(chart) {
+        const ctx = chart.ctx, yScale = chart.scales.y, xScale = chart.scales.x;
+        // 1x line
+        const y1 = yScale.getPixelForValue(1);
+        if (y1 > yScale.top && y1 < yScale.bottom) {
+          ctx.save(); ctx.setLineDash([6,4]); ctx.strokeStyle='#ef4444'; ctx.lineWidth=1;
+          ctx.beginPath(); ctx.moveTo(xScale.left,y1); ctx.lineTo(xScale.right,y1); ctx.stroke(); ctx.restore();
+          ctx.fillStyle='#ef4444'; ctx.font='10px sans-serif'; ctx.fillText('Break-even', xScale.right-58, y1-4);
+        }
+      }
+    }]
+  });
+}
+
+function renderSpendLadder(V, K, h, params, optSpend) {
+  const margin = 1 - params.vc / 100;
+  const steps = [];
+  const maxS = Math.max(params.curSpend, optSpend) * 2;
+  // Build spend points: every $200 up to max, always include current and optimal
+  const spendSet = new Set();
+  for (let s = 200; s <= maxS; s += 200) spendSet.add(Math.round(s));
+  spendSet.add(Math.round(params.curSpend));
+  spendSet.add(Math.round(optSpend));
+  const spends = [...spendSet].sort((a,b) => a-b);
+
+  const headHTML = `<tr>
+    <th class="num">Daily Spend</th><th class="num">Revenue</th><th class="num">ROAS</th>
+    <th class="num">Marg ROAS</th><th class="num">CM</th><th class="num">CM %</th>
+    <th class="num">3m CM</th><th class="num">12m CM</th><th>Note</th>
+  </tr>`;
+  document.getElementById('ladderHead').innerHTML = headHTML;
+
+  let bodyHTML = '';
+  spends.forEach(s => {
+    const rev = hillRev(s, V, K, h);
+    const roas = s > 0 ? rev / s : 0;
+    const mr = hillMargRoas(s, V, K, h);
+    const cm = rev * margin - s;
+    const cmPct = rev > 0 ? cm / rev * 100 : 0;
+    const cm3m = rev * margin * params.l3 - s;
+    const cm12m = rev * margin * params.l12 - s;
+    const isOpt = Math.abs(s - optSpend) < 50;
+    const isCur = Math.abs(s - params.curSpend) < 50;
+    let note = '';
+    if (isOpt && isCur) note = '<span style="color:var(--gold)">● Current & Optimal</span>';
+    else if (isOpt) note = '<span style="color:var(--green)">▲ Optimal</span>';
+    else if (isCur) note = '<span style="color:var(--blue)">● Current</span>';
+
+    bodyHTML += `<tr class="${isOpt?'opt-row':''}">
+      <td class="num">$${fmt(s)}</td><td class="num">$${fmt(rev)}</td><td class="num">${fmt(roas,2)}×</td>
+      <td class="num" style="color:${mr>=1?'var(--green)':'var(--red)'}">${fmt(mr,2)}×</td>
+      <td class="num" style="color:${cm>=0?'var(--green)':'var(--red)'}">$${fmt(cm)}</td>
+      <td class="num">${fmt(cmPct,1)}%</td>
+      <td class="num" style="color:${cm3m>=0?'var(--green)':'var(--red)'}">$${fmt(cm3m)}</td>
+      <td class="num" style="color:${cm12m>=0?'var(--green)':'var(--red)'}">$${fmt(cm12m)}</td>
+      <td>${note}</td>
+    </tr>`;
+  });
+  document.getElementById('ladderBody').innerHTML = bodyHTML;
+}
+
+// Init
+rebuild();
+</script>
+</body>
+</html>

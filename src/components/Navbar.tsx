@@ -161,6 +161,8 @@ export default function Navbar({ children }: { children?: React.ReactNode }) {
         { label: 'Top Creatives', href: '/analytics', icon: Sparkles },
         { label: 'Copy Analysis', href: '/analytics/copy-analysis', icon: Type },
         { label: 'Ad Perspective', href: '/analytics/ad-perspective', icon: TableProperties },
+        { label: 'Efficiency Curve', href: '/analytics/efficiency', icon: TrendingUp, roles: ['admin', 'founder'] },
+        { label: 'LTV Cohorts', href: '/analytics/ltv-cohorts', icon: Users, roles: ['admin', 'founder'] },
       ],
     },
     // Hidden — Ad Changelog needs rework before re-enabling
