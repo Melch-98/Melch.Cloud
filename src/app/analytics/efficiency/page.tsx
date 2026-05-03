@@ -221,19 +221,20 @@ export default function EfficiencyPage() {
         .eq('id', session.user.id)
         .single();
 
-      if (profile?.brand_id) setSelectedBrand(profile.brand_id);
-
       const { data: brandList } = await supabase
         .from('brands')
         .select('id, name, slug, shopify_gross_margin_pct');
 
-      if (brandList) {
-        setBrands(brandList);
-        // Set VC% from brand's gross margin
-        if (profile?.brand_id) {
-          const brand = brandList.find(b => b.id === profile.brand_id);
-          if (brand) updateParam('vc', 100 - brand.shopify_gross_margin_pct);
-        }
+      if (brandList) setBrands(brandList);
+
+      // Set brand: use profile's brand_id, or fall back to first brand (admin case)
+      const brandId = profile?.brand_id || (brandList && brandList.length > 0 ? brandList[0].id : '');
+      if (brandId) {
+        setSelectedBrand(brandId);
+        const brand = brandList?.find(b => b.id === brandId);
+        if (brand) updateParam('vc', 100 - brand.shopify_gross_margin_pct);
+      } else {
+        setLoading(false);
       }
     }
     init();

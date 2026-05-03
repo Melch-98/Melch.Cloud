@@ -212,15 +212,20 @@ export default function LTVCohortPage() {
         .eq('id', session.user.id)
         .single();
 
-      if (profile?.brand_id) {
-        setSelectedBrand(profile.brand_id);
-      }
-
       const { data: brandList } = await supabase
         .from('brands')
         .select('id, name, slug, shopify_gross_margin_pct');
 
       if (brandList) setBrands(brandList);
+
+      // Set brand: use profile's brand_id, or fall back to first brand (admin case)
+      if (profile?.brand_id) {
+        setSelectedBrand(profile.brand_id);
+      } else if (brandList && brandList.length > 0) {
+        setSelectedBrand(brandList[0].id);
+      } else {
+        setLoading(false);
+      }
     }
     init();
   }, []);
