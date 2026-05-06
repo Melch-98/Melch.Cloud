@@ -556,6 +556,24 @@ export default function ForecastPage() {
     return '#ef4444';
   };
 
+  // ─── Inline input helper ───────────────────────────────────────
+  const inputStyle: React.CSSProperties = {
+    background: '#1a1a1a',
+    border: '1px solid #333',
+    borderRadius: 4,
+    color: '#fff',
+    padding: '4px 6px',
+    fontSize: 12,
+    textAlign: 'right' as const,
+    width: 72,
+    outline: 'none',
+  };
+
+  const inputStyleNarrow: React.CSSProperties = {
+    ...inputStyle,
+    width: 56,
+  };
+
   // ─── Styles ───────────────────────────────────────────────────
   const gold = '#C8B89A';
   const green = '#10B981';
@@ -749,7 +767,7 @@ export default function ForecastPage() {
             <span style={{ fontSize: 13, fontWeight: 600, color: '#fff' }}>
               {SCENARIO_LABELS[scenario]} Forecast — {forecastYear}
             </span>
-            <span style={{ fontSize: 11, color: muted }}>Click a month row to expand daily pacing</span>
+            <span style={{ fontSize: 11, color: muted }}>Edit highlighted cells — click a month to expand daily forecast vs actuals</span>
           </div>
 
           <div style={{ overflowX: 'auto' }}>
@@ -769,6 +787,8 @@ export default function ForecastPage() {
                   const hasActuals = f.actualRev !== null;
                   const currentMonth = now.toISOString().substring(0, 7);
                   const isCurrent = f.month === currentMonth;
+                  const inp = monthInputs[f.month];
+                  const stopProp = (e: React.MouseEvent) => e.stopPropagation();
 
                   return (
                     <>
@@ -781,6 +801,7 @@ export default function ForecastPage() {
                           background: isCurrent ? 'rgba(200,184,154,0.06)' : isExpanded ? 'rgba(200,184,154,0.03)' : 'transparent',
                         }}
                       >
+                        {/* Month label */}
                         <td style={{ padding: '10px 8px', fontWeight: 600, color: isCurrent ? gold : '#fff', whiteSpace: 'nowrap' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                             {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
@@ -789,43 +810,98 @@ export default function ForecastPage() {
                             {isCurrent && <span style={{ fontSize: 9, color: gold, marginLeft: 4 }}>NOW</span>}
                           </div>
                         </td>
-                        <td style={{ padding: '10px 8px', textAlign: 'right', color: muted }}>{fmtPct(f.mktgLift)}</td>
-                        <td style={{ padding: '10px 8px', textAlign: 'right' }}>
-                          {hasActuals && f.actualSpend !== null ? (
-                            <div>
-                              <span style={{ color: '#fff' }}>{fmt(f.actualSpend)}</span>
-                              <div style={{ fontSize: 9, color: muted }}>{fmt(f.spend)} plan</div>
-                            </div>
-                          ) : fmt(f.spend)}
+
+                        {/* ✏️ Mktg Lift — EDITABLE */}
+                        <td style={{ padding: '6px 4px', textAlign: 'right' }} onClick={stopProp}>
+                          <input
+                            type="number"
+                            step="0.5"
+                            value={inp?.lift ?? 0}
+                            onChange={e => updateMonthInput(f.month, 'lift', Number(e.target.value))}
+                            style={inputStyleNarrow}
+                          />
                         </td>
-                        <td style={{ padding: '10px 8px', textAlign: 'right' }}>
-                          {hasActuals && f.actualAmer !== null ? (
-                            <div>
-                              <span style={{ color: f.actualAmer >= f.targetAmer ? green : red }}>{fmtNum(f.actualAmer)}</span>
-                              <div style={{ fontSize: 9, color: muted }}>{fmtNum(f.targetAmer)} target</div>
-                            </div>
-                          ) : fmtNum(f.targetAmer)}
+
+                        {/* ✏️ Spend — EDITABLE */}
+                        <td style={{ padding: '6px 4px', textAlign: 'right' }} onClick={stopProp}>
+                          <input
+                            type="number"
+                            step="500"
+                            value={inp?.spend ?? 0}
+                            onChange={e => updateMonthInput(f.month, 'spend', Number(e.target.value))}
+                            style={inputStyle}
+                          />
+                          {hasActuals && f.actualSpend !== null && (
+                            <div style={{ fontSize: 9, color: muted, marginTop: 2 }}>actual: {fmt(f.actualSpend)}</div>
+                          )}
                         </td>
-                        <td style={{ padding: '10px 8px', textAlign: 'right', color: muted }}>{fmtPct(f.ncSharePct)}</td>
+
+                        {/* ✏️ aMER — EDITABLE */}
+                        <td style={{ padding: '6px 4px', textAlign: 'right' }} onClick={stopProp}>
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={inp?.amer ?? 2}
+                            onChange={e => updateMonthInput(f.month, 'amer', Number(e.target.value))}
+                            style={inputStyleNarrow}
+                          />
+                          {hasActuals && f.actualAmer !== null && (
+                            <div style={{ fontSize: 9, color: f.actualAmer >= f.targetAmer ? green : red, marginTop: 2 }}>
+                              actual: {fmtNum(f.actualAmer)}
+                            </div>
+                          )}
+                        </td>
+
+                        {/* ✏️ NC Share — EDITABLE */}
+                        <td style={{ padding: '6px 4px', textAlign: 'right' }} onClick={stopProp}>
+                          <input
+                            type="number"
+                            step="1"
+                            value={inp?.ncShare ?? 60}
+                            onChange={e => updateMonthInput(f.month, 'ncShare', Number(e.target.value))}
+                            style={inputStyleNarrow}
+                          />
+                        </td>
+
+                        {/* COMPUTED — Total Rev */}
                         <td style={{ padding: '10px 8px', textAlign: 'right' }}>
                           {hasActuals && f.actualRev !== null ? (
                             <div>
                               <span style={{ color: '#fff' }}>{fmt(f.actualRev)}</span>
                               <div style={{ fontSize: 9, color: f.actualRev >= f.totalRev ? green : red }}>
-                                {f.totalRev > 0 ? (((f.actualRev - f.totalRev) / f.totalRev) * 100).toFixed(1) + '%' : '—'}
+                                {f.totalRev > 0 ? (((f.actualRev - f.totalRev) / f.totalRev) * 100).toFixed(1) + '% vs plan' : '—'}
                               </div>
                             </div>
-                          ) : fmt(f.totalRev)}
+                          ) : (
+                            <span style={{ color: '#fff' }}>{fmt(f.totalRev)}</span>
+                          )}
                         </td>
+
+                        {/* COMPUTED — NC Rev */}
                         <td style={{ padding: '10px 8px', textAlign: 'right', color: '#fff' }}>{fmt(f.ncRev)}</td>
+                        {/* COMPUTED — RC Rev */}
                         <td style={{ padding: '10px 8px', textAlign: 'right', color: '#fff' }}>{fmt(f.rcRev)}</td>
-                        <td style={{ padding: '10px 8px', textAlign: 'right', color: muted }}>{fmtPct(f.codPct)}</td>
+
+                        {/* ✏️ COD% — EDITABLE */}
+                        <td style={{ padding: '6px 4px', textAlign: 'right' }} onClick={stopProp}>
+                          <input
+                            type="number"
+                            step="1"
+                            value={inp?.cod ?? 35}
+                            onChange={e => updateMonthInput(f.month, 'cod', Number(e.target.value))}
+                            style={inputStyleNarrow}
+                          />
+                        </td>
+
+                        {/* COMPUTED — NC CM */}
                         <td style={{ padding: '10px 8px', textAlign: 'right', color: f.ncCM >= 0 ? green : red, fontWeight: 600 }}>
                           {fmt(f.ncCM)}
                         </td>
+                        {/* COMPUTED — Ret CM */}
                         <td style={{ padding: '10px 8px', textAlign: 'right', color: f.returningCM >= 0 ? green : red }}>
                           {fmt(f.returningCM)}
                         </td>
+                        {/* COMPUTED — Total CM */}
                         <td style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 700, color: f.totalCM >= 0 ? green : red }}>
                           {hasActuals && f.actualCM !== null ? (
                             <div>
