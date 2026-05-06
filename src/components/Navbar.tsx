@@ -28,6 +28,7 @@ import {
   Activity,
   Video,
   Home,
+  Target,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
 
@@ -163,6 +164,7 @@ export default function Navbar({ children }: { children?: React.ReactNode }) {
         { label: 'Ad Perspective', href: '/analytics/ad-perspective', icon: TableProperties },
         { label: 'Efficiency Curve', href: '/analytics/efficiency', icon: TrendingUp, roles: ['admin', 'founder'] },
         { label: 'LTV Cohorts', href: '/analytics/ltv-cohorts', icon: Users, roles: ['admin', 'founder'] },
+        { label: 'Forecast', href: '/analytics/forecast', icon: Target, roles: ['admin', 'founder'] },
       ],
     },
     // Hidden — Ad Changelog needs rework before re-enabling
