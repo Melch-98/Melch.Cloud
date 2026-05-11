@@ -488,14 +488,24 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
           return next;
         });
 
-        // Fire Dropbox sync. Public client uploads have no session, so we
-        // call the endpoint without auth — it's idempotent and server-side.
-        try {
-          await fetch('/api/submissions/sync-drive', {
+        // Fire Dropbox sync. Resumable — if it times out on large files,
+        // a second call picks up where it left off (already-synced files are
+        // tracked per-row via submission_files.dropbox_path).
+        const syncOnce = async () => {
+          const res = await fetch('/api/submissions/sync-drive', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ submission_id: submission.id }),
           });
+          return res.ok ? null : res.json().catch(() => null);
+        };
+        try {
+          const result = await syncOnce();
+          // If partial (some files synced, some didn't), auto-retry once
+          if (result?.retryable) {
+            console.info('Dropbox sync partial — auto-retrying...');
+            await syncOnce();
+          }
         } catch (e) {
           console.warn('Dropbox sync trigger failed (non-fatal):', e);
         }

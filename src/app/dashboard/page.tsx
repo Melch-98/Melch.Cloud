@@ -432,13 +432,30 @@ export default function DashboardPage() {
                       >
                         Queued
                       </span>
-                    ) : b.drive_sync_status === 'failed' ? (
-                      <span
-                        className="shrink-0 text-[11px] font-medium px-2.5 py-1 rounded"
-                        style={{ color: '#EF4444', backgroundColor: 'rgba(239,68,68,0.08)' }}
+                    ) : b.drive_sync_status === 'failed' || b.drive_sync_status === 'partial' ? (
+                      <button
+                        onClick={async (e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          try {
+                            await fetch('/api/submissions/sync-drive', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ submission_id: b.id }),
+                            });
+                          } catch { /* fire and forget */ }
+                        }}
+                        className="shrink-0 text-[11px] font-medium px-2.5 py-1 rounded cursor-pointer transition-colors hover:opacity-80"
+                        style={{
+                          color: b.drive_sync_status === 'partial' ? '#F59E0B' : '#EF4444',
+                          backgroundColor: b.drive_sync_status === 'partial'
+                            ? 'rgba(245,158,11,0.08)'
+                            : 'rgba(239,68,68,0.08)',
+                          border: 'none',
+                        }}
                       >
-                        Sync failed
-                      </span>
+                        {b.drive_sync_status === 'partial' ? 'Partial — Retry' : 'Failed — Retry'}
+                      </button>
                     ) : (
                       <Link
                         href="/admin"
