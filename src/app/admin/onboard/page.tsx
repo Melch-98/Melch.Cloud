@@ -400,9 +400,8 @@ export default function OnboardPage() {
   /* ---------------------------------------------------------------- */
   if (mode === 'manage') {
     return (
-      <>
-        <Navbar />
-        <main style={{ maxWidth: 800, margin: '0 auto', padding: '32px 16px' }}>
+      <Navbar>
+        <div style={{ maxWidth: 800, margin: '0 auto', padding: '32px 16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
             <button onClick={() => setMode('new')} style={{ ...btnSecondary, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 6 }}>
               <ArrowLeft size={14} /> New Client
@@ -502,8 +501,8 @@ export default function OnboardPage() {
               ))}
             </div>
           )}
-        </main>
-      </>
+        </div>
+      </Navbar>
     );
   }
 
@@ -511,9 +510,8 @@ export default function OnboardPage() {
   /*  New client wizard                                                */
   /* ---------------------------------------------------------------- */
   return (
-    <>
-      <Navbar />
-      <main style={{ maxWidth: 720, margin: '0 auto', padding: '32px 16px' }}>
+    <Navbar>
+      <div style={{ maxWidth: 720, margin: '0 auto', padding: '32px 16px' }}>
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
           <h1 style={{ fontSize: 22, fontWeight: 700, color: '#fff', margin: 0 }}>Onboard New Client</h1>
@@ -852,8 +850,8 @@ export default function OnboardPage() {
             </div>
           </div>
         )}
-      </main>
-    </>
+      </div>
+    </Navbar>
   );
 }
 
