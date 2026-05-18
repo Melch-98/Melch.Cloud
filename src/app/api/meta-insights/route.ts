@@ -5,6 +5,25 @@ import { fetchCreativeInsights, fetchAdAccounts } from '@/lib/meta-api';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
+// In-memory insights cache (15-minute TTL)
+const CACHE_TTL_MS = 15 * 60 * 1000;
+const insightsCache = new Map<string, { data: any; timestamp: number }>();
+
+function getCachedInsights(key: string) {
+  const entry = insightsCache.get(key);
+  if (entry && Date.now() - entry.timestamp < CACHE_TTL_MS) return entry;
+  if (entry) insightsCache.delete(key);
+  return null;
+}
+function setCachedInsights(key: string, data: any) {
+  insightsCache.set(key, { data, timestamp: Date.now() });
+  // Evict old entries if cache grows too large
+  if (insightsCache.size > 50) {
+    const oldest = Array.from(insightsCache.entries()).sort((a, b) => a[1].timestamp - b[1].timestamp);
+    for (let i = 0; i < 10; i++) insightsCache.delete(oldest[i][0]);
+  }
+}
+
 // GET: Fetch ad accounts or insights
 export async function GET(request: NextRequest) {
   const supabase = createClient(
@@ -125,7 +144,19 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // Check server-side cache first
+    const cacheKey = `${adAccountId}:${dateFrom}:${dateTo}:${limit}:${skipMedia}`;
+    const cached = getCachedInsights(cacheKey);
+    if (cached) {
+      return NextResponse.json({
+        insights: cached.data,
+        cached: true,
+        cached_at: new Date(cached.timestamp).toISOString(),
+      });
+    }
+
     const insights = await fetchCreativeInsights(metaToken, adAccountId, dateFrom, dateTo, limit, skipMedia);
+    setCachedInsights(cacheKey, insights);
 
     return NextResponse.json({ insights });
   } catch (err: unknown) {

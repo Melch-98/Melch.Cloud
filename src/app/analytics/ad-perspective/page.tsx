@@ -481,7 +481,9 @@ export default function AdPerspectivePage() {
   // Truncation warning
   const [truncated, setTruncated] = useState(false);
   // MER (blended ROAS from Shopify revenue)
-  const [merData, setMerData] = useState<{ revenue: number; spend: number } | null>(null);
+  const [merData, setMerData] = useState<{ revenue: number; spend: number; grossMarginPct?: number } | null>(null);
+  // Campaign filter
+  const [campaignFilter, setCampaignFilter] = useState<string>('all');
 
   // Auth check + fetch accounts
   useEffect(() => {
@@ -538,6 +540,7 @@ export default function AdPerspectivePage() {
           // Fetch both years if range spans a year boundary
           const years = fromYear === toYear ? [fromYear] : [fromYear, toYear];
           const allRows: any[] = [];
+          let grossMarginPct: number | undefined;
           for (const yr of years) {
             const merRes = await fetch(
               `/api/shopify-sync?brand_id=${acct.brand_id}&year=${yr}`,
@@ -546,6 +549,7 @@ export default function AdPerspectivePage() {
             if (merRes.ok) {
               const merJson = await merRes.json();
               allRows.push(...(merJson.rows || []));
+              if (merJson.gross_margin_pct) grossMarginPct = merJson.gross_margin_pct;
             }
           }
           const filtered = allRows.filter((r: any) => r.date >= from && r.date <= to);
@@ -553,7 +557,7 @@ export default function AdPerspectivePage() {
             return s + (r.gross_sales || 0) + (r.discounts || 0) + (r.refunds || 0) - (r.taxes || 0) + (r.shipping || 0);
           }, 0);
           const totalAdSpend = filtered.reduce((s: number, r: any) => s + (r.meta_spend || 0) + (r.google_spend || 0) + (r.other_spend || 0), 0);
-          setMerData({ revenue: shopifyRevenue, spend: totalAdSpend });
+          setMerData({ revenue: shopifyRevenue, spend: totalAdSpend, grossMarginPct });
         } catch { /* MER is supplementary — don't block on failure */ }
       } else {
         setMerData(null);
@@ -568,10 +572,19 @@ export default function AdPerspectivePage() {
 
   // ─── Computed Analysis ──────────────────────────────────────
 
-  // Sort ads by spend descending
+  // Unique campaign names for filter dropdown
+  const campaignNames = useMemo(() => {
+    const names = Array.from(new Set(ads.filter(a => a.spend > 0).map(a => a.campaign_name).filter(Boolean)));
+    return names.sort();
+  }, [ads]);
+
+  // Sort ads by spend descending, with optional campaign filter
   const sortedAds = useMemo(() =>
-    [...ads].filter(a => a.spend > 0).sort((a, b) => b.spend - a.spend),
-    [ads]
+    [...ads]
+      .filter(a => a.spend > 0)
+      .filter(a => campaignFilter === 'all' || a.campaign_name === campaignFilter)
+      .sort((a, b) => b.spend - a.spend),
+    [ads, campaignFilter]
   );
 
   // Export CSV
@@ -818,6 +831,12 @@ export default function AdPerspectivePage() {
 
   const chartMax = useMemo(() => chartData.length > 0 ? Math.max(...chartData.map(d => d.value)) : 0, [chartData]);
 
+  // ─── Fatigue Watch ──────────────────────────────────────────
+  const fatiguedAds = useMemo(() =>
+    sortedAds.filter(a => a.frequency > 3).sort((a, b) => b.frequency - a.frequency),
+    [sortedAds]
+  );
+
   // ─── Outlier Table (top & bottom performers) ────────────────
   const outlierAds = useMemo(() => {
     const sorted = [...sortedAds];
@@ -919,6 +938,29 @@ export default function AdPerspectivePage() {
                   <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: '#666' }} />
                 </div>
 
+                {/* Campaign filter */}
+                {campaignNames.length > 1 && (
+                  <div className="relative">
+                    <select
+                      value={campaignFilter}
+                      onChange={(e) => setCampaignFilter(e.target.value)}
+                      className="appearance-none text-sm rounded-lg pl-3 pr-8 py-2 cursor-pointer max-w-[200px] truncate"
+                      style={{ backgroundColor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#F5F5F8' }}
+                    >
+                      <option value="all" style={{ backgroundColor: '#1a1a1a' }}>All Campaigns</option>
+                      {campaignNames.map(name => (
+                        <option key={name} value={name} style={{ backgroundColor: '#1a1a1a' }}>{name}</option>
+                      ))}
+                    </select>
+                    <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: '#666' }} />
+                  </div>
+                )}
+
+                {/* Attribution window badge */}
+                <span className="text-[10px] px-2 py-1 rounded-md" style={{ backgroundColor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)', color: '#666' }}>
+                  7d click · 1d view
+                </span>
+
                 <button
                   onClick={fetchData}
                   disabled={loading}
@@ -990,33 +1032,52 @@ export default function AdPerspectivePage() {
               )}
 
               {/* MER + Summary Cards */}
-              {merData && merData.spend > 0 && (
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                  <div className="rounded-xl p-4" style={{ background: 'linear-gradient(135deg, rgba(200,184,154,0.12), rgba(200,184,154,0.04))', border: '1px solid rgba(200,184,154,0.2)' }}>
-                    <p className="text-[10px] uppercase tracking-wider mb-1 flex items-center gap-1.5" style={{ color: '#888' }}>
-                      Blended MER
-                      <span title="Total Shopify revenue / total ad spend (all channels). More reliable than platform ROAS."><Info size={10} style={{ color: '#666' }} /></span>
-                    </p>
-                    <p className="text-xl font-bold" style={{ color: merData.revenue / merData.spend >= 1 ? '#4ade80' : '#f87171' }}>
-                      {(merData.revenue / merData.spend).toFixed(2)}x
-                    </p>
+              {merData && merData.spend > 0 && (() => {
+                const mer = merData.revenue / merData.spend;
+                const hasMargin = merData.grossMarginPct != null && merData.grossMarginPct > 0;
+                const cogs = hasMargin ? merData.revenue * (1 - merData.grossMarginPct! / 100) : 0;
+                const contribution = hasMargin ? merData.revenue - cogs - merData.spend : 0;
+                const contributionPct = hasMargin && merData.revenue > 0 ? (contribution / merData.revenue) * 100 : 0;
+                return (
+                  <div className={`grid grid-cols-2 ${hasMargin ? 'sm:grid-cols-5' : 'sm:grid-cols-4'} gap-4`}>
+                    <div className="rounded-xl p-4" style={{ background: 'linear-gradient(135deg, rgba(200,184,154,0.12), rgba(200,184,154,0.04))', border: '1px solid rgba(200,184,154,0.2)' }}>
+                      <p className="text-[10px] uppercase tracking-wider mb-1 flex items-center gap-1.5" style={{ color: '#888' }}>
+                        Blended MER
+                        <span title="Total Shopify revenue / total ad spend (all channels). More reliable than platform ROAS."><Info size={10} style={{ color: '#666' }} /></span>
+                      </p>
+                      <p className="text-xl font-bold" style={{ color: mer >= 1 ? '#4ade80' : '#f87171' }}>
+                        {mer.toFixed(2)}x
+                      </p>
+                    </div>
+                    <div className="rounded-xl p-4" style={{ backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                      <p className="text-[10px] uppercase tracking-wider mb-1" style={{ color: '#888' }}>Shopify Revenue</p>
+                      <p className="text-xl font-bold" style={{ color: '#F5F5F8' }}>{fmt.currencyShort(merData.revenue)}</p>
+                    </div>
+                    <div className="rounded-xl p-4" style={{ backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                      <p className="text-[10px] uppercase tracking-wider mb-1" style={{ color: '#888' }}>Total Ad Spend</p>
+                      <p className="text-xl font-bold" style={{ color: '#F5F5F8' }}>{fmt.currencyShort(merData.spend)}</p>
+                    </div>
+                    <div className="rounded-xl p-4" style={{ backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                      <p className="text-[10px] uppercase tracking-wider mb-1" style={{ color: '#888' }}>Platform ROAS</p>
+                      <p className="text-xl font-bold" style={{ color: totalSpend > 0 ? (totalRevenue / totalSpend >= roasFloor ? '#4ade80' : totalRevenue / totalSpend >= 1 ? '#fbbf24' : '#f87171') : '#888' }}>
+                        {totalSpend > 0 ? `${(totalRevenue / totalSpend).toFixed(2)}x` : '—'}
+                      </p>
+                    </div>
+                    {hasMargin && (
+                      <div className="rounded-xl p-4" style={{ backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                        <p className="text-[10px] uppercase tracking-wider mb-1 flex items-center gap-1.5" style={{ color: '#888' }}>
+                          Contribution
+                          <span title={`Revenue − COGS (${merData.grossMarginPct}% margin) − Ad Spend`}><Info size={10} style={{ color: '#666' }} /></span>
+                        </p>
+                        <p className="text-xl font-bold" style={{ color: contribution > 0 ? '#4ade80' : '#f87171' }}>
+                          {fmt.currencyShort(contribution)}
+                        </p>
+                        <p className="text-[10px] mt-0.5" style={{ color: '#666' }}>{contributionPct.toFixed(1)}% margin</p>
+                      </div>
+                    )}
                   </div>
-                  <div className="rounded-xl p-4" style={{ backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
-                    <p className="text-[10px] uppercase tracking-wider mb-1" style={{ color: '#888' }}>Shopify Revenue</p>
-                    <p className="text-xl font-bold" style={{ color: '#F5F5F8' }}>{fmt.currencyShort(merData.revenue)}</p>
-                  </div>
-                  <div className="rounded-xl p-4" style={{ backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
-                    <p className="text-[10px] uppercase tracking-wider mb-1" style={{ color: '#888' }}>Total Ad Spend</p>
-                    <p className="text-xl font-bold" style={{ color: '#F5F5F8' }}>{fmt.currencyShort(merData.spend)}</p>
-                  </div>
-                  <div className="rounded-xl p-4" style={{ backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
-                    <p className="text-[10px] uppercase tracking-wider mb-1" style={{ color: '#888' }}>Platform ROAS</p>
-                    <p className="text-xl font-bold" style={{ color: totalSpend > 0 ? (totalRevenue / totalSpend >= roasFloor ? '#4ade80' : totalRevenue / totalSpend >= 1 ? '#fbbf24' : '#f87171') : '#888' }}>
-                      {totalSpend > 0 ? `${(totalRevenue / totalSpend).toFixed(2)}x` : '—'}
-                    </p>
-                  </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* ─── Row 1: Insights + Rank Table + Cost til Winner ─── */}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -1331,6 +1392,51 @@ export default function AdPerspectivePage() {
                   </div>
                 </div>
               </div>
+
+              {/* ─── Fatigue Watch ───────────────────────────────── */}
+              {fatiguedAds.length > 0 && (
+                <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(251,191,36,0.15)' }}>
+                  <div className="px-5 py-3 flex items-center justify-between" style={{ backgroundColor: 'rgba(251,191,36,0.06)', borderBottom: '1px solid rgba(251,191,36,0.1)' }}>
+                    <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: '#fbbf24' }}>
+                      <AlertCircle size={14} /> Fatigue Watch
+                    </h3>
+                    <span className="text-[10px]" style={{ color: '#888' }}>
+                      {fatiguedAds.length} ad{fatiguedAds.length !== 1 ? 's' : ''} with frequency &gt; 3
+                    </span>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-[11px]">
+                      <thead>
+                        <tr style={{ backgroundColor: 'rgba(255,255,255,0.03)' }}>
+                          {['Ad Name', 'Frequency', 'Spend', 'ROAS', 'CPA', 'CPM', 'Impressions'].map(h => (
+                            <th key={h} className="px-3 py-2 text-left font-semibold uppercase tracking-wider" style={{ color: '#888', fontSize: '9px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {fatiguedAds.slice(0, 10).map((ad, idx) => (
+                          <tr
+                            key={ad.ad_id}
+                            className="cursor-pointer transition-colors hover:bg-white/[0.03]"
+                            style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}
+                            onClick={() => setSelectedAd(ad)}
+                          >
+                            <td className="px-3 py-2 max-w-[200px] truncate" style={{ color: '#DDD' }} title={ad.ad_name}>{ad.ad_name}</td>
+                            <td className="px-3 py-2 font-bold" style={{ color: ad.frequency > 5 ? '#f87171' : '#fbbf24' }}>{ad.frequency.toFixed(1)}</td>
+                            <td className="px-3 py-2 tabular-nums" style={{ color: '#CCC' }}>{fmt.currencyShort(ad.spend)}</td>
+                            <td className="px-3 py-2 tabular-nums" style={{ color: ad.roas >= roasFloor ? '#4ade80' : ad.roas >= 1 ? '#fbbf24' : '#f87171' }}>{fmt.x(ad.roas)}</td>
+                            <td className="px-3 py-2 tabular-nums" style={{ color: '#CCC' }}>{fmt.currencyShort(ad.cpa)}</td>
+                            <td className="px-3 py-2 tabular-nums" style={{ color: '#CCC' }}>{fmt.currencyShort(ad.cpm)}</td>
+                            <td className="px-3 py-2 tabular-nums" style={{ color: '#CCC' }}>{fmt.num(ad.impressions)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
 
               {/* ─── Row 3: The Outlier Table ─────────────────────── */}
               <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>

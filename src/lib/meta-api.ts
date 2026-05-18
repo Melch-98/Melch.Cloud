@@ -81,6 +81,11 @@ export interface CopyInput {
 
 const META_API_BASE = 'https://graph.facebook.com/v21.0';
 
+// In-memory blob list cache (avoids hitting Vercel Blob API on every request)
+const BLOB_LIST_TTL_MS = 5 * 60 * 1000; // 5 minutes
+let _blobListCache: Record<string, string> | null = null;
+let _blobListCacheTime = 0;
+
 // ─── Fetch Single Ad Creative Media ────────────────────────────
 // Lightweight call to get just the thumbnail + video for one ad.
 // Tries multiple fields to find the highest-res image available.
@@ -282,7 +287,7 @@ export async function fetchCreativeInsights(
     'actions',
     'action_values',
     'video_thruplay_watched_actions',
-    'video_3_sec_watched_actions',
+    'video_play_actions',
     'video_p25_watched_actions',
     'video_p50_watched_actions',
     'video_p75_watched_actions',
@@ -299,6 +304,7 @@ export async function fetchCreativeInsights(
     `${META_API_BASE}/${accountId}/insights?` +
     `fields=${insightsFields}` +
     `&time_range={"since":"${dateFrom}","until":"${dateTo}"}` +
+    `&action_attribution_windows=["7d_click","1d_view"]` +
     `&level=ad` +
     `&sort=spend_descending` +
     `&limit=${pageSize}` +
@@ -615,12 +621,19 @@ export async function fetchCreativeInsights(
   // Step 2d: Cache all thumbnail images to Vercel Blob (bypasses Meta CDN 64px issue)
   // Download full-res images from Meta and store on our own CDN, like AdNova does.
   try {
-    // Check what's already cached
-    const existingBlobs = await list({ prefix: 'creatives/', limit: 1000 });
+    // Check what's already cached (use in-memory cache to avoid hitting Blob API every request)
     const blobCache: Record<string, string> = {};
-    for (const blob of existingBlobs.blobs) {
-      const match = blob.pathname.match(/creatives\/([^.]+)/);
-      if (match) blobCache[match[1]] = blob.url;
+    const now = Date.now();
+    if (_blobListCache && now - _blobListCacheTime < BLOB_LIST_TTL_MS) {
+      Object.assign(blobCache, _blobListCache);
+    } else {
+      const existingBlobs = await list({ prefix: 'creatives/', limit: 1000 });
+      for (const blob of existingBlobs.blobs) {
+        const match = blob.pathname.match(/creatives\/([^.]+)/);
+        if (match) blobCache[match[1]] = blob.url;
+      }
+      _blobListCache = { ...blobCache };
+      _blobListCacheTime = now;
     }
 
     // Find creative IDs that need caching (have a non-blurry source URL OR need downloading)
@@ -671,6 +684,8 @@ export async function fetchCreativeInsights(
         }
       }
     }
+    // Invalidate blob list cache since we added new entries
+    if (toCacheItems.length > 0) _blobListCache = null;
   } catch {
     // Blob caching is best-effort — if it fails, Meta URLs still work
   }
@@ -696,8 +711,8 @@ export async function fetchCreativeInsights(
     const costPerAtc = extractActionValue(row.cost_per_action_type, 'add_to_cart');
     const costPerIc = extractActionValue(row.cost_per_action_type, 'initiate_checkout');
 
-    // Video metrics
-    const video3s = extractVideoMetric(row.video_3_sec_watched_actions, 'video_view');
+    // Video metrics — video_play_actions counts 3-second views
+    const video3s = extractVideoMetric(row.video_play_actions, 'video_view');
     const videoP25 = extractVideoMetric(row.video_p25_watched_actions, 'video_view');
     const videoP50 = extractVideoMetric(row.video_p50_watched_actions, 'video_view');
     const videoP75 = extractVideoMetric(row.video_p75_watched_actions, 'video_view');
