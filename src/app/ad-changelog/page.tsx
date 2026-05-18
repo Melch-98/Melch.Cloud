@@ -171,6 +171,7 @@ export default function AdChangelogPage() {
         const { data: allBrands } = await supabase
           .from('brands')
           .select('id, name')
+          .is('archived_at', null)
           .order('name');
         setBrands(allBrands || []);
         const saved = localStorage.getItem('melch_selected_brand');

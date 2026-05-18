@@ -62,6 +62,7 @@ export async function GET(request: NextRequest) {
       let brandsQuery = supabase
         .from('brands')
         .select('id, name, meta_ad_account_id')
+        .is('archived_at', null)
         .not('meta_ad_account_id', 'is', null)
         .neq('meta_ad_account_id', '')
         .order('name');

@@ -1357,6 +1357,7 @@ export default function TeamPage() {
       const { data: allBrands } = await supabase
         .from('brands')
         .select('id, name, slug, website_url, meta_ad_account_id, google_ads_customer_id, shopify_store_domain, shopify_client_id, shopify_client_secret, shopify_gross_margin_pct')
+        .is('archived_at', null)
         .order('name');
       setBrands(allBrands || []);
 

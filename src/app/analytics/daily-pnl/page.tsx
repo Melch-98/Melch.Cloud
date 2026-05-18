@@ -1569,7 +1569,7 @@ export default function DailyPnlPage() {
     const fetchBrands = async () => {
       setFetchingBrands(true);
       try {
-        let query = supabase.from('brands').select('id, name, slug').order('name');
+        let query = supabase.from('brands').select('id, name, slug').is('archived_at', null).order('name');
         // Founders only see their own brand
         if (userRole === 'founder' && userBrandId) {
           query = query.eq('id', userBrandId);

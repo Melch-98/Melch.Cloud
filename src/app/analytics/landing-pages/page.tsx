@@ -112,7 +112,7 @@ export default function LandingPagesAnalytics() {
     const fetchBrands = async () => {
       setFetchingBrands(true);
       try {
-        let query = supabase.from('brands').select('id, name, slug').order('name');
+        let query = supabase.from('brands').select('id, name, slug').is('archived_at', null).order('name');
         if (userRole === 'founder' && userBrandId) query = query.eq('id', userBrandId);
         const { data: allBrands } = await query;
         setBrands(allBrands || []);

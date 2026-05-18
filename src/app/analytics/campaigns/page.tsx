@@ -374,6 +374,7 @@ export default function CampaignPerformancePage() {
       let brandsQuery = supabase
         .from('brands')
         .select('id, name, slug, meta_ad_account_id, google_ads_customer_id')
+        .is('archived_at', null)
         .order('name');
       // Founders only see their own brand
       if (profile.role === 'founder' && profile.brand_id) {

@@ -47,6 +47,7 @@ export async function GET(request: NextRequest) {
   let brandsQuery = supabase
     .from('brands')
     .select('id, name, meta_ad_account_id, google_ads_customer_id')
+    .is('archived_at', null)
     .order('name');
 
   if (profile.role !== 'admin' && profile.brand_id) {

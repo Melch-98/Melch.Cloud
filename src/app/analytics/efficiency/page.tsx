@@ -223,7 +223,8 @@ export default function EfficiencyPage() {
 
       const { data: brandList } = await supabase
         .from('brands')
-        .select('id, name, slug, shopify_gross_margin_pct');
+        .select('id, name, slug, shopify_gross_margin_pct')
+        .is('archived_at', null);
 
       if (brandList) setBrands(brandList);
 

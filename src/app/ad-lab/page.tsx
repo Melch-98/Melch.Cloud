@@ -164,6 +164,7 @@ export default function AdLabPage() {
         const { data: allBrands } = await supabase
           .from('brands')
           .select('id, name')
+          .is('archived_at', null)
           .order('name');
         setBrands(allBrands || []);
       } else if (profile.brand_id) {

@@ -50,7 +50,7 @@ export default function UploadPage() {
       }
 
       // Fetch brands
-      const { data: brandsData } = await supabase.from('brands').select('id, name, slug');
+      const { data: brandsData } = await supabase.from('brands').select('id, name, slug').is('archived_at', null);
       setBrands(brandsData || []);
       setUserBrandId(profile?.brand_id || undefined);
       setLoading(false);

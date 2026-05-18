@@ -444,6 +444,7 @@ export default function CalendarPage() {
       const { data: allBrands } = await supabase
         .from('brands')
         .select('id, name, slug')
+        .is('archived_at', null)
         .neq('name', 'Test Brand')
         .order('name');
       setBrands(allBrands || []);
