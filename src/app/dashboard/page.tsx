@@ -418,43 +418,45 @@ export default function DashboardPage() {
                       >
                         Open in Dropbox →
                       </a>
-                    ) : b.drive_sync_status === 'syncing' ? (
-                      <span
-                        className="shrink-0 text-[11px] font-medium px-2.5 py-1 rounded"
-                        style={{ color: '#9AADCC', backgroundColor: 'rgba(154,173,204,0.08)' }}
-                      >
-                        Syncing…
-                      </span>
-                    ) : b.drive_sync_status === 'pending' ? (
-                      <span
-                        className="shrink-0 text-[11px] font-medium px-2.5 py-1 rounded"
-                        style={{ color: '#C8B89A', backgroundColor: 'rgba(200,184,154,0.06)' }}
-                      >
-                        Queued
-                      </span>
-                    ) : b.drive_sync_status === 'failed' || b.drive_sync_status === 'partial' ? (
+                    ) : b.drive_sync_status === 'pending' || b.drive_sync_status === 'syncing' || b.drive_sync_status === 'partial' || b.drive_sync_status === 'failed' ? (
                       <button
                         onClick={async (e) => {
                           e.preventDefault();
                           e.stopPropagation();
+                          const btn = e.currentTarget;
+                          const orig = btn.textContent;
+                          btn.textContent = 'Syncing…';
+                          btn.disabled = true;
                           try {
                             await fetch('/api/submissions/sync-drive', {
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({ submission_id: b.id }),
                             });
-                          } catch { /* fire and forget */ }
+                            btn.textContent = 'Synced!';
+                            btn.style.color = '#22C55E';
+                          } catch {
+                            btn.textContent = orig || 'Retry';
+                            btn.disabled = false;
+                          }
                         }}
                         className="shrink-0 text-[11px] font-medium px-2.5 py-1 rounded cursor-pointer transition-colors hover:opacity-80"
                         style={{
-                          color: b.drive_sync_status === 'partial' ? '#F59E0B' : '#EF4444',
-                          backgroundColor: b.drive_sync_status === 'partial'
-                            ? 'rgba(245,158,11,0.08)'
-                            : 'rgba(239,68,68,0.08)',
+                          color: b.drive_sync_status === 'failed' ? '#EF4444'
+                            : b.drive_sync_status === 'partial' ? '#F59E0B'
+                            : b.drive_sync_status === 'syncing' ? '#9AADCC'
+                            : '#C8B89A',
+                          backgroundColor: b.drive_sync_status === 'failed' ? 'rgba(239,68,68,0.08)'
+                            : b.drive_sync_status === 'partial' ? 'rgba(245,158,11,0.08)'
+                            : b.drive_sync_status === 'syncing' ? 'rgba(154,173,204,0.08)'
+                            : 'rgba(200,184,154,0.06)',
                           border: 'none',
                         }}
                       >
-                        {b.drive_sync_status === 'partial' ? 'Partial — Retry' : 'Failed — Retry'}
+                        {b.drive_sync_status === 'failed' ? 'Failed — Retry'
+                          : b.drive_sync_status === 'partial' ? 'Partial — Retry'
+                          : b.drive_sync_status === 'syncing' ? 'Stuck — Retry'
+                          : 'Queued — Sync Now'}
                       </button>
                     ) : (
                       <Link

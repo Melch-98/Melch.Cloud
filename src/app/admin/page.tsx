@@ -41,6 +41,8 @@ interface BatchSubmission {
   is_whitelist: boolean;
   batch_status: 'new' | 'building' | 'ready' | 'launched';
   drive_folder_url?: string | null;
+  drive_sync_status?: string | null;
+  drive_sync_error?: string | null;
   launched_at: string | null;
   created_at: string;
   file_count: number;
@@ -216,6 +218,56 @@ function BatchCard({
 
           {/* Actions */}
           <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+            {/* Dropbox sync status */}
+            {batch.drive_sync_status && batch.drive_sync_status !== 'synced' && (
+              <button
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  const btn = e.currentTarget;
+                  const orig = btn.innerHTML;
+                  btn.textContent = 'Syncing…';
+                  btn.disabled = true;
+                  try {
+                    const res = await fetch('/api/submissions/sync-drive', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ submission_id: batch.id }),
+                    });
+                    if (res.ok) {
+                      btn.textContent = 'Synced!';
+                      btn.style.color = '#22C55E';
+                      btn.style.backgroundColor = 'rgba(34,197,94,0.1)';
+                    } else {
+                      btn.innerHTML = orig;
+                      btn.disabled = false;
+                    }
+                  } catch {
+                    btn.innerHTML = orig;
+                    btn.disabled = false;
+                  }
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all hover:brightness-110"
+                style={{
+                  backgroundColor:
+                    batch.drive_sync_status === 'failed' ? 'rgba(239,68,68,0.12)'
+                    : batch.drive_sync_status === 'partial' ? 'rgba(245,158,11,0.12)'
+                    : batch.drive_sync_status === 'syncing' ? 'rgba(154,173,204,0.12)'
+                    : 'rgba(200,184,154,0.12)',
+                  color:
+                    batch.drive_sync_status === 'failed' ? '#EF4444'
+                    : batch.drive_sync_status === 'partial' ? '#F59E0B'
+                    : batch.drive_sync_status === 'syncing' ? '#9AADCC'
+                    : '#C8B89A',
+                }}
+                title={batch.drive_sync_error || `Dropbox: ${batch.drive_sync_status}`}
+              >
+                {batch.drive_sync_status === 'failed' ? 'Sync Failed — Retry'
+                  : batch.drive_sync_status === 'partial' ? 'Partial Sync — Retry'
+                  : batch.drive_sync_status === 'syncing' ? 'Stuck — Retry Sync'
+                  : 'Sync to Dropbox'}
+              </button>
+            )}
+
             {/* Open in Dropbox (new/building/ready) */}
             {batch.drive_folder_url && batch.batch_status !== 'launched' && (
               <a
@@ -594,6 +646,8 @@ export default function AdminPage() {
   const [brands, setBrands] = useState<{ id: string; name: string }[]>([]);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [syncingAll, setSyncingAll] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
   const [brandFilter, setBrandFilter] = useState<string>('all');
 
   const fetchData = useCallback(async () => {
@@ -641,7 +695,8 @@ export default function AdminPage() {
             media_format,
             aspect_ratio,
             copy_headline,
-            copy_body
+            copy_body,
+            dropbox_path
           )
         `)
         .order('created_at', { ascending: false });
@@ -837,19 +892,59 @@ export default function AdminPage() {
               Manage batch submissions through your workflow
             </p>
           </div>
-          <button
-            onClick={handleExport}
-            disabled={exporting}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors"
-            style={{
-              backgroundColor: 'rgba(200,184,154,0.15)',
-              color: '#C8B89A',
-              opacity: exporting ? 0.5 : 1,
-            }}
-          >
-            <Download className="w-4 h-4" />
-            {exporting ? 'Exporting...' : 'Export CSV'}
-          </button>
+          <div className="flex items-center gap-3">
+            {syncResult && (
+              <span className="text-xs text-green-400">{syncResult}</span>
+            )}
+            <button
+              onClick={async () => {
+                setSyncingAll(true);
+                setSyncResult(null);
+                try {
+                  const authHeaders = await getAuthHeaders();
+                  const res = await fetch('/api/cron/sync-pending', {
+                    method: 'POST',
+                    headers: { ...authHeaders },
+                  });
+                  const data = await res.json();
+                  if (data.ok) {
+                    setSyncResult(`Processed ${data.processed} batch${data.processed !== 1 ? 'es' : ''}, ${data.totalUploaded} files uploaded`);
+                    // Refresh data
+                    setTimeout(() => fetchData(), 2000);
+                  } else {
+                    setSyncResult(`Error: ${data.error || 'Unknown'}`);
+                  }
+                } catch (err: any) {
+                  setSyncResult(`Failed: ${err?.message || 'Unknown error'}`);
+                } finally {
+                  setSyncingAll(false);
+                }
+              }}
+              disabled={syncingAll}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors"
+              style={{
+                backgroundColor: syncingAll ? 'rgba(154,173,204,0.1)' : 'rgba(154,173,204,0.15)',
+                color: '#9AADCC',
+                opacity: syncingAll ? 0.5 : 1,
+              }}
+            >
+              <Rocket className="w-4 h-4" />
+              {syncingAll ? 'Syncing All…' : 'Sync All Pending'}
+            </button>
+            <button
+              onClick={handleExport}
+              disabled={exporting}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors"
+              style={{
+                backgroundColor: 'rgba(200,184,154,0.15)',
+                color: '#C8B89A',
+                opacity: exporting ? 0.5 : 1,
+              }}
+            >
+              <Download className="w-4 h-4" />
+              {exporting ? 'Exporting...' : 'Export CSV'}
+            </button>
+          </div>
         </div>
 
         {error && (
