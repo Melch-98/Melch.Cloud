@@ -289,6 +289,29 @@ export async function getDropboxAccountEmail(accessToken: string): Promise<strin
 }
 
 /**
+ * Tell Dropbox to fetch a file directly from a URL (no bytes through our server).
+ * Returns an async_job_id that can be polled with checkSaveUrlJob().
+ */
+export async function saveUrlToDropbox(params: {
+  url: string;
+  path: string;
+}): Promise<{ async_job_id: string } | { complete: { path_display: string; id: string; size: number } }> {
+  const token = await getDropboxAccessToken();
+  return dbxApi('/files/save_url', { url: params.url, path: params.path }, token);
+}
+
+/**
+ * Check the status of a save_url async job.
+ * Returns { '.tag': 'in_progress' } | { '.tag': 'complete', path_display, ... } | { '.tag': 'failed', ... }
+ */
+export async function checkSaveUrlJob(
+  jobId: string
+): Promise<{ '.tag': 'in_progress' } | { '.tag': 'complete'; path_display: string; id: string; size: number } | { '.tag': 'failed'; error: any }> {
+  const token = await getDropboxAccessToken();
+  return dbxApi('/files/save_url/check_job_status', { async_job_id: jobId }, token);
+}
+
+/**
  * Sanitize a string for use in a Dropbox path segment.
  */
 export function sanitizeDropboxPathSegment(s: string): string {

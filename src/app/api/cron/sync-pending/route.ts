@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServiceClient } from '@/lib/supabase-server';
+import { createServiceClient, getSignedStorageUrl } from '@/lib/supabase-server';
 import {
   ensureDropboxFolder,
-  uploadToDropbox,
+  saveUrlToDropbox,
+  checkSaveUrlJob,
   getDropboxFolderLink,
   sanitizeDropboxPathSegment,
   DropboxNotConnectedError,
@@ -127,7 +128,7 @@ async function syncOneBatch(
     .select(
       `id, batch_name, brand_id, drive_sync_status,
        brands:brand_id (id, name, dropbox_folder_path),
-       submission_files (id, file_name, file_url, file_type, file_size, dropbox_path)`
+       submission_files (id, file_name, file_url, file_type, file_size, dropbox_path, dropbox_job_id)`
     )
     .eq('id', submissionId)
     .single();
@@ -150,10 +151,46 @@ async function syncOneBatch(
   const batchPath = `${brandPath}/${batchSegment}`;
 
   const allFiles: any[] = sub.submission_files || [];
-  const pendingFiles = allFiles.filter((f: any) => !f.dropbox_path);
+  // Files still needing sync: no dropbox_path AND no in-progress job
+  const pendingFiles = allFiles.filter((f: any) => !f.dropbox_path && !f.dropbox_job_id);
+  // Files with an in-progress save_url job from a previous run
+  const inProgressFiles = allFiles.filter((f: any) => !f.dropbox_path && f.dropbox_job_id);
 
-  // All files already have dropbox_path — just finalize the submission row
-  if (pendingFiles.length === 0) {
+  // Check in-progress jobs first
+  let completedFromJobs = 0;
+  for (const f of inProgressFiles) {
+    try {
+      const status = await checkSaveUrlJob(f.dropbox_job_id);
+      if (status['.tag'] === 'complete') {
+        await supabase
+          .from('submission_files')
+          .update({ dropbox_path: (status as any).path_display, dropbox_job_id: null })
+          .eq('id', f.id);
+        completedFromJobs++;
+      } else if (status['.tag'] === 'failed') {
+        // Clear job so it gets retried with a new save_url
+        await supabase
+          .from('submission_files')
+          .update({ dropbox_job_id: null })
+          .eq('id', f.id);
+        pendingFiles.push(f); // retry this file now
+      }
+      // 'in_progress' → leave it, check again next cron run
+    } catch {
+      // Job ID may be expired/invalid — clear it for retry
+      await supabase
+        .from('submission_files')
+        .update({ dropbox_job_id: null })
+        .eq('id', f.id);
+      pendingFiles.push(f);
+    }
+  }
+
+  const alreadySynced = allFiles.filter((f: any) => f.dropbox_path).length + completedFromJobs;
+  const stillInProgress = inProgressFiles.length - completedFromJobs - pendingFiles.filter(f => inProgressFiles.includes(f)).length;
+
+  // All files done (synced or just completed from jobs)
+  if (pendingFiles.length === 0 && stillInProgress === 0 && alreadySynced === allFiles.length) {
     let folderUrl: string | null = null;
     try {
       folderUrl = await getDropboxFolderLink(batchPath);
@@ -170,7 +207,20 @@ async function syncOneBatch(
       })
       .eq('id', submissionId);
 
-    return { status: 'synced', uploaded: 0, skipped: allFiles.length, total: allFiles.length };
+    return { status: 'synced', uploaded: completedFromJobs, skipped: alreadySynced - completedFromJobs, total: allFiles.length };
+  }
+
+  // If there are still in-progress jobs but nothing new to submit, report partial
+  if (pendingFiles.length === 0 && stillInProgress > 0) {
+    await supabase
+      .from('submissions')
+      .update({
+        drive_sync_status: 'syncing',
+        drive_sync_error: `${stillInProgress} file(s) still transferring via Dropbox`,
+      })
+      .eq('id', submissionId);
+
+    return { status: 'syncing', uploaded: completedFromJobs, skipped: alreadySynced - completedFromJobs, total: allFiles.length };
   }
 
   // Mark as syncing
@@ -183,54 +233,92 @@ async function syncOneBatch(
     await ensureDropboxFolder(brandPath);
     await ensureDropboxFolder(batchPath);
 
-    let uploadedCount = 0;
+    let uploadedCount = completedFromJobs;
     for (const f of pendingFiles) {
-      const { data: blob, error: dlError } = await supabase.storage
-        .from('creatives')
-        .download(f.file_url);
-
-      if (dlError || !blob) {
-        throw new Error(
-          `Storage download failed for ${f.file_name}: ${dlError?.message || 'no data'}`
-        );
-      }
-
-      const buffer = Buffer.from(await blob.arrayBuffer());
+      const signedUrl = await getSignedStorageUrl(f.file_url, 3600);
       const filePath = `${batchPath}/${sanitizeDropboxPathSegment(f.file_name)}`;
-      const result = await uploadToDropbox({ path: filePath, buffer });
+      const result = await saveUrlToDropbox({ url: signedUrl, path: filePath });
 
-      // Mark THIS file as synced immediately
-      await supabase
-        .from('submission_files')
-        .update({ dropbox_path: result.path })
-        .eq('id', f.id);
+      if ('complete' in result) {
+        // Completed synchronously (small file)
+        await supabase
+          .from('submission_files')
+          .update({ dropbox_path: result.complete.path_display, dropbox_job_id: null })
+          .eq('id', f.id);
+        uploadedCount++;
+      } else {
+        // Async job — store job ID and poll briefly
+        const jobId = result.async_job_id;
+        await supabase
+          .from('submission_files')
+          .update({ dropbox_job_id: jobId })
+          .eq('id', f.id);
 
-      uploadedCount++;
+        // Poll up to 60s with 2s intervals
+        let settled = false;
+        for (let elapsed = 0; elapsed < 60_000; elapsed += 2_000) {
+          await new Promise(r => setTimeout(r, 2_000));
+          const status = await checkSaveUrlJob(jobId);
+          if (status['.tag'] === 'complete') {
+            await supabase
+              .from('submission_files')
+              .update({ dropbox_path: (status as any).path_display, dropbox_job_id: null })
+              .eq('id', f.id);
+            uploadedCount++;
+            settled = true;
+            break;
+          } else if (status['.tag'] === 'failed') {
+            await supabase
+              .from('submission_files')
+              .update({ dropbox_job_id: null })
+              .eq('id', f.id);
+            throw new Error(`Dropbox save_url failed for ${f.file_name}: ${JSON.stringify((status as any).error)}`);
+          }
+          // still in_progress — keep polling
+        }
+        // If not settled after 60s, leave the job_id — cron will check next run
+        if (!settled) continue;
+      }
     }
 
-    // All files done — finalize
-    let folderUrl: string | null = null;
-    try {
-      folderUrl = await getDropboxFolderLink(batchPath);
-    } catch { /* non-fatal */ }
+    // Re-check: are ALL files now synced?
+    const { count: syncedNow } = await supabase
+      .from('submission_files')
+      .select('id', { count: 'exact', head: true })
+      .eq('submission_id', submissionId)
+      .not('dropbox_path', 'is', null);
 
+    if ((syncedNow || 0) >= allFiles.length) {
+      let folderUrl: string | null = null;
+      try {
+        folderUrl = await getDropboxFolderLink(batchPath);
+      } catch { /* non-fatal */ }
+
+      await supabase
+        .from('submissions')
+        .update({
+          drive_sync_status: 'synced',
+          drive_folder_url: folderUrl,
+          drive_folder_id: batchPath,
+          drive_synced_at: new Date().toISOString(),
+          drive_sync_error: null,
+        })
+        .eq('id', submissionId);
+
+      return { status: 'synced', uploaded: uploadedCount, skipped: allFiles.length - uploadedCount, total: allFiles.length };
+    }
+
+    // Some files still in-progress at Dropbox — mark partial, cron will finish
+    const remaining = allFiles.length - (syncedNow || 0);
     await supabase
       .from('submissions')
       .update({
-        drive_sync_status: 'synced',
-        drive_folder_url: folderUrl,
-        drive_folder_id: batchPath,
-        drive_synced_at: new Date().toISOString(),
-        drive_sync_error: null,
+        drive_sync_status: 'syncing',
+        drive_sync_error: `${remaining} file(s) still transferring via Dropbox — will complete on next cron run`,
       })
       .eq('id', submissionId);
 
-    return {
-      status: 'synced',
-      uploaded: uploadedCount,
-      skipped: allFiles.length - pendingFiles.length,
-      total: allFiles.length,
-    };
+    return { status: 'syncing', uploaded: uploadedCount, skipped: 0, total: allFiles.length };
   } catch (err: any) {
     const message =
       err instanceof DropboxNotConnectedError
