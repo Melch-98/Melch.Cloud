@@ -44,6 +44,7 @@ export interface MetaAdInsight {
   aov: number;
   cpc: number;
   clicks: number;
+  hold_rate: number;   // video completions / 3s views (retention after hook)
 }
 
 export interface MetaAdAccount {
@@ -281,6 +282,7 @@ export async function fetchCreativeInsights(
     'actions',
     'action_values',
     'video_thruplay_watched_actions',
+    'video_3_sec_watched_actions',
     'video_p25_watched_actions',
     'video_p50_watched_actions',
     'video_p75_watched_actions',
@@ -695,17 +697,20 @@ export async function fetchCreativeInsights(
     const costPerIc = extractActionValue(row.cost_per_action_type, 'initiate_checkout');
 
     // Video metrics
+    const video3s = extractVideoMetric(row.video_3_sec_watched_actions, 'video_view');
     const videoP25 = extractVideoMetric(row.video_p25_watched_actions, 'video_view');
     const videoP50 = extractVideoMetric(row.video_p50_watched_actions, 'video_view');
     const videoP75 = extractVideoMetric(row.video_p75_watched_actions, 'video_view');
     const videoP100 = extractVideoMetric(row.video_p100_watched_actions, 'video_view');
 
-    // Thumbstop = 3-second views / impressions (approximate via video_p25 if available)
-    const thumbstopRate = impressions > 0 ? (videoP25 / impressions) * 100 : 0;
+    // Thumbstop = 3-second views / impressions (use actual 3s metric, fall back to p25)
+    const thumbstopViews = video3s > 0 ? video3s : videoP25;
+    const thumbstopRate = impressions > 0 ? (thumbstopViews / impressions) * 100 : 0;
 
     const roas = spend > 0 ? purchaseValue / spend : 0;
     const cpa = purchases > 0 ? spend / purchases : 0;
     const aov = purchases > 0 ? purchaseValue / purchases : 0;
+    const holdRate = thumbstopViews > 0 ? (videoP100 / thumbstopViews) * 100 : 0;
 
     const info = thumbnails[row.ad_id] || { url: '', type: 'UNKNOWN', videoId: null };
     const videoUrl = info.videoId ? (videoSources[info.videoId] || null) : null;
@@ -744,6 +749,7 @@ export async function fetchCreativeInsights(
       aov,
       cpc: safeNum(row.cpc),
       clicks,
+      hold_rate: holdRate,
     };
   });
 }

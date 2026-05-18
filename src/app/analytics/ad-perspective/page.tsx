@@ -90,9 +90,6 @@ function getDatePreset(preset: string): { from: string; to: string; label: strin
     case '30d': { const d = new Date(now); d.setDate(d.getDate() - 30); return { from: dateStr(d), to, label: 'Last 30 days' }; }
     case '60d': { const d = new Date(now); d.setDate(d.getDate() - 60); return { from: dateStr(d), to, label: 'Last 60 days' }; }
     case '90d': { const d = new Date(now); d.setDate(d.getDate() - 90); return { from: dateStr(d), to, label: 'Last 90 days' }; }
-    case '6m': { const d = new Date(now); d.setMonth(d.getMonth() - 6); return { from: dateStr(d), to, label: 'Last 6 months' }; }
-    case '12m': { const d = new Date(now); d.setFullYear(d.getFullYear() - 1); return { from: dateStr(d), to, label: 'Last 12 months' }; }
-    case 'all': { return { from: '2020-01-01', to, label: 'All time' }; }
     default: { const d = new Date(now); d.setDate(d.getDate() - 30); return { from: dateStr(d), to, label: 'Last 30 days' }; }
   }
 }
@@ -162,7 +159,7 @@ function AdDetailPanel({ ad, onClose, roasFloor }: { ad: MetaAdInsight; onClose:
         { label: 'CTR (all)', value: `${ad.ctr.toFixed(2)}%` },
         { label: 'CPM', value: fmt.currency(ad.cpm) },
         { label: 'CPC', value: fmt.currency(ad.cpc) },
-        { label: 'Thumbstop / Hookrate', value: `${ad.thumbstop_rate.toFixed(2)}%` },
+        { label: 'Thumbstop Rate', value: `${ad.thumbstop_rate.toFixed(2)}%` },
       ],
     },
     {
@@ -194,6 +191,7 @@ function AdDetailPanel({ ad, onClose, roasFloor }: { ad: MetaAdInsight; onClose:
         { label: '50% watched', value: fmt.num(ad.video_play_50) },
         { label: '75% watched', value: fmt.num(ad.video_play_75) },
         { label: '100% watched', value: fmt.num(ad.video_play_100) },
+        { label: 'Hold Rate', value: `${ad.hold_rate.toFixed(1)}%` },
       ],
     });
   }
@@ -205,6 +203,12 @@ function AdDetailPanel({ ad, onClose, roasFloor }: { ad: MetaAdInsight; onClose:
   ];
 
   const isWinner = ad.roas >= roasFloor;
+
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [onClose]);
 
   return (
     <div className="fixed inset-0 z-[100] flex">
@@ -941,11 +945,19 @@ export default function AdPerspectivePage() {
         </div>
 
         <div className="max-w-[1600px] mx-auto px-6 py-6 space-y-6">
-          {/* Loading */}
-          {loading && (
+          {/* Loading — first load */}
+          {loading && ads.length === 0 && (
             <div className="flex items-center justify-center py-24">
               <Loader size={20} className="animate-spin" style={{ color: '#C8B89A' }} />
               <span className="ml-3 text-sm" style={{ color: '#888' }}>Analyzing ad performance...</span>
+            </div>
+          )}
+
+          {/* Loading — refetch with existing data */}
+          {loading && ads.length > 0 && (
+            <div className="flex items-center gap-2 rounded-lg px-4 py-2" style={{ backgroundColor: 'rgba(200,184,154,0.06)', border: '1px solid rgba(200,184,154,0.1)' }}>
+              <Loader size={14} className="animate-spin" style={{ color: '#C8B89A' }} />
+              <span className="text-xs" style={{ color: '#C8B89A' }}>Updating...</span>
             </div>
           )}
 
@@ -965,7 +977,7 @@ export default function AdPerspectivePage() {
             </div>
           )}
 
-          {!loading && sortedAds.length > 0 && (
+          {sortedAds.length > 0 && (
             <>
               {/* Truncation warning */}
               {truncated && (
@@ -1183,7 +1195,7 @@ export default function AdPerspectivePage() {
                   <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
                     <div className="px-5 py-3 flex items-center justify-between" style={{ backgroundColor: 'rgba(200,184,154,0.06)', borderBottom: '1px solid rgba(200,184,154,0.1)' }}>
                       <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: '#C8B89A' }}>
-                        <BarChart3 size={14} /> Percentile Distribution
+                        <BarChart3 size={14} /> Cumulative Percentile Distribution
                       </h3>
                       <div className="flex items-center gap-2 text-[10px]" style={{ color: '#666' }}>
                         <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full" style={{ backgroundColor: 'rgba(200,184,154,0.3)' }}></span> Top 1% of Ads</span>
@@ -1339,6 +1351,7 @@ export default function AdPerspectivePage() {
                           { key: 'purchases', label: 'Purchases' },
                           { key: 'cpa', label: 'CPA' },
                           { key: 'roas', label: 'ROAS' },
+                          { key: 'aov', label: 'AOV' },
                           { key: 'cpm', label: 'CPM' },
                           { key: 'link_ctr', label: 'Link CTR' },
                           { key: 'thumbstop_rate', label: 'Hookrate' },
@@ -1379,6 +1392,7 @@ export default function AdPerspectivePage() {
                             <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: '#CCC' }}>{fmt.num(ad.purchases)}</td>
                             <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: '#CCC' }}>{fmt.currencyShort(ad.cpa)}</td>
                             <td className="px-3 py-2.5 text-right tabular-nums font-medium" style={{ color: ad.roas >= roasFloor ? '#4ade80' : ad.roas >= 1 ? '#fbbf24' : '#f87171' }}>{fmt.x(ad.roas)}</td>
+                            <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: '#CCC' }}>{ad.aov > 0 ? fmt.currencyShort(ad.aov) : '—'}</td>
                             <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: '#CCC' }}>{fmt.currencyShort(ad.cpm)}</td>
                             <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: '#CCC' }}>{ad.link_ctr.toFixed(2)}%</td>
                             <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: '#CCC' }}>{ad.thumbstop_rate.toFixed(2)}%</td>
