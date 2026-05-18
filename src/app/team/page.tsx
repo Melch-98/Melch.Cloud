@@ -22,7 +22,9 @@ import {
   Mail,
   Lock,
   User,
+  Rocket,
 } from 'lucide-react';
+import Link from 'next/link';
 import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
 
@@ -1609,6 +1611,18 @@ export default function TeamPage() {
           </div>
 
           <div className="flex items-center gap-3">
+            <Link
+              href="/admin/onboard"
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all"
+              style={{
+                backgroundColor: 'rgba(255,255,255,0.04)',
+                border: '1px solid rgba(255,255,255,0.08)',
+                color: '#888',
+              }}
+            >
+              <Rocket size={16} />
+              Onboard Client
+            </Link>
             <button
               onClick={() => setShowInviteModal(true)}
               className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all"

@@ -151,12 +151,6 @@ export default function Navbar({ children }: { children?: React.ReactNode }) {
       roles: ['admin'],
     },
     {
-      label: 'Onboard Client',
-      href: '/admin/onboard',
-      icon: Rocket,
-      roles: ['admin'],
-    },
-    {
       label: 'Analytics',
       href: '/analytics',
       icon: TrendingUp,
