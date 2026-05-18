@@ -445,7 +445,7 @@ function AdDetailPanel({ ad, onClose, roasFloor }: { ad: MetaAdInsight; onClose:
 
 export default function AdPerspectivePage() {
   const router = useRouter();
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   // State
   const [loading, setLoading] = useState(false);
@@ -474,6 +474,10 @@ export default function AdPerspectivePage() {
   const [selectedAd, setSelectedAd] = useState<MetaAdInsight | null>(null);
   // authToken kept for API calls
   const [authToken, setAuthToken] = useState<string | null>(null);
+  // Truncation warning
+  const [truncated, setTruncated] = useState(false);
+  // MER (blended ROAS from Shopify revenue)
+  const [merData, setMerData] = useState<{ revenue: number; spend: number } | null>(null);
 
   // Auth check + fetch accounts
   useEffect(() => {
@@ -510,17 +514,49 @@ export default function AdPerspectivePage() {
       if (!session) return;
       const { from, to } = getDatePreset(datePreset);
       const res = await fetch(
-        `/api/meta-insights?account_id=${selectedAccount}&date_from=${from}&date_to=${to}&limit=200`,
+        `/api/meta-insights?account_id=${selectedAccount}&date_from=${from}&date_to=${to}&limit=500`,
         { headers: { Authorization: `Bearer ${session.access_token}` } }
       );
       if (!res.ok) { const err = await res.json(); throw new Error(err.error || 'Failed to fetch'); }
       const data = await res.json();
-      setAds(data.insights || []);
+      const insights = data.insights || [];
+      setAds(insights);
+      setTruncated(insights.length >= 500);
       setCachedAt(data.cached_at || null);
       setIsCached(!!data.cached);
+
+      // Fetch MER data (Shopify revenue for the same period)
+      const acct = accounts.find(a => a.id === selectedAccount);
+      if (acct?.brand_id) {
+        try {
+          const fromYear = from.slice(0, 4);
+          const toYear = to.slice(0, 4);
+          // Fetch both years if range spans a year boundary
+          const years = fromYear === toYear ? [fromYear] : [fromYear, toYear];
+          const allRows: any[] = [];
+          for (const yr of years) {
+            const merRes = await fetch(
+              `/api/shopify-sync?brand_id=${acct.brand_id}&year=${yr}`,
+              { headers: { Authorization: `Bearer ${session.access_token}` } }
+            );
+            if (merRes.ok) {
+              const merJson = await merRes.json();
+              allRows.push(...(merJson.rows || []));
+            }
+          }
+          const filtered = allRows.filter((r: any) => r.date >= from && r.date <= to);
+          const shopifyRevenue = filtered.reduce((s: number, r: any) => {
+            return s + (r.gross_sales || 0) + (r.discounts || 0) + (r.refunds || 0) - (r.taxes || 0) + (r.shipping || 0);
+          }, 0);
+          const totalAdSpend = filtered.reduce((s: number, r: any) => s + (r.meta_spend || 0) + (r.google_spend || 0) + (r.other_spend || 0), 0);
+          setMerData({ revenue: shopifyRevenue, spend: totalAdSpend });
+        } catch { /* MER is supplementary — don't block on failure */ }
+      } else {
+        setMerData(null);
+      }
     } catch (e: any) { setError(e.message); }
     finally { setLoading(false); }
-  }, [selectedAccount, datePreset, supabase]);
+  }, [selectedAccount, datePreset, supabase, accounts]);
 
   useEffect(() => {
     if (selectedAccount) fetchData();
@@ -783,9 +819,12 @@ export default function AdPerspectivePage() {
     const sorted = [...sortedAds];
     const field = outlierSort.field as keyof MetaAdInsight;
     sorted.sort((a, b) => {
-      const aVal = a[field] as number;
-      const bVal = b[field] as number;
-      return outlierSort.dir === 'desc' ? bVal - aVal : aVal - bVal;
+      const aVal = a[field];
+      const bVal = b[field];
+      if (typeof aVal === 'string' && typeof bVal === 'string') {
+        return outlierSort.dir === 'desc' ? bVal.localeCompare(aVal) : aVal.localeCompare(bVal);
+      }
+      return outlierSort.dir === 'desc' ? (bVal as number) - (aVal as number) : (aVal as number) - (bVal as number);
     });
     return sorted.slice(0, 20);
   }, [sortedAds, outlierSort]);
@@ -928,6 +967,45 @@ export default function AdPerspectivePage() {
 
           {!loading && sortedAds.length > 0 && (
             <>
+              {/* Truncation warning */}
+              {truncated && (
+                <div className="rounded-xl px-5 py-3 flex items-center gap-3" style={{ backgroundColor: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.15)' }}>
+                  <AlertCircle size={16} style={{ color: '#fbbf24' }} />
+                  <span className="text-xs" style={{ color: '#fbbf24' }}>
+                    Showing top 500 ads by spend. Your account has more — percentile and Pareto analysis may not reflect the full picture.
+                  </span>
+                </div>
+              )}
+
+              {/* MER + Summary Cards */}
+              {merData && merData.spend > 0 && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  <div className="rounded-xl p-4" style={{ background: 'linear-gradient(135deg, rgba(200,184,154,0.12), rgba(200,184,154,0.04))', border: '1px solid rgba(200,184,154,0.2)' }}>
+                    <p className="text-[10px] uppercase tracking-wider mb-1 flex items-center gap-1.5" style={{ color: '#888' }}>
+                      Blended MER
+                      <span title="Total Shopify revenue / total ad spend (all channels). More reliable than platform ROAS."><Info size={10} style={{ color: '#666' }} /></span>
+                    </p>
+                    <p className="text-xl font-bold" style={{ color: merData.revenue / merData.spend >= 1 ? '#4ade80' : '#f87171' }}>
+                      {(merData.revenue / merData.spend).toFixed(2)}x
+                    </p>
+                  </div>
+                  <div className="rounded-xl p-4" style={{ backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                    <p className="text-[10px] uppercase tracking-wider mb-1" style={{ color: '#888' }}>Shopify Revenue</p>
+                    <p className="text-xl font-bold" style={{ color: '#F5F5F8' }}>{fmt.currencyShort(merData.revenue)}</p>
+                  </div>
+                  <div className="rounded-xl p-4" style={{ backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                    <p className="text-[10px] uppercase tracking-wider mb-1" style={{ color: '#888' }}>Total Ad Spend</p>
+                    <p className="text-xl font-bold" style={{ color: '#F5F5F8' }}>{fmt.currencyShort(merData.spend)}</p>
+                  </div>
+                  <div className="rounded-xl p-4" style={{ backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                    <p className="text-[10px] uppercase tracking-wider mb-1" style={{ color: '#888' }}>Platform ROAS</p>
+                    <p className="text-xl font-bold" style={{ color: totalSpend > 0 ? (totalRevenue / totalSpend >= roasFloor ? '#4ade80' : totalRevenue / totalSpend >= 1 ? '#fbbf24' : '#f87171') : '#888' }}>
+                      {totalSpend > 0 ? `${(totalRevenue / totalSpend).toFixed(2)}x` : '—'}
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {/* ─── Row 1: Insights + Rank Table + Cost til Winner ─── */}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                 {/* Insights + Settings */}
