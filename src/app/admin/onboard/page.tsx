@@ -32,7 +32,7 @@ interface Brand {
   meta_ad_account_id: string | null;
   google_ads_customer_id: string | null;
   shopify_store_domain: string | null;
-  shopify_gross_margin_pct: number | null;
+  gross_margin_pct: number | null;
   dropbox_folder_path: string | null;
   archived_at: string | null;
   created_at: string;
@@ -223,7 +223,7 @@ export default function OnboardPage() {
         name: brandName.trim(),
         slug: brandSlug || slugify(brandName),
         website_url: websiteUrl || null,
-        shopify_gross_margin_pct: Number(grossMargin) || 62,
+        gross_margin_pct: Number(grossMargin) || 62,
       }),
     });
 

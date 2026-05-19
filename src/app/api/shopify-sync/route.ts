@@ -402,7 +402,8 @@ export async function POST(request: NextRequest) {
 
   // Parse body
   const body = await request.json();
-  const { brand_id, since_date, until_date } = body;
+  const { brand_id, since_date, until_date, action } = body;
+  const spendOnly = action === 'sync_spend_only';
 
   if (!brand_id) {
     return NextResponse.json({ error: 'brand_id is required' }, { status: 400 });
@@ -419,7 +420,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Brand not found' }, { status: 404 });
   }
 
-  if (!brand.shopify_store_domain) {
+  if (!brand.shopify_store_domain && !spendOnly) {
     return NextResponse.json(
       { error: 'Shopify not connected for this brand. Install the Melch.Cloud app on your store first.' },
       { status: 400 }
@@ -478,8 +479,11 @@ export async function POST(request: NextRequest) {
   const untilDate = until_date || now.toISOString();
 
   try {
-    // Use OAuth offline token when available (public App Store install flow);
-    // otherwise exchange custom-distribution client credentials for a short-lived token.
+    let ordersProcessed = 0;
+    let daysSynced = 0;
+
+    // ── Shopify order sync (skip if spend-only mode) ──
+    if (!spendOnly) {
     const shopifyToken = oauthAccessToken
       ? oauthAccessToken
       : await getShopifyToken(
@@ -488,7 +492,6 @@ export async function POST(request: NextRequest) {
           brand.shopify_client_secret!
         );
 
-    // Fetch orders from Shopify
     const orders = await fetchAllOrders(
       brand.shopify_store_domain,
       shopifyToken,
@@ -496,15 +499,12 @@ export async function POST(request: NextRequest) {
       untilDate
     );
 
-    // Enrich with reliable lifetime order counts (per-customer fetch).
-    // Wrapped — must NEVER fail the whole sync. Worst case NC stays 0.
     try {
       await enrichCustomerOrderCounts(brand.shopify_store_domain, shopifyToken, orders);
     } catch (e) {
       console.error('Customer enrichment failed (non-fatal):', e);
     }
 
-    // Aggregate by day
     const dayBuckets = aggregateOrdersByDay(orders);
 
     // Upsert into daily_pnl
@@ -577,6 +577,10 @@ export async function POST(request: NextRequest) {
         console.warn(`shopify_orders upsert: ${orderUpsertErrors} chunk(s) failed`);
       }
     }
+
+    ordersProcessed = orders.length;
+    daysSynced = rows.length;
+    } // end if (!spendOnly)
 
     // ── Sync ad spend from Google Ads (Windsor) + Meta in parallel ──
     const adSpendErrors: string[] = [];
@@ -670,8 +674,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       brand: brand.name,
-      orders_processed: orders.length,
-      days_synced: rows.length,
+      mode: spendOnly ? 'spend_only' : 'full',
+      orders_processed: ordersProcessed,
+      days_synced: daysSynced,
       google_spend_days: googleDaysSynced,
       meta_spend_days: metaDaysSynced,
       ad_spend_errors: adSpendErrors.length > 0 ? adSpendErrors : undefined,
@@ -784,7 +789,7 @@ export async function GET(request: NextRequest) {
     // (b) custom-distribution client credentials on the brand row.
     const { data: brand } = await supabase
       .from('brands')
-      .select('shopify_store_domain, shopify_client_id, shopify_gross_margin_pct')
+      .select('shopify_store_domain, shopify_client_id, gross_margin_pct')
       .eq('id', brandId)
       .single();
 
@@ -808,7 +813,7 @@ export async function GET(request: NextRequest) {
       shopify_connected: !!(
         brand?.shopify_store_domain && (hasOauthInstall || brand.shopify_client_id)
       ),
-      gross_margin_pct: brand?.shopify_gross_margin_pct || 62,
+      gross_margin_pct: brand?.gross_margin_pct || 62,
       last_synced_at: lastSyncedRow?.synced_at || null,
     };
 

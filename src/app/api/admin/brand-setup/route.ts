@@ -77,7 +77,7 @@ export async function POST(request: NextRequest) {
     const allowedFields = [
       'google_ads_customer_id', 'meta_ad_account_id', 'website_url',
       'shopify_store_domain', 'shopify_client_id', 'shopify_client_secret',
-      'shopify_gross_margin_pct',
+      'gross_margin_pct',
       'target_roas', 'roas_floor', 'nc_share_pct',
       'ltv_3m_mult', 'ltv_6m_mult', 'ltv_12m_mult',
       'payment_processing_pct', 'returns_rate_pct', 'shipping_cost_per_order',
@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
     const allowedFields = [
       'google_ads_customer_id', 'meta_ad_account_id', 'website_url',
       'shopify_store_domain', 'shopify_client_id', 'shopify_client_secret',
-      'shopify_gross_margin_pct', 'name', 'slug',
+      'gross_margin_pct', 'name', 'slug',
       'target_roas', 'roas_floor', 'nc_share_pct',
       'ltv_3m_mult', 'ltv_6m_mult', 'ltv_12m_mult',
       'payment_processing_pct', 'returns_rate_pct', 'shipping_cost_per_order',

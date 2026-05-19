@@ -55,7 +55,7 @@ interface Brand {
   shopify_store_domain: string | null;
   shopify_client_id: string | null;
   shopify_client_secret: string | null;
-  shopify_gross_margin_pct: number | null;
+  gross_margin_pct: number | null;
   // Financial settings
   target_roas: number | null;
   roas_floor: number | null;
@@ -289,7 +289,7 @@ function TeamCard({
   const [shopifyDomain, setShopifyDomain] = useState(brand.shopify_store_domain || '');
   const [shopifyClientId, setShopifyClientId] = useState(brand.shopify_client_id || '');
   const [shopifyClientSecret, setShopifyClientSecret] = useState(brand.shopify_client_secret || '');
-  const [shopifyMargin, setShopifyMargin] = useState(String(brand.shopify_gross_margin_pct ?? '62'));
+  const [shopifyMargin, setShopifyMargin] = useState(String(brand.gross_margin_pct ?? '62'));
   const [showShopifySecret, setShowShopifySecret] = useState(false);
   // Financial settings state
   const [targetRoas, setTargetRoas] = useState(String(brand.target_roas ?? '1.5'));
@@ -637,7 +637,7 @@ function TeamCard({
                     }}
                   />
                   <button
-                    onClick={() => onUpdateBrand(brand.id, 'shopify_gross_margin_pct', shopifyMargin)}
+                    onClick={() => onUpdateBrand(brand.id, 'gross_margin_pct', shopifyMargin)}
                     className="px-2 py-1 rounded-lg"
                     style={{ backgroundColor: 'rgba(150,191,72,0.15)', color: '#96BF48' }}
                   >
@@ -655,7 +655,7 @@ function TeamCard({
             </p>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
               {[
-                { label: 'Gross Margin %', value: shopifyMargin, set: setShopifyMargin, field: 'shopify_gross_margin_pct', color: '#C8B89A' },
+                { label: 'Gross Margin %', value: shopifyMargin, set: setShopifyMargin, field: 'gross_margin_pct', color: '#C8B89A' },
                 { label: 'Processing Fee %', value: processingPct, set: setProcessingPct, field: 'payment_processing_pct', color: '#C8B89A' },
                 { label: 'Returns Rate %', value: returnsPct, set: setReturnsPct, field: 'returns_rate_pct', color: '#C8B89A' },
               ].map(({ label, value, set, field, color }) => (
@@ -1458,7 +1458,7 @@ export default function TeamPage() {
       // Fetch brands
       const { data: allBrands } = await supabase
         .from('brands')
-        .select('id, name, slug, website_url, meta_ad_account_id, google_ads_customer_id, shopify_store_domain, shopify_client_id, shopify_client_secret, shopify_gross_margin_pct, target_roas, roas_floor, nc_share_pct, ltv_3m_mult, ltv_6m_mult, ltv_12m_mult, payment_processing_pct, returns_rate_pct, shipping_cost_per_order, creative_cost_static, creative_cost_video')
+        .select('id, name, slug, website_url, meta_ad_account_id, google_ads_customer_id, shopify_store_domain, shopify_client_id, shopify_client_secret, gross_margin_pct, target_roas, roas_floor, nc_share_pct, ltv_3m_mult, ltv_6m_mult, ltv_12m_mult, payment_processing_pct, returns_rate_pct, shipping_cost_per_order, creative_cost_static, creative_cost_video')
         .is('archived_at', null)
         .order('name');
       setBrands(allBrands || []);

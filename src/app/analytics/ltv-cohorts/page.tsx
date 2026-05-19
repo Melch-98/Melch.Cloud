@@ -20,7 +20,7 @@ interface Brand {
   id: string;
   name: string;
   slug: string;
-  shopify_gross_margin_pct: number;
+  gross_margin_pct: number;
 }
 
 interface CohortRow {
@@ -279,7 +279,7 @@ export default function LTVCohortPage() {
 
       const { data: brandList } = await supabase
         .from('brands')
-        .select('id, name, slug, shopify_gross_margin_pct')
+        .select('id, name, slug, gross_margin_pct')
         .is('archived_at', null);
 
       if (brandList) setBrands(brandList);
@@ -339,7 +339,7 @@ export default function LTVCohortPage() {
   }, [selectedBrand]);
 
   const selectedBrandData = brands.find(b => b.id === selectedBrand);
-  const grossMarginPct = selectedBrandData?.shopify_gross_margin_pct ?? 62;
+  const grossMarginPct = selectedBrandData?.gross_margin_pct ?? 62;
 
   const cohorts = useMemo(
     () => buildCohorts(orders, dailyPnl, ncShareDebounced, grossMarginPct),

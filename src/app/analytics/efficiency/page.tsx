@@ -22,7 +22,7 @@ interface Brand {
   id: string;
   name: string;
   slug: string;
-  shopify_gross_margin_pct: number;
+  gross_margin_pct: number;
   target_roas: number | null;
   nc_share_pct: number | null;
   ltv_3m_mult: number | null;
@@ -157,7 +157,7 @@ interface Params {
 
 function brandDefaults(brand?: Brand): Params {
   return {
-    vc: 100 - (brand?.shopify_gross_margin_pct ?? 62),
+    vc: 100 - (brand?.gross_margin_pct ?? 62),
     nc: brand?.nc_share_pct ?? 60,
     l3: brand?.ltv_3m_mult ?? 1.4,
     l6: brand?.ltv_6m_mult ?? 1.8,
@@ -250,7 +250,7 @@ export default function EfficiencyPage() {
 
       const { data: brandList } = await supabase
         .from('brands')
-        .select('id, name, slug, shopify_gross_margin_pct, target_roas, nc_share_pct, ltv_3m_mult, ltv_6m_mult, ltv_12m_mult')
+        .select('id, name, slug, gross_margin_pct, target_roas, nc_share_pct, ltv_3m_mult, ltv_6m_mult, ltv_12m_mult')
         .is('archived_at', null);
 
       if (brandList) setBrands(brandList);

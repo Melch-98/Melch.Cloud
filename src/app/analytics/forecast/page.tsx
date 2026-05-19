@@ -30,7 +30,7 @@ interface Brand {
   id: string;
   name: string;
   slug: string;
-  shopify_gross_margin_pct: number;
+  gross_margin_pct: number;
 }
 
 interface DailyRow {
@@ -199,7 +199,7 @@ export default function ForecastPage() {
 
       const { data: brandList } = await supabase
         .from('brands')
-        .select('id, name, slug, shopify_gross_margin_pct')
+        .select('id, name, slug, gross_margin_pct')
         .is('archived_at', null);
 
       if (brandList) setBrands(brandList);
@@ -312,7 +312,7 @@ export default function ForecastPage() {
     if (!dailyData.length && !savedScenarios[scenario].length) return;
 
     const brand = brands.find(b => b.id === selectedBrand);
-    const codPct = brand ? (100 - brand.shopify_gross_margin_pct) : 35;
+    const codPct = brand ? (100 - brand.gross_margin_pct) : 35;
 
     // Compute trailing run-rate from last 30 days
     const sorted = [...dailyData].sort((a, b) => b.date.localeCompare(a.date));

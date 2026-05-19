@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
   /*  Create brand                                                     */
   /* ---------------------------------------------------------------- */
   if (action === 'create_brand') {
-    const { name, slug, website_url, shopify_gross_margin_pct } = body;
+    const { name, slug, website_url, gross_margin_pct } = body;
     if (!name?.trim()) {
       return NextResponse.json({ error: 'Brand name is required' }, { status: 400 });
     }
@@ -68,7 +68,7 @@ export async function POST(request: NextRequest) {
         name: name.trim(),
         slug: slug || name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
         website_url: website_url || null,
-        shopify_gross_margin_pct: shopify_gross_margin_pct || 62,
+        gross_margin_pct: gross_margin_pct || 62,
       })
       .select()
       .single();
