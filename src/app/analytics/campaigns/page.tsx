@@ -87,14 +87,6 @@ const DATE_RANGES: { value: DateRange; label: string }[] = [
   { value: 'this_month', label: 'This Month' },
 ];
 
-const GOOGLE_RANGE_MAP: Record<DateRange, string> = {
-  'last_7d': 'LAST_7_DAYS',
-  'last_14d': 'LAST_7_DAYS',
-  'last_30d': 'LAST_30_DAYS',
-  'last_90d': 'LAST_90_DAYS',
-  'this_month': 'THIS_MONTH',
-};
-
 // ─── Formatters ─────────────────────────────────────────────────
 
 const fmtCurrency = (n: number) => {
@@ -111,12 +103,6 @@ const fmtPct = (n: number) => `${n.toFixed(2)}%`;
 const fmtDec = (n: number) => n.toFixed(2);
 
 // ─── Helpers ────────────────────────────────────────────────────
-
-function extractMetaAction(actions: any[] | undefined, actionType: string): number {
-  if (!actions) return 0;
-  const found = actions.find((a: any) => a.action_type === actionType);
-  return found ? parseFloat(found.value) : 0;
-}
 
 // ─── Platform Badge ─────────────────────────────────────────────
 
@@ -332,7 +318,7 @@ function MetricCard({ label, value, sub, accent, sections }: {
 
 export default function CampaignPerformancePage() {
   const router = useRouter();
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   // Auth state
   const [loading, setLoading] = useState(true);

@@ -9,8 +9,9 @@ interface CampaignMetric {
   platform: 'meta' | 'google';
   campaignId: string;
   campaignName: string;
-  campaignType: string;   // SALES, SEARCH, SHOPPING, etc.
-  status: string;
+  campaignType: string;   // OUTCOME_SALES, OUTCOME_AWARENESS, SEARCH, SHOPPING, etc.
+  status: string;         // ACTIVE, PAUSED, DELETED, etc.
+  frequency: number;      // avg times a user sees the ad (Meta only, 0 for Google)
   // Aggregate metrics
   spend: number;
   impressions: number;
@@ -88,7 +89,7 @@ export async function GET(request: NextRequest) {
   const metaRange = dateRange; // already in meta format
   const googleRangeMap: Record<string, string> = {
     'last_7d': 'LAST_7_DAYS',
-    'last_14d': 'LAST_7_DAYS', // fallback
+    'last_14d': 'LAST_14_DAYS',
     'last_30d': 'LAST_30_DAYS',
     'last_90d': 'LAST_90_DAYS',
     'this_month': 'THIS_MONTH',
@@ -113,22 +114,33 @@ export async function GET(request: NextRequest) {
   // ── Fetch Meta campaign insights ──
   if (brand.meta_ad_account_id && brand.meta_ad_account_id.trim() && metaToken) {
     try {
-      const metaUrl = `https://graph.facebook.com/v21.0/${brand.meta_ad_account_id}/insights?` +
-        `level=campaign&time_range=${encodeURIComponent(JSON.stringify(dateRangeToMeta(dateRange)))}` +
+      const metaTimeRange = encodeURIComponent(JSON.stringify(dateRangeToMeta(dateRange)));
+      const metaFields = 'campaign_id,campaign_name,campaign.objective,campaign.effective_status,impressions,clicks,spend,cpc,cpm,ctr,reach,frequency,actions,action_values';
+      const firstUrl = `https://graph.facebook.com/v21.0/${brand.meta_ad_account_id}/insights?` +
+        `level=campaign&time_range=${metaTimeRange}` +
         `&time_increment=1` +
-        `&fields=campaign_id,campaign_name,impressions,clicks,spend,cpc,cpm,ctr,reach,frequency,actions,action_values` +
+        `&fields=${metaFields}` +
         `&limit=500` +
         `&access_token=${metaToken}`;
 
-      const metaRes = await fetch(metaUrl);
-      const metaData = await metaRes.json();
+      // Paginate through all results
+      const allMetaRows: any[] = [];
+      let nextUrl: string | null = firstUrl;
+      while (nextUrl) {
+        const metaRes = await fetch(nextUrl);
+        const metaPage = await metaRes.json();
+        if (metaPage.error) {
+          errors.push(`Meta API error: ${metaPage.error.message || JSON.stringify(metaPage.error)} (code ${metaPage.error.code || 'unknown'})`);
+          break;
+        }
+        if (metaPage.data) allMetaRows.push(...metaPage.data);
+        nextUrl = metaPage.paging?.next || null;
+      }
 
-      if (metaData.error) {
-        errors.push(`Meta API error: ${metaData.error.message || JSON.stringify(metaData.error)} (code ${metaData.error.code || 'unknown'})`);
-      } else if (metaData.data) {
+      if (allMetaRows.length > 0) {
         // Group by campaign
-        const byCampaign = new Map<string, typeof metaData.data>();
-        for (const row of metaData.data) {
+        const byCampaign = new Map<string, any[]>();
+        for (const row of allMetaRows) {
           const id = row.campaign_id;
           if (!byCampaign.has(id)) byCampaign.set(id, []);
           byCampaign.get(id)!.push(row);
@@ -166,12 +178,25 @@ export async function GET(request: NextRequest) {
           // Skip campaigns with no spend
           if (totalSpend <= 0) continue;
 
+          // Extract objective and status from the campaign nested object
+          const objective = rows[0]['campaign.objective'] || rows[0].campaign?.objective || 'UNKNOWN';
+          const effectiveStatus = rows[0]['campaign.effective_status'] || rows[0].campaign?.effective_status || 'UNKNOWN';
+          // Calculate blended frequency (weighted by impressions)
+          let totalFreqWeighted = 0;
+          for (const row of rows) {
+            const imp = parseInt(row.impressions || '0');
+            const freq = parseFloat(row.frequency || '0');
+            totalFreqWeighted += freq * imp;
+          }
+          const blendedFrequency = totalImpressions > 0 ? totalFreqWeighted / totalImpressions : 0;
+
           campaigns.push({
             platform: 'meta',
             campaignId,
             campaignName: rows[0].campaign_name || campaignId,
-            campaignType: 'SALES', // Meta campaigns for this account are all OUTCOME_SALES
-            status: 'ACTIVE',
+            campaignType: objective,
+            status: effectiveStatus,
+            frequency: blendedFrequency,
             spend: totalSpend,
             impressions: totalImpressions,
             clicks: totalClicks,
@@ -186,8 +211,6 @@ export async function GET(request: NextRequest) {
             daily,
           });
         }
-      } else {
-        errors.push(`Meta: Unexpected response — no data or error returned. Account: ${brand.meta_ad_account_id}`);
       }
     } catch (e: any) {
       errors.push(`Meta: ${e.message}`);
@@ -285,6 +308,7 @@ export async function GET(request: NextRequest) {
               campaignName: cRows[0].campaign || campaignId,
               campaignType: cRows[0].campaign_type || 'SEARCH',
               status: cRows[0].campaign_status || 'ENABLED',
+              frequency: 0, // Google Ads does not expose frequency via Windsor
               spend: totalSpend,
               impressions: totalImpressions,
               clicks: totalClicks,
