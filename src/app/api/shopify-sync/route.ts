@@ -324,21 +324,24 @@ function aggregateOrdersByDay(orders: ShopifyOrder[]): Map<string, DayBucket> {
     const dateStr = order.created_at.split('T')[0];
     const bucket = getOrCreate(dateStr);
 
-    const grossSales = parseFloat(order.subtotal_price) + parseFloat(order.total_discounts);
-    const discounts = -Math.abs(parseFloat(order.total_discounts));
+    const subtotal = parseFloat(order.subtotal_price);
+    const totalDiscounts = parseFloat(order.total_discounts);
+    const grossSales = subtotal + totalDiscounts;
+    const discounts = -Math.abs(totalDiscounts);
     const taxes = parseFloat(order.total_tax);
     const shipping = parseFloat(order.total_shipping_price_set?.shop_money?.amount || '0');
-    const orderTotal = parseFloat(order.subtotal_price);
 
     // NC = guest order OR first order for this customer
     const isNewCustomer = !order.customer || firstOrderIds.has(order.id);
 
+    // Use grossSales (subtotal + discounts) for NC/RC revenue so the proportional
+    // split in calcFields reconciles with the grossSales total
     if (isNewCustomer) {
       bucket.nc_orders += 1;
-      bucket.nc_revenue += orderTotal;
+      bucket.nc_revenue += grossSales;
     } else {
       bucket.rc_orders += 1;
-      bucket.rc_revenue += orderTotal;
+      bucket.rc_revenue += grossSales;
     }
 
     bucket.gross_sales += grossSales;
@@ -469,7 +472,7 @@ export async function POST(request: NextRequest) {
   // Default date range: last 30 days (covers MTD always)
   const now = new Date();
   const defaultSince = new Date(now);
-  defaultSince.setDate(defaultSince.getDate() - 30);
+  defaultSince.setDate(defaultSince.getDate() - 60);
 
   const sinceDate = since_date || defaultSince.toISOString();
   const untilDate = until_date || now.toISOString();
@@ -795,12 +798,18 @@ export async function GET(request: NextRequest) {
       hasOauthInstall = !!(storeRow?.access_token && !storeRow.uninstalled_at);
     }
 
+    // Get last synced timestamp
+    const lastSyncedRow = (rows && rows.length > 0)
+      ? rows.reduce((latest: any, r: any) => (!latest || r.synced_at > latest.synced_at) ? r : latest, null)
+      : null;
+
     const payload = {
       rows: rows || [],
       shopify_connected: !!(
         brand?.shopify_store_domain && (hasOauthInstall || brand.shopify_client_id)
       ),
       gross_margin_pct: brand?.shopify_gross_margin_pct || 62,
+      last_synced_at: lastSyncedRow?.synced_at || null,
     };
 
     // Fire-and-forget cache write

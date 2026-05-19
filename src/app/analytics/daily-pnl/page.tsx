@@ -87,7 +87,8 @@ function calcFields(row: RawRow | AggRow, grossMarginPct: number): CalcFields {
   // Net Revenue = Gross after discounts and refunds, plus shipping and off-Shopify
   // Taxes are NOT subtracted — grossSales is subtotal_price + total_discounts (no tax included),
   // so taxes are a pass-through collected on behalf of the government, not revenue.
-  const netRevenue = row.grossSales + row.discounts + row.refunds + row.shipping + row.offShopifyRevenue;
+  const shopifyNetRevenue = row.grossSales + row.discounts + row.refunds + row.shipping;
+  const netRevenue = shopifyNetRevenue + row.offShopifyRevenue;
 
   // Proportionally allocate adjustments to NC and RC based on gross revenue share
   const ncShare = row.grossSales > 0 ? row.ncRevenue / row.grossSales : 0;
@@ -96,7 +97,8 @@ function calcFields(row: RawRow | AggRow, grossMarginPct: number): CalcFields {
   const rcNetRevenue = row.rcRevenue + (row.discounts * rcShare) + (row.refunds * rcShare) + (row.shipping * rcShare);
 
   const totalSpend = row.metaSpend + row.googleSpend + row.otherSpend;
-  const cogs = netRevenue * (1 - grossMarginPct / 100);
+  // COGS applies only to Shopify revenue — off-Shopify revenue is input as fully-loaded net
+  const cogs = shopifyNetRevenue * (1 - grossMarginPct / 100);
   const contribution = netRevenue - cogs - totalSpend;
   const marginPct = netRevenue > 0 ? (contribution / netRevenue) * 100 : 0;
   const ncAov = row.ncOrders > 0 ? ncNetRevenue / row.ncOrders : 0;
@@ -538,6 +540,8 @@ export default function DailyPnlPage() {
   const [fetchingData, setFetchingData] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
 
   // Settings state
   const [grossMargin, setGrossMargin] = useState(62);
@@ -644,6 +648,7 @@ export default function DailyPnlPage() {
 
     const fetchPnlAndSettings = async () => {
       setFetchingData(true);
+      setFetchError(null);
       try {
         // Fetch Shopify data and saved settings in parallel
         const [pnlRes, settingsRes] = await Promise.all([
@@ -662,6 +667,7 @@ export default function DailyPnlPage() {
 
         // 1. Apply Shopify data
         setShopifyConnected(pnlData.shopify_connected || false);
+        if (pnlData.last_synced_at) setLastSyncedAt(pnlData.last_synced_at);
 
         if (pnlData.rows && pnlData.rows.length > 0) {
           const yearData = buildYearData(pnlData.rows, currentYear);
@@ -690,8 +696,9 @@ export default function DailyPnlPage() {
           setIsOffShopifyLocked(false);
           setSettingsSaved(false);
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Error fetching P&L data:', err);
+        setFetchError(err?.message || 'Failed to load P&L data');
         setLiveData(null);
         setLiveDataYear(null);
       } finally {
@@ -966,8 +973,18 @@ export default function DailyPnlPage() {
         c.amer.toFixed(2), c.mer.toFixed(2),
       ];
     };
-    const csvRows = [headers, ...tableRows.map(csvCalcRow)];
-    const csvContent = csvRows.map(row => row.map(cell => `"${cell}"`).join(',')).join('\n');
+    // Always export all daily rows regardless of current view mode
+    const allDays: DisplayRow[] = [];
+    if (currentMonthData) {
+      for (const week of currentMonthData.weeks) {
+        for (const day of week.days) {
+          allDays.push(day as DisplayRow);
+        }
+      }
+    }
+    const exportRows = allDays.length > 0 ? allDays : tableRows;
+    const csvRows = [headers, ...exportRows.map(csvCalcRow)];
+    const csvContent = '\uFEFF' + csvRows.map(row => row.map(cell => `"${cell}"`).join(',')).join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1100,6 +1117,18 @@ export default function DailyPnlPage() {
                 {syncResult && (
                   <span className="text-[10px] font-semibold" style={{ color: syncResult.includes('Synced') ? '#10B981' : '#ef4444' }}>
                     {syncResult}
+                  </span>
+                )}
+                {lastSyncedAt && !syncResult && (
+                  <span className="text-[10px]" style={{ color: '#555' }}>
+                    Synced {(() => {
+                      const mins = Math.floor((Date.now() - new Date(lastSyncedAt).getTime()) / 60000);
+                      if (mins < 1) return 'just now';
+                      if (mins < 60) return `${mins}m ago`;
+                      const hrs = Math.floor(mins / 60);
+                      if (hrs < 24) return `${hrs}h ago`;
+                      return `${Math.floor(hrs / 24)}d ago`;
+                    })()}
                   </span>
                 )}
                 {fetchingData && (
@@ -1589,6 +1618,19 @@ export default function DailyPnlPage() {
             />
           </div>
         </div>
+
+        {/* Error banner */}
+        {fetchError && (
+          <div className="flex-shrink-0 mx-5 mb-3 px-4 py-3 rounded-lg flex items-center gap-3"
+            style={{ backgroundColor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}>
+            <span className="text-xs text-red-400 flex-1">{fetchError}</span>
+            <button onClick={() => { setFetchError(null); setFetchingData(true); }}
+              className="text-xs font-medium px-3 py-1 rounded-md"
+              style={{ backgroundColor: 'rgba(239,68,68,0.15)', color: '#ef4444' }}>
+              Retry
+            </button>
+          </div>
+        )}
 
         {/* ─── DATA TABLE ─── */}
         <div className="flex-1 overflow-auto relative">
