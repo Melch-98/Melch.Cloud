@@ -461,12 +461,13 @@ export default function AdPerspectivePage() {
   const [cachedAt, setCachedAt] = useState<string | null>(null);
   const [isCached, setIsCached] = useState(false);
 
-  // Settings (user-adjustable)
+  // Settings (initialized from brand, user-adjustable)
   const [percentileInterval, setPercentileInterval] = useState(5);
   const [roasFloor, setRoasFloor] = useState(1.5);
   const [staticCost, setStaticCost] = useState(50);
   const [videoCost, setVideoCost] = useState(150);
   const [includeProductionCost, setIncludeProductionCost] = useState(false);
+  const [brandSettingsLoaded, setBrandSettingsLoaded] = useState(false);
 
   // Chart
   const [chartMetric, setChartMetric] = useState<'spend' | 'revenue' | 'purchases' | 'roas' | 'cpa'>('spend');
@@ -509,6 +510,27 @@ export default function AdPerspectivePage() {
     };
     init();
   }, [router, supabase]);
+
+  // Load brand settings when account changes
+  useEffect(() => {
+    if (!selectedAccount || brandSettingsLoaded) return;
+    const acct = accounts.find(a => a.id === selectedAccount);
+    if (!acct?.brand_id) return;
+    const loadBrandSettings = async () => {
+      const { data: brand } = await supabase
+        .from('brands')
+        .select('roas_floor, creative_cost_static, creative_cost_video')
+        .eq('id', acct.brand_id)
+        .single();
+      if (brand) {
+        if (brand.roas_floor != null) setRoasFloor(brand.roas_floor);
+        if (brand.creative_cost_static != null) setStaticCost(brand.creative_cost_static);
+        if (brand.creative_cost_video != null) setVideoCost(brand.creative_cost_video);
+        setBrandSettingsLoaded(true);
+      }
+    };
+    loadBrandSettings();
+  }, [selectedAccount, accounts, supabase, brandSettingsLoaded]);
 
   // Fetch ads
   const fetchData = useCallback(async () => {

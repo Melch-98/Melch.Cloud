@@ -681,7 +681,7 @@ export default function DailyPnlPage() {
           if (s.otherSpendLocked !== undefined) setIsLocked(s.otherSpendLocked);
           if (s.offShopify !== undefined) setOffShopifyAmount(String(s.offShopify));
           if (s.offShopifyLocked !== undefined) setIsOffShopifyLocked(s.offShopifyLocked);
-          if (s.grossMargin !== undefined) setGrossMargin(s.grossMargin);
+          // grossMargin no longer read from per-month settings — always uses brand-level setting
           setSettingsSaved(true);
         } else {
           setOtherSpendAmount('0');
@@ -721,7 +721,6 @@ export default function DailyPnlPage() {
             otherSpendLocked: isLocked,
             offShopify: offShopifyAmount,
             offShopifyLocked: isOffShopifyLocked,
-            grossMargin,
           },
         }),
       });
@@ -732,7 +731,7 @@ export default function DailyPnlPage() {
     } finally {
       setSavingSettings(false);
     }
-  }, [authToken, selectedBrandId, monthKey, otherSpendAmount, isLocked, offShopifyAmount, isOffShopifyLocked, grossMargin]);
+  }, [authToken, selectedBrandId, monthKey, otherSpendAmount, isLocked, offShopifyAmount, isOffShopifyLocked]);
 
   // Sync handler — triggers Shopify order pull
   const handleSync = async () => {

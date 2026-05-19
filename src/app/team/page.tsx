@@ -56,6 +56,18 @@ interface Brand {
   shopify_client_id: string | null;
   shopify_client_secret: string | null;
   shopify_gross_margin_pct: number | null;
+  // Financial settings
+  target_roas: number | null;
+  roas_floor: number | null;
+  nc_share_pct: number | null;
+  ltv_3m_mult: number | null;
+  ltv_6m_mult: number | null;
+  ltv_12m_mult: number | null;
+  payment_processing_pct: number | null;
+  returns_rate_pct: number | null;
+  shipping_cost_per_order: number | null;
+  creative_cost_static: number | null;
+  creative_cost_video: number | null;
 }
 
 /* ─── Small Components ───────────────────────────────────────── */
@@ -279,6 +291,17 @@ function TeamCard({
   const [shopifyClientSecret, setShopifyClientSecret] = useState(brand.shopify_client_secret || '');
   const [shopifyMargin, setShopifyMargin] = useState(String(brand.shopify_gross_margin_pct ?? '62'));
   const [showShopifySecret, setShowShopifySecret] = useState(false);
+  // Financial settings state
+  const [targetRoas, setTargetRoas] = useState(String(brand.target_roas ?? '1.5'));
+  const [roasFloor, setRoasFloor] = useState(String(brand.roas_floor ?? '1.5'));
+  const [ncSharePct, setNcSharePct] = useState(String(brand.nc_share_pct ?? '60'));
+  const [ltv3m, setLtv3m] = useState(String(brand.ltv_3m_mult ?? '1.4'));
+  const [ltv6m, setLtv6m] = useState(String(brand.ltv_6m_mult ?? '1.8'));
+  const [ltv12m, setLtv12m] = useState(String(brand.ltv_12m_mult ?? '2.5'));
+  const [processingPct, setProcessingPct] = useState(String(brand.payment_processing_pct ?? '2.9'));
+  const [returnsPct, setReturnsPct] = useState(String(brand.returns_rate_pct ?? '0'));
+  const [creativeCostStatic, setCreativeCostStatic] = useState(String(brand.creative_cost_static ?? '50'));
+  const [creativeCostVideo, setCreativeCostVideo] = useState(String(brand.creative_cost_video ?? '150'));
 
   const unassignedUsers = allUsers.filter(
     (u) => !u.brand_id && u.role !== 'admin'
@@ -622,6 +645,83 @@ function TeamCard({
                   </button>
                 </div>
               </div>
+            </div>
+          </div>
+
+          {/* Unit Economics */}
+          <div className="pt-3 mt-3" style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2.5" style={{ color: '#C8B89A' }}>
+              Unit Economics
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              {[
+                { label: 'Gross Margin %', value: shopifyMargin, set: setShopifyMargin, field: 'shopify_gross_margin_pct', color: '#C8B89A' },
+                { label: 'Processing Fee %', value: processingPct, set: setProcessingPct, field: 'payment_processing_pct', color: '#C8B89A' },
+                { label: 'Returns Rate %', value: returnsPct, set: setReturnsPct, field: 'returns_rate_pct', color: '#C8B89A' },
+              ].map(({ label, value, set, field, color }) => (
+                <div key={field}>
+                  <label className="text-[10px] text-gray-500 font-medium block mb-1.5 uppercase tracking-wider">{label}</label>
+                  <div className="flex gap-2">
+                    <input type="number" step="0.1" min="0" max="100" value={value} onChange={(e) => set(e.target.value)}
+                      className="flex-1 px-3 py-1.5 rounded-lg text-xs outline-none"
+                      style={{ backgroundColor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#F5F5F8' }} />
+                    <button onClick={() => onUpdateBrand(brand.id, field, value)} className="px-2 py-1 rounded-lg"
+                      style={{ backgroundColor: `${color}25`, color }}><Check size={12} /></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Performance Targets */}
+          <div className="pt-3 mt-3" style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2.5" style={{ color: '#5B8DEE' }}>
+              Performance Targets
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              {[
+                { label: 'Target ROAS', value: targetRoas, set: setTargetRoas, field: 'target_roas' },
+                { label: 'ROAS Floor (Winner)', value: roasFloor, set: setRoasFloor, field: 'roas_floor' },
+                { label: 'NC Share %', value: ncSharePct, set: setNcSharePct, field: 'nc_share_pct' },
+              ].map(({ label, value, set, field }) => (
+                <div key={field}>
+                  <label className="text-[10px] text-gray-500 font-medium block mb-1.5 uppercase tracking-wider">{label}</label>
+                  <div className="flex gap-2">
+                    <input type="number" step="0.1" value={value} onChange={(e) => set(e.target.value)}
+                      className="flex-1 px-3 py-1.5 rounded-lg text-xs outline-none"
+                      style={{ backgroundColor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#F5F5F8' }} />
+                    <button onClick={() => onUpdateBrand(brand.id, field, value)} className="px-2 py-1 rounded-lg"
+                      style={{ backgroundColor: 'rgba(91,141,238,0.15)', color: '#5B8DEE' }}><Check size={12} /></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* LTV Assumptions + Creative Costs */}
+          <div className="pt-3 mt-3" style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2.5" style={{ color: '#34A853' }}>
+              LTV &amp; Creative Costs
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+              {[
+                { label: 'LTV 3m ×', value: ltv3m, set: setLtv3m, field: 'ltv_3m_mult' },
+                { label: 'LTV 6m ×', value: ltv6m, set: setLtv6m, field: 'ltv_6m_mult' },
+                { label: 'LTV 12m ×', value: ltv12m, set: setLtv12m, field: 'ltv_12m_mult' },
+                { label: 'Static Ad Cost $', value: creativeCostStatic, set: setCreativeCostStatic, field: 'creative_cost_static' },
+                { label: 'Video Ad Cost $', value: creativeCostVideo, set: setCreativeCostVideo, field: 'creative_cost_video' },
+              ].map(({ label, value, set, field }) => (
+                <div key={field}>
+                  <label className="text-[10px] text-gray-500 font-medium block mb-1.5 uppercase tracking-wider">{label}</label>
+                  <div className="flex gap-2">
+                    <input type="number" step="0.05" value={value} onChange={(e) => set(e.target.value)}
+                      className="flex-1 px-3 py-1.5 rounded-lg text-xs outline-none"
+                      style={{ backgroundColor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#F5F5F8' }} />
+                    <button onClick={() => onUpdateBrand(brand.id, field, value)} className="px-2 py-1 rounded-lg"
+                      style={{ backgroundColor: 'rgba(52,168,83,0.15)', color: '#34A853' }}><Check size={12} /></button>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         </div>
@@ -1358,7 +1458,7 @@ export default function TeamPage() {
       // Fetch brands
       const { data: allBrands } = await supabase
         .from('brands')
-        .select('id, name, slug, website_url, meta_ad_account_id, google_ads_customer_id, shopify_store_domain, shopify_client_id, shopify_client_secret, shopify_gross_margin_pct')
+        .select('id, name, slug, website_url, meta_ad_account_id, google_ads_customer_id, shopify_store_domain, shopify_client_id, shopify_client_secret, shopify_gross_margin_pct, target_roas, roas_floor, nc_share_pct, ltv_3m_mult, ltv_6m_mult, ltv_12m_mult, payment_processing_pct, returns_rate_pct, shipping_cost_per_order, creative_cost_static, creative_cost_video')
         .is('archived_at', null)
         .order('name');
       setBrands(allBrands || []);

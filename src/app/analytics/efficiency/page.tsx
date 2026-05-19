@@ -23,6 +23,11 @@ interface Brand {
   name: string;
   slug: string;
   shopify_gross_margin_pct: number;
+  target_roas: number | null;
+  nc_share_pct: number | null;
+  ltv_3m_mult: number | null;
+  ltv_6m_mult: number | null;
+  ltv_12m_mult: number | null;
 }
 
 interface DailyPoint {
@@ -150,11 +155,20 @@ interface Params {
   dateRange: '30d' | '90d' | '180d' | '365d' | 'all';
 }
 
-const DEFAULT_PARAMS: Params = {
-  vc: 35, nc: 60, l3: 1.4, l6: 1.8, l12: 2.5,
-  hl: 60, tr: 1.2, curSpend: 1200,
-  spendMode: 'total', dateRange: '90d',
-};
+function brandDefaults(brand?: Brand): Params {
+  return {
+    vc: 100 - (brand?.shopify_gross_margin_pct ?? 62),
+    nc: brand?.nc_share_pct ?? 60,
+    l3: brand?.ltv_3m_mult ?? 1.4,
+    l6: brand?.ltv_6m_mult ?? 1.8,
+    l12: brand?.ltv_12m_mult ?? 2.5,
+    hl: 60,
+    tr: brand?.target_roas ?? 1.5,
+    curSpend: 1200,
+    spendMode: 'total',
+    dateRange: '90d',
+  };
+}
 
 function findOptimalSpend(
   V: number, K: number, h: number,
@@ -216,8 +230,8 @@ export default function EfficiencyPage() {
   const [showSettings, setShowSettings] = useState(false);
   const [goalTooltip, setGoalTooltip] = useState<string | null>(null);
 
-  // Tunable params — reset on brand switch
-  const [params, setParams] = useState<Params>(DEFAULT_PARAMS);
+  // Tunable params — initialized from brand settings, reset on brand switch
+  const [params, setParams] = useState<Params>(brandDefaults());
 
   const updateParam = (key: keyof Params, val: number | string) =>
     setParams(prev => ({ ...prev, [key]: val }));
@@ -236,7 +250,7 @@ export default function EfficiencyPage() {
 
       const { data: brandList } = await supabase
         .from('brands')
-        .select('id, name, slug, shopify_gross_margin_pct')
+        .select('id, name, slug, shopify_gross_margin_pct, target_roas, nc_share_pct, ltv_3m_mult, ltv_6m_mult, ltv_12m_mult')
         .is('archived_at', null);
 
       if (brandList) setBrands(brandList);
@@ -258,10 +272,9 @@ export default function EfficiencyPage() {
       setLoading(true);
       setDailyPoints([]);
 
-      // Reset params to defaults, then apply brand-specific overrides
+      // Reset params from brand settings
       const brand = brands.find(b => b.id === selectedBrand);
-      const vc = 100 - (brand?.shopify_gross_margin_pct ?? 62);
-      setParams(prev => ({ ...DEFAULT_PARAMS, dateRange: prev.dateRange, vc }));
+      setParams(prev => ({ ...brandDefaults(brand), dateRange: prev.dateRange }));
 
       // Build date filter
       let dateFilter: string | null = null;
