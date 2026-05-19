@@ -764,6 +764,11 @@ export default function DailyPnlPage() {
         body: JSON.stringify({ brand_id: selectedBrandId }),
       });
 
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        setSyncResult(res.status === 504 ? 'Sync timed out — data may still be updating. Try refreshing in a moment.' : `Sync failed (${res.status}): ${text.slice(0, 100)}`);
+        return;
+      }
       const data = await res.json();
 
       if (data.success) {

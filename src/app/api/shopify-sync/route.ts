@@ -10,7 +10,7 @@ import {
 } from '@/lib/redis';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 120; // Shopify pagination can take a while
+export const maxDuration = 300; // Shopify pagination + customer enrichment + ad spend sync
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -463,7 +463,7 @@ export async function POST(request: NextRequest) {
   }
 
   // ── Acquire per-brand lock so concurrent syncs can't collide ──
-  const gotLock = await acquireSyncLock(brand.id, 180);
+  const gotLock = await acquireSyncLock(brand.id, 360);
   if (!gotLock) {
     return NextResponse.json(
       { error: 'A sync is already running for this brand. Wait for it to finish.' },
