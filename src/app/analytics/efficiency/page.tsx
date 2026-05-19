@@ -7,6 +7,7 @@ import {
   TrendingUp,
   DollarSign,
   Info,
+  AlertTriangle,
   RefreshCw,
   Settings,
   ChevronDown,
@@ -28,6 +29,7 @@ interface DailyPoint {
   date: string;
   spend: number;
   rev: number;
+  ncRev: number;
   daysBack: number;
 }
 
@@ -42,6 +44,7 @@ interface GoalDef {
   key: string;
   label: string;
   desc: string;
+  tooltip: string;
 }
 
 // ─── Hill Model Math ────────────────────────────────────────────
@@ -59,8 +62,10 @@ function hillMargRoas(s: number, V: number, K: number, h: number): number {
 
 // ─── Hill Curve Fitting (two-pass grid search) ──────────────────
 
+const MIN_DATA_POINTS = 14;
+
 function fitHillCurve(points: DailyPoint[], halfLifeDays: number): HillFit {
-  if (!points.length) return { V: 1, K: 1, h: 1, r2: 0 };
+  if (points.length < MIN_DATA_POINTS) return { V: 1, K: 1, h: 1, r2: 0 };
 
   const maxS = Math.max(...points.map(p => p.spend));
   const maxR = Math.max(...points.map(p => p.rev));
@@ -126,26 +131,36 @@ function fitHillCurve(points: DailyPoint[], halfLifeDays: number): HillFit {
 // ─── Optimal Spend Finder ───────────────────────────────────────
 
 const GOALS: GoalDef[] = [
-  { key: 'maxCM', label: 'Max CM Today', desc: 'Maximize contribution margin today' },
-  { key: 'max3m', label: 'Max 3m CM', desc: 'Max CM with 3-month LTV' },
-  { key: 'max6m', label: 'Max 6m CM', desc: 'Max CM with 6-month LTV' },
-  { key: 'max12m', label: 'Max 12m CM', desc: 'Max CM with 12-month LTV' },
-  { key: 'maxRev', label: 'Max Revenue', desc: 'Maximize total revenue' },
-  { key: 'maxNCRev', label: 'Max NC Revenue', desc: 'Max new customer revenue' },
-  { key: 'targetRoas', label: 'Target ROAS', desc: 'Spend to target ROAS' },
+  { key: 'maxCM', label: 'Max CM Today', desc: 'Maximize contribution margin today',
+    tooltip: 'Finds the spend level where each additional dollar costs more than the gross profit it generates. Best for brands optimizing short-term profitability.' },
+  { key: 'max3m', label: 'Max 3m CM', desc: 'Max CM with 3-month LTV',
+    tooltip: 'Accounts for repeat purchases over 3 months, so it recommends spending more aggressively since each customer is worth more than their first order.' },
+  { key: 'max6m', label: 'Max 6m CM', desc: 'Max CM with 6-month LTV',
+    tooltip: 'Uses 6-month customer lifetime value. Higher LTV means you can afford higher CPAs, pushing the optimal spend up.' },
+  { key: 'max12m', label: 'Max 12m CM', desc: 'Max CM with 12-month LTV',
+    tooltip: 'Most aggressive — uses full 12-month LTV. Good for brands with strong retention and repeat purchase rates.' },
+  { key: 'targetRoas', label: 'Target ROAS', desc: 'Spend to target ROAS',
+    tooltip: 'Finds the maximum spend level where overall ROAS stays at or above your target. Useful for maintaining a specific efficiency floor.' },
 ];
 
 interface Params {
   vc: number; nc: number; l3: number; l6: number; l12: number;
-  hl: number; lam: number; tr: number; curSpend: number;
+  hl: number; tr: number; curSpend: number;
+  spendMode: 'total' | 'meta';
+  dateRange: '30d' | '90d' | '180d' | '365d' | 'all';
 }
+
+const DEFAULT_PARAMS: Params = {
+  vc: 35, nc: 60, l3: 1.4, l6: 1.8, l12: 2.5,
+  hl: 60, tr: 1.2, curSpend: 1200,
+  spendMode: 'total', dateRange: '90d',
+};
 
 function findOptimalSpend(
   V: number, K: number, h: number,
   goal: string, params: Params
 ): number {
   const margin = 1 - params.vc / 100;
-  const ncPct = params.nc / 100;
   const maxSearch = V * 2;
   const steps = 500;
 
@@ -168,8 +183,6 @@ function findOptimalSpend(
     case 'max3m': return bruteMax(s => cmAt(s, params.l3));
     case 'max6m': return bruteMax(s => cmAt(s, params.l6));
     case 'max12m': return bruteMax(s => cmAt(s, params.l12));
-    case 'maxRev': return bruteMax(s => hillRev(s, V, K, h));
-    case 'maxNCRev': return bruteMax(s => hillRev(s, V, K, h) * ncPct);
     case 'targetRoas': {
       for (let i = 1; i <= steps; i++) {
         const s = maxSearch * i / steps;
@@ -184,14 +197,16 @@ function findOptimalSpend(
 
 // ─── Formatting ─────────────────────────────────────────────────
 
-const fmt = (n: number, d = 0) =>
-  n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+const fmt = (n: number, d = 0) => {
+  if (!isFinite(n)) return 'N/A';
+  return n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+};
 
 // ─── Component ──────────────────────────────────────────────────
 
 export default function EfficiencyPage() {
   const router = useRouter();
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   const [loading, setLoading] = useState(true);
   const [brands, setBrands] = useState<Brand[]>([]);
@@ -199,14 +214,12 @@ export default function EfficiencyPage() {
   const [dailyPoints, setDailyPoints] = useState<DailyPoint[]>([]);
   const [selectedGoal, setSelectedGoal] = useState('maxCM');
   const [showSettings, setShowSettings] = useState(false);
+  const [goalTooltip, setGoalTooltip] = useState<string | null>(null);
 
-  // Tunable params
-  const [params, setParams] = useState<Params>({
-    vc: 35, nc: 60, l3: 1.4, l6: 1.8, l12: 2.5,
-    hl: 60, lam: 0, tr: 1.2, curSpend: 1200,
-  });
+  // Tunable params — reset on brand switch
+  const [params, setParams] = useState<Params>(DEFAULT_PARAMS);
 
-  const updateParam = (key: keyof Params, val: number) =>
+  const updateParam = (key: keyof Params, val: number | string) =>
     setParams(prev => ({ ...prev, [key]: val }));
 
   // Auth + brands
@@ -228,12 +241,9 @@ export default function EfficiencyPage() {
 
       if (brandList) setBrands(brandList);
 
-      // Set brand: use profile's brand_id, or fall back to first brand (admin case)
       const brandId = profile?.brand_id || (brandList && brandList.length > 0 ? brandList[0].id : '');
       if (brandId) {
         setSelectedBrand(brandId);
-        const brand = brandList?.find(b => b.id === brandId);
-        if (brand) updateParam('vc', 100 - brand.shopify_gross_margin_pct);
       } else {
         setLoading(false);
       }
@@ -241,30 +251,51 @@ export default function EfficiencyPage() {
     init();
   }, []);
 
-  // Load daily data
+  // Load daily data — reset params on brand switch
   useEffect(() => {
     if (!selectedBrand) return;
     async function fetchData() {
       setLoading(true);
+      setDailyPoints([]);
 
-      // Update VC from brand
+      // Reset params to defaults, then apply brand-specific overrides
       const brand = brands.find(b => b.id === selectedBrand);
-      if (brand) updateParam('vc', 100 - brand.shopify_gross_margin_pct);
+      const vc = 100 - (brand?.shopify_gross_margin_pct ?? 62);
+      setParams(prev => ({ ...DEFAULT_PARAMS, dateRange: prev.dateRange, vc }));
 
-      const { data } = await supabase
+      // Build date filter
+      let dateFilter: string | null = null;
+      const now = new Date();
+      switch (params.dateRange) {
+        case '30d': { const d = new Date(now); d.setDate(d.getDate() - 30); dateFilter = d.toISOString().split('T')[0]; break; }
+        case '90d': { const d = new Date(now); d.setDate(d.getDate() - 90); dateFilter = d.toISOString().split('T')[0]; break; }
+        case '180d': { const d = new Date(now); d.setDate(d.getDate() - 180); dateFilter = d.toISOString().split('T')[0]; break; }
+        case '365d': { const d = new Date(now); d.setDate(d.getDate() - 365); dateFilter = d.toISOString().split('T')[0]; break; }
+      }
+
+      let query = supabase
         .from('daily_pnl')
-        .select('date, nc_revenue, rc_revenue, gross_sales, meta_spend')
+        .select('date, nc_revenue, rc_revenue, gross_sales, meta_spend, google_spend, other_spend')
         .eq('brand_id', selectedBrand)
         .order('date', { ascending: true });
 
+      if (dateFilter) query = query.gte('date', dateFilter);
+
+      const { data } = await query;
+
       if (data) {
-        const now = new Date();
         const points: DailyPoint[] = data.map(row => {
           const d = new Date(row.date);
-          const spend = Number(row.meta_spend || 0);
-          const rev = Number(row.gross_sales || 0);
+          const metaSpend = Number(row.meta_spend || 0);
+          const googleSpend = Number(row.google_spend || 0);
+          const otherSpend = Number(row.other_spend || 0);
+          const spend = params.spendMode === 'total'
+            ? metaSpend + googleSpend + otherSpend
+            : metaSpend;
+          const rev = Number(row.nc_revenue || 0);
+          const ncRev = Number(row.nc_revenue || 0);
           const daysBack = Math.floor((now.getTime() - d.getTime()) / 86400000);
-          return { date: row.date, spend, rev, daysBack };
+          return { date: row.date, spend, rev, ncRev, daysBack };
         }).filter(p => p.spend > 0 && p.rev > 0);
 
         setDailyPoints(points);
@@ -273,24 +304,19 @@ export default function EfficiencyPage() {
         if (points.length >= 7) {
           const recent = points.slice(-7);
           const avgSpend = recent.reduce((s, p) => s + p.spend, 0) / recent.length;
-          updateParam('curSpend', Math.round(avgSpend));
+          setParams(prev => ({ ...prev, curSpend: Math.round(avgSpend) }));
         }
       }
       setLoading(false);
     }
     fetchData();
-  }, [selectedBrand]);
+  }, [selectedBrand, params.dateRange, params.spendMode]);
 
   // Compute everything
   const analysis = useMemo(() => {
-    if (!dailyPoints.length) return null;
+    if (dailyPoints.length < MIN_DATA_POINTS) return null;
 
-    // Apply adstock
-    const adjustedPoints = params.lam > 0
-      ? dailyPoints.map(p => ({ ...p, spend: p.spend / (1 - params.lam) }))
-      : dailyPoints;
-
-    const fit = fitHillCurve(adjustedPoints, params.hl);
+    const fit = fitHillCurve(dailyPoints, params.hl);
     const { V, K, h, r2 } = fit;
     const margin = 1 - params.vc / 100;
 
@@ -301,22 +327,23 @@ export default function EfficiencyPage() {
     const optROAS = optSpend > 0 ? optRev / optSpend : 0;
     const curCM = curRev * margin - params.curSpend;
     const optCM = optRev * margin - optSpend;
-    const curMROAS = hillMargRoas(params.curSpend, V, K, h);
+    const curMROAS = params.curSpend > 0 ? hillMargRoas(params.curSpend, V, K, h) : 0;
     const spendDelta = params.curSpend > 0 ? ((optSpend / params.curSpend) - 1) * 100 : 0;
 
-    // Curve data for display
-    const maxS = Math.max(...adjustedPoints.map(d => d.spend), optSpend) * 1.3;
+    // Curve data for chart
+    const maxS = Math.max(...dailyPoints.map(d => d.spend), optSpend) * 1.3;
     const curveData = Array.from({ length: 200 }, (_, i) => {
       const s = maxS * (i + 1) / 200;
       return { spend: s, rev: hillRev(s, V, K, h), mroas: hillMargRoas(s, V, K, h) };
     });
 
-    // Spend ladder
+    // Spend ladder — limit to ~20 rows centered around current and optimal
     const spendSet = new Set<number>();
-    for (let s = 200; s <= maxS; s += 200) spendSet.add(Math.round(s));
+    const stepSize = Math.max(100, Math.round(maxS / 25 / 100) * 100);
+    for (let s = stepSize; s <= maxS; s += stepSize) spendSet.add(Math.round(s));
     spendSet.add(Math.round(params.curSpend));
     spendSet.add(Math.round(optSpend));
-    const ladder = [...spendSet].sort((a, b) => a - b).map(s => {
+    const ladder = Array.from(spendSet).sort((a, b) => a - b).map(s => {
       const rev = hillRev(s, V, K, h);
       const roas = s > 0 ? rev / s : 0;
       const mr = hillMargRoas(s, V, K, h);
@@ -324,16 +351,54 @@ export default function EfficiencyPage() {
       const cmPct = rev > 0 ? cm / rev * 100 : 0;
       const cm3m = rev * margin * params.l3 - s;
       const cm12m = rev * margin * params.l12 - s;
-      const isOpt = Math.abs(s - optSpend) < 50;
-      const isCur = Math.abs(s - params.curSpend) < 50;
+      const isOpt = Math.abs(s - optSpend) < stepSize * 0.5;
+      const isCur = Math.abs(s - params.curSpend) < stepSize * 0.5;
       return { spend: s, rev, roas, mr, cm, cmPct, cm3m, cm12m, isOpt, isCur };
     });
 
     return {
       fit, optSpend, optRev, curRev, curROAS, optROAS, curCM, optCM,
-      curMROAS, spendDelta, curveData, ladder, adjustedPoints, maxS,
+      curMROAS, spendDelta, curveData, ladder, maxS,
     };
   }, [dailyPoints, params, selectedGoal]);
+
+  // ─── Chart rendering (SVG) ──────────────────────────────────────
+  const chartSvg = useMemo(() => {
+    if (!analysis) return null;
+    const { curveData, maxS, fit } = analysis;
+    const W = 800, H = 340, PAD = { top: 20, right: 60, bottom: 40, left: 60 };
+    const cw = W - PAD.left - PAD.right;
+    const ch = H - PAD.top - PAD.bottom;
+    const maxRev = Math.max(...curveData.map(d => d.rev));
+    const maxMroas = Math.min(Math.max(...curveData.map(d => d.mroas)), 20);
+
+    const sx = (s: number) => PAD.left + (s / maxS) * cw;
+    const syRev = (r: number) => PAD.top + ch - (r / maxRev) * ch;
+    const syMr = (m: number) => PAD.top + ch - (Math.min(m, maxMroas) / maxMroas) * ch;
+
+    // Revenue curve path
+    const revPath = curveData.map((d, i) =>
+      `${i === 0 ? 'M' : 'L'}${sx(d.spend).toFixed(1)},${syRev(d.rev).toFixed(1)}`
+    ).join(' ');
+
+    // Marginal ROAS path
+    const mroasPath = curveData.map((d, i) =>
+      `${i === 0 ? 'M' : 'L'}${sx(d.spend).toFixed(1)},${syMr(d.mroas).toFixed(1)}`
+    ).join(' ');
+
+    // Y-axis ticks
+    const revTicks = [0, 0.25, 0.5, 0.75, 1].map(p => ({ val: maxRev * p, y: syRev(maxRev * p) }));
+    const mrTicks = [0, 0.25, 0.5, 0.75, 1].map(p => ({ val: maxMroas * p, y: syMr(maxMroas * p) }));
+
+    // X-axis ticks
+    const xTickCount = 6;
+    const xTicks = Array.from({ length: xTickCount + 1 }, (_, i) => {
+      const val = maxS * i / xTickCount;
+      return { val, x: sx(val) };
+    });
+
+    return { revPath, mroasPath, revTicks, mrTicks, xTicks, W, H, PAD, sx, syRev, syMr, maxRev, maxMroas };
+  }, [analysis]);
 
   if (loading && !analysis) {
     return (
@@ -346,6 +411,9 @@ export default function EfficiencyPage() {
   }
 
   const goalInfo = GOALS.find(g => g.key === selectedGoal)!;
+  const poorFit = analysis && analysis.fit.r2 < 0.5;
+  const cautionFit = analysis && analysis.fit.r2 >= 0.5 && analysis.fit.r2 < 0.7;
+  const insufficientData = dailyPoints.length > 0 && dailyPoints.length < MIN_DATA_POINTS;
 
   return (
     <Navbar>
@@ -355,7 +423,7 @@ export default function EfficiencyPage() {
           <div>
             <h1 className="text-2xl font-semibold text-white">Marginal Efficiency Curve</h1>
             <p className="text-sm text-neutral-500 mt-1">
-              Hill saturation model — find optimal daily Meta spend for each business goal
+              Hill saturation model — find optimal daily ad spend for each business goal
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -369,6 +437,30 @@ export default function EfficiencyPage() {
                 <option key={b.id} value={b.id}>{b.name}</option>
               ))}
             </select>
+
+            {/* Spend mode toggle */}
+            <select
+              value={params.spendMode}
+              onChange={e => updateParam('spendMode', e.target.value)}
+              className="bg-[#1a1a1a] border border-neutral-700 text-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#C8B89A]"
+            >
+              <option value="total">Total Ad Spend</option>
+              <option value="meta">Meta Only</option>
+            </select>
+
+            {/* Date range */}
+            <select
+              value={params.dateRange}
+              onChange={e => updateParam('dateRange', e.target.value)}
+              className="bg-[#1a1a1a] border border-neutral-700 text-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#C8B89A]"
+            >
+              <option value="30d">Last 30 days</option>
+              <option value="90d">Last 90 days</option>
+              <option value="180d">Last 180 days</option>
+              <option value="365d">Last 365 days</option>
+              <option value="all">All time</option>
+            </select>
+
             <button
               onClick={() => setShowSettings(!showSettings)}
               className="flex items-center gap-1 bg-[#1a1a1a] border border-neutral-700 rounded-lg px-3 py-2 text-sm hover:border-[#C8B89A] transition-colors"
@@ -394,7 +486,36 @@ export default function EfficiencyPage() {
               <ParamInput label="LTV 3m ×" value={params.l3} onChange={v => updateParam('l3', v)} step={0.05} />
               <ParamInput label="LTV 6m ×" value={params.l6} onChange={v => updateParam('l6', v)} step={0.05} />
               <ParamInput label="LTV 12m ×" value={params.l12} onChange={v => updateParam('l12', v)} step={0.05} />
-              <ParamInput label="Adstock λ" value={params.lam} onChange={v => updateParam('lam', v)} step={0.05} min={0} max={0.95} />
+            </div>
+          </div>
+        )}
+
+        {/* R² Warning Banners */}
+        {poorFit && (
+          <div className="flex items-center gap-3 bg-red-500/10 border border-red-500/20 rounded-xl p-4 mb-6">
+            <AlertTriangle size={18} className="text-red-400 shrink-0" />
+            <div className="text-sm text-red-400">
+              <strong>Low model fit (R² = {fmt(analysis!.fit.r2, 3)})</strong> — the Hill curve is a poor fit for this data.
+              Optimal spend recommendations may be unreliable. Consider using a longer date range or checking for data quality issues.
+            </div>
+          </div>
+        )}
+        {cautionFit && (
+          <div className="flex items-center gap-3 bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-4 mb-6">
+            <AlertTriangle size={18} className="text-yellow-400 shrink-0" />
+            <div className="text-sm text-yellow-400">
+              <strong>Moderate model fit (R² = {fmt(analysis!.fit.r2, 3)})</strong> — treat recommendations as directional guidance, not precise targets.
+            </div>
+          </div>
+        )}
+
+        {/* Insufficient data warning */}
+        {insufficientData && (
+          <div className="flex items-center gap-3 bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-4 mb-6">
+            <AlertTriangle size={18} className="text-yellow-400 shrink-0" />
+            <div className="text-sm text-yellow-400">
+              Only {dailyPoints.length} data points available — need at least {MIN_DATA_POINTS} days of spend data to fit a reliable curve.
+              Try a longer date range.
             </div>
           </div>
         )}
@@ -402,17 +523,26 @@ export default function EfficiencyPage() {
         {/* Goal Tabs */}
         <div className="flex flex-wrap gap-2 mb-6">
           {GOALS.map(g => (
-            <button
-              key={g.key}
-              onClick={() => setSelectedGoal(g.key)}
-              className={`px-4 py-1.5 rounded-lg text-xs font-medium transition-all border ${
-                g.key === selectedGoal
-                  ? 'bg-[#C8B89A] text-[#0A0A0A] border-[#C8B89A] font-semibold'
-                  : 'bg-[#111] border-[#1a1a1a] text-neutral-500 hover:border-[#C8B89A] hover:text-[#C8B89A]'
-              }`}
-            >
-              {g.label}
-            </button>
+            <div key={g.key} className="relative">
+              <button
+                onClick={() => setSelectedGoal(g.key)}
+                onMouseEnter={() => setGoalTooltip(g.key)}
+                onMouseLeave={() => setGoalTooltip(null)}
+                className={`px-4 py-1.5 rounded-lg text-xs font-medium transition-all border ${
+                  g.key === selectedGoal
+                    ? 'bg-[#C8B89A] text-[#0A0A0A] border-[#C8B89A] font-semibold'
+                    : 'bg-[#111] border-[#1a1a1a] text-neutral-500 hover:border-[#C8B89A] hover:text-[#C8B89A]'
+                }`}
+              >
+                {g.label}
+              </button>
+              {goalTooltip === g.key && (
+                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 rounded-lg text-xs text-neutral-300 z-50"
+                  style={{ backgroundColor: '#1a1a1a', border: '1px solid rgba(200,184,154,0.2)', boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
+                  {g.tooltip}
+                </div>
+              )}
+            </div>
           ))}
         </div>
 
@@ -450,16 +580,110 @@ export default function EfficiencyPage() {
               />
             </div>
 
+            {/* ─── Efficiency Curve Chart ──────────────────────────── */}
+            {chartSvg && (
+              <div className="bg-[#111] border border-[#1a1a1a] rounded-xl p-4 mb-6">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold text-white">Efficiency Curve</h3>
+                  <div className="flex items-center gap-4 text-[10px]">
+                    <span className="flex items-center gap-1.5"><span className="w-3 h-0.5 rounded" style={{ backgroundColor: '#C8B89A' }}></span> Revenue</span>
+                    <span className="flex items-center gap-1.5"><span className="w-3 h-0.5 rounded" style={{ backgroundColor: '#5B8DEE' }}></span> Marginal ROAS</span>
+                    <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-400"></span> Optimal</span>
+                    <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-blue-400"></span> Current</span>
+                  </div>
+                </div>
+                <svg viewBox={`0 0 ${chartSvg.W} ${chartSvg.H}`} className="w-full" style={{ overflow: 'visible' }}>
+                  {/* Grid lines */}
+                  {chartSvg.revTicks.map((t, i) => (
+                    <line key={`gy-${i}`} x1={chartSvg.PAD.left} x2={chartSvg.W - chartSvg.PAD.right} y1={t.y} y2={t.y}
+                      stroke="rgba(255,255,255,0.04)" strokeWidth={1} />
+                  ))}
+
+                  {/* Scatter plot of actual data */}
+                  {dailyPoints.map((p, i) => (
+                    <circle key={`dp-${i}`} cx={chartSvg.sx(p.spend)} cy={chartSvg.syRev(p.rev)}
+                      r={2.5} fill="rgba(200,184,154,0.25)" />
+                  ))}
+
+                  {/* Revenue curve */}
+                  <path d={chartSvg.revPath} fill="none" stroke="#C8B89A" strokeWidth={2.5} />
+
+                  {/* Marginal ROAS curve */}
+                  <path d={chartSvg.mroasPath} fill="none" stroke="#5B8DEE" strokeWidth={1.5} strokeDasharray="6,3" />
+
+                  {/* Marginal ROAS = 1 line */}
+                  {1 <= chartSvg.maxMroas && (
+                    <line x1={chartSvg.PAD.left} x2={chartSvg.W - chartSvg.PAD.right}
+                      y1={chartSvg.syMr(1)} y2={chartSvg.syMr(1)}
+                      stroke="rgba(248,113,113,0.3)" strokeWidth={1} strokeDasharray="4,4" />
+                  )}
+
+                  {/* Current spend line */}
+                  <line x1={chartSvg.sx(params.curSpend)} x2={chartSvg.sx(params.curSpend)}
+                    y1={chartSvg.PAD.top} y2={chartSvg.H - chartSvg.PAD.bottom}
+                    stroke="#60A5FA" strokeWidth={1.5} strokeDasharray="4,3" />
+                  <text x={chartSvg.sx(params.curSpend)} y={chartSvg.PAD.top - 6}
+                    textAnchor="middle" fill="#60A5FA" fontSize={9}>Current</text>
+
+                  {/* Optimal spend line */}
+                  <line x1={chartSvg.sx(analysis.optSpend)} x2={chartSvg.sx(analysis.optSpend)}
+                    y1={chartSvg.PAD.top} y2={chartSvg.H - chartSvg.PAD.bottom}
+                    stroke="#34D399" strokeWidth={1.5} strokeDasharray="4,3" />
+                  <text x={chartSvg.sx(analysis.optSpend)} y={chartSvg.PAD.top - 6}
+                    textAnchor="middle" fill="#34D399" fontSize={9}>Optimal</text>
+
+                  {/* Left Y-axis labels (Revenue) */}
+                  {chartSvg.revTicks.map((t, i) => (
+                    <text key={`rl-${i}`} x={chartSvg.PAD.left - 8} y={t.y + 3}
+                      textAnchor="end" fill="#888" fontSize={9}>
+                      ${t.val >= 1000 ? `${(t.val / 1000).toFixed(0)}k` : fmt(t.val)}
+                    </text>
+                  ))}
+
+                  {/* Right Y-axis labels (MROAS) */}
+                  {chartSvg.mrTicks.map((t, i) => (
+                    <text key={`ml-${i}`} x={chartSvg.W - chartSvg.PAD.right + 8} y={t.y + 3}
+                      textAnchor="start" fill="#5B8DEE" fontSize={9}>
+                      {t.val.toFixed(1)}×
+                    </text>
+                  ))}
+
+                  {/* X-axis labels */}
+                  {chartSvg.xTicks.map((t, i) => (
+                    <text key={`xl-${i}`} x={t.x} y={chartSvg.H - chartSvg.PAD.bottom + 16}
+                      textAnchor="middle" fill="#888" fontSize={9}>
+                      ${t.val >= 1000 ? `${(t.val / 1000).toFixed(0)}k` : fmt(t.val)}
+                    </text>
+                  ))}
+
+                  {/* Axis labels */}
+                  <text x={chartSvg.W / 2} y={chartSvg.H - 4} textAnchor="middle" fill="#666" fontSize={10}>
+                    Daily {params.spendMode === 'total' ? 'Ad' : 'Meta'} Spend
+                  </text>
+                </svg>
+              </div>
+            )}
+
             {/* Curve Fit Info */}
             <div className="bg-[#111] border border-[#1a1a1a] rounded-xl p-4 mb-6">
               <div className="text-xs font-semibold mb-2">
                 Hill Curve Fit: r = V·s<sup>h</sup> / (K<sup>h</sup> + s<sup>h</sup>)
               </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs text-neutral-400">
-                <div>V (ceiling) = <span className="text-white font-semibold">${fmt(analysis.fit.V)}</span></div>
-                <div>K (half-sat) = <span className="text-white font-semibold">${fmt(analysis.fit.K)}</span></div>
-                <div>h (shape) = <span className="text-white font-semibold">{fmt(analysis.fit.h, 2)}</span></div>
-                <div>R² = <span className="text-white font-semibold">{fmt(analysis.fit.r2, 4)}</span></div>
+                <div title="Maximum possible daily revenue at infinite spend">
+                  V (ceiling) = <span className="text-white font-semibold">${fmt(analysis.fit.V)}</span>
+                </div>
+                <div title="The spend level where you achieve half of maximum revenue">
+                  K (half-sat) = <span className="text-white font-semibold">${fmt(analysis.fit.K)}</span>
+                </div>
+                <div title="Curve steepness — higher h means a sharper inflection point">
+                  h (shape) = <span className="text-white font-semibold">{fmt(analysis.fit.h, 2)}</span>
+                </div>
+                <div>
+                  R² = <span className={`font-semibold ${poorFit ? 'text-red-400' : cautionFit ? 'text-yellow-400' : 'text-white'}`}>
+                    {fmt(analysis.fit.r2, 4)}
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -516,17 +740,23 @@ export default function EfficiencyPage() {
             <div className="flex items-start gap-2 bg-[#111] border border-[#1a1a1a] rounded-xl p-4">
               <Info size={16} className="text-[#C8B89A] mt-0.5 shrink-0" />
               <div className="text-xs text-neutral-400">
-                Fitted on <strong className="text-neutral-300">{analysis.adjustedPoints.length}</strong> daily data points.
-                Recency half-life: {params.hl}d. Adstock decay: λ={params.lam}.
+                Fitted on <strong className="text-neutral-300">{dailyPoints.length}</strong> daily data points
+                ({params.spendMode === 'total' ? 'total ad spend' : 'Meta spend only'} vs new customer revenue).
+                Recency half-life: {params.hl}d.
                 The Hill model generalizes Michaelis-Menten by adding shape parameter h — when h=1, it reduces to the standard saturation curve.
                 Higher h means a sharper inflection point.
+                <br />
+                <span className="text-neutral-500 mt-1 block">
+                  Note: This model attributes new customer revenue to ad spend and does not separate channel-specific attribution.
+                  Use as directional guidance for budget allocation.
+                </span>
               </div>
             </div>
           </>
         )}
 
         {/* Empty state */}
-        {!analysis && !loading && (
+        {!analysis && !loading && !insufficientData && (
           <div className="text-center py-20 text-neutral-500">
             <TrendingUp size={48} className="mx-auto mb-4 opacity-30" />
             <p className="text-lg">No spend data available</p>
