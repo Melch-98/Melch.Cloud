@@ -43,6 +43,8 @@ interface Brand {
   slug: string;
   meta_ad_account_id?: string;
   google_ads_customer_id?: string;
+  target_roas?: number;
+  roas_floor?: number;
 }
 
 interface DailyMetric {
@@ -60,6 +62,7 @@ interface Campaign {
   campaignName: string;
   campaignType: string;
   status: string;
+  frequency: number;
   spend: number;
   impressions: number;
   clicks: number;
@@ -73,6 +76,8 @@ interface Campaign {
   reach: number;
   daily: DailyMetric[];
 }
+
+type StatusFilter = 'all' | 'active' | 'paused';
 
 type DateRange = 'last_7d' | 'last_14d' | 'last_30d' | 'last_90d' | 'this_month';
 type SortKey = 'spend' | 'roas' | 'purchases' | 'purchaseValue' | 'ctr' | 'cpc' | 'cpm' | 'impressions' | 'clicks' | 'cpa';
@@ -339,6 +344,7 @@ export default function CampaignPerformancePage() {
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [selectedCampaign, setSelectedCampaign] = useState<string | null>(null);
   const [chartMetric, setChartMetric] = useState<'spend' | 'roas' | 'purchases'>('spend');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');
 
   // ── Auth & brands ──
   useEffect(() => {
@@ -359,7 +365,7 @@ export default function CampaignPerformancePage() {
 
       let brandsQuery = supabase
         .from('brands')
-        .select('id, name, slug, meta_ad_account_id, google_ads_customer_id')
+        .select('id, name, slug, meta_ad_account_id, google_ads_customer_id, target_roas, roas_floor')
         .is('archived_at', null)
         .order('name');
       // Founders only see their own brand
@@ -433,17 +439,29 @@ export default function CampaignPerformancePage() {
   // ── Computed ──
   const selectedBrand = brands.find(b => b.id === selectedBrandId);
 
+  // Brand ROAS thresholds — from centralized settings
+  const targetRoas = selectedBrand?.target_roas ?? 1.5;
+  const roasFloor = selectedBrand?.roas_floor ?? 1.5;
+
   const filteredCampaigns = useMemo(() => {
     let filtered = campaigns.filter(c => c.spend > 0);
     if (platformFilter !== 'all') {
       filtered = filtered.filter(c => c.platform === platformFilter);
+    }
+    if (statusFilter !== 'all') {
+      filtered = filtered.filter(c => {
+        const s = c.status?.toUpperCase() || '';
+        if (statusFilter === 'active') return s === 'ACTIVE' || s === 'ENABLED';
+        if (statusFilter === 'paused') return s === 'PAUSED';
+        return true;
+      });
     }
     return filtered.sort((a, b) => {
       const av = a[sortKey] as number;
       const bv = b[sortKey] as number;
       return sortDir === 'desc' ? bv - av : av - bv;
     });
-  }, [campaigns, platformFilter, sortKey, sortDir]);
+  }, [campaigns, platformFilter, statusFilter, sortKey, sortDir]);
 
   // Aggregate metrics
   const totals = useMemo(() => {
@@ -628,6 +646,28 @@ export default function CampaignPerformancePage() {
               ))}
             </div>
 
+            {/* Status filter */}
+            <div className="flex items-center rounded-lg overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
+              {([
+                { value: 'active' as StatusFilter, label: 'Active' },
+                { value: 'paused' as StatusFilter, label: 'Paused' },
+                { value: 'all' as StatusFilter, label: 'All' },
+              ]).map(sf => (
+                <button
+                  key={sf.value}
+                  onClick={() => setStatusFilter(sf.value)}
+                  className="px-3 py-1.5 text-[11px] font-semibold transition-all"
+                  style={{
+                    backgroundColor: statusFilter === sf.value ? 'rgba(200,184,154,0.12)' : 'transparent',
+                    color: statusFilter === sf.value ? GOLD : '#555',
+                    borderRight: '1px solid rgba(255,255,255,0.04)',
+                  }}
+                >
+                  {sf.label}
+                </button>
+              ))}
+            </div>
+
             {/* Refresh */}
             <button
               onClick={fetchCampaigns}
@@ -748,14 +788,14 @@ export default function CampaignPerformancePage() {
                     label="ROAS"
                     value={`${fmtDec(totals.roas)}x`}
                     sub="Revenue ÷ Spend"
-                    accent={totals.roas >= 2 ? 'green' : totals.roas >= 1 ? 'gold' : 'red'}
+                    accent={totals.roas >= targetRoas ? 'green' : totals.roas >= roasFloor ? 'gold' : 'red'}
                     sections={[
                       {
                         title: 'Blended ROAS Calculation',
                         lines: [
                           { label: 'Total Revenue', value: fmtCurrency(totals.purchaseValue), icon: '💰', accent: '#10B981' },
                           { label: 'Total Spend', value: fmtCurrency(totals.spend), icon: '📣', accent: GOLD },
-                          { label: 'Blended ROAS', value: `${fmtDec(totals.roas)}x`, divider: true, bold: true, accent: totals.roas >= 2 ? '#10B981' : totals.roas >= 1 ? GOLD : '#ef4444' },
+                          { label: 'Blended ROAS', value: `${fmtDec(totals.roas)}x`, divider: true, bold: true, accent: totals.roas >= targetRoas ? '#10B981' : totals.roas >= roasFloor ? GOLD : '#ef4444' },
                         ],
                       },
                       {
@@ -1112,7 +1152,7 @@ export default function CampaignPerformancePage() {
                               {fmtCurrency(c.purchaseValue)}
                             </td>
                             <td className="px-3 py-3 text-right text-xs font-bold tabular-nums" style={{
-                              color: c.roas >= 3 ? '#10B981' : c.roas >= 1.5 ? GOLD : '#ef4444',
+                              color: c.roas >= targetRoas ? '#10B981' : c.roas >= roasFloor ? GOLD : '#ef4444',
                             }}>
                               {fmtDec(c.roas)}x
                             </td>

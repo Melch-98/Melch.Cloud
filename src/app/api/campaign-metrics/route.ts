@@ -115,7 +115,7 @@ export async function GET(request: NextRequest) {
   if (brand.meta_ad_account_id && brand.meta_ad_account_id.trim() && metaToken) {
     try {
       const metaTimeRange = encodeURIComponent(JSON.stringify(dateRangeToMeta(dateRange)));
-      const metaFields = 'campaign_id,campaign_name,campaign.objective,campaign.effective_status,impressions,clicks,spend,cpc,cpm,ctr,reach,frequency,actions,action_values';
+      const metaFields = 'campaign_id,campaign_name,impressions,clicks,spend,cpc,cpm,ctr,reach,frequency,actions,action_values';
       const firstUrl = `https://graph.facebook.com/v21.0/${brand.meta_ad_account_id}/insights?` +
         `level=campaign&time_range=${metaTimeRange}` +
         `&time_increment=1` +
@@ -145,6 +145,25 @@ export async function GET(request: NextRequest) {
           if (!byCampaign.has(id)) byCampaign.set(id, []);
           byCampaign.get(id)!.push(row);
         }
+
+        // Fetch campaign-level metadata (objective, status) in one batch
+        const campaignIds = Array.from(byCampaign.keys());
+        const campaignMeta: Record<string, { objective: string; status: string }> = {};
+        try {
+          const idsParam = campaignIds.join(',');
+          const metaInfoRes = await fetch(
+            `https://graph.facebook.com/v21.0/?ids=${idsParam}&fields=objective,effective_status&access_token=${metaToken}`
+          );
+          if (metaInfoRes.ok) {
+            const metaInfo = await metaInfoRes.json();
+            for (const [id, info] of Object.entries(metaInfo as Record<string, any>)) {
+              campaignMeta[id] = {
+                objective: info.objective || 'UNKNOWN',
+                status: info.effective_status || 'UNKNOWN',
+              };
+            }
+          }
+        } catch { /* non-fatal — fall back to UNKNOWN */ }
 
         for (const [campaignId, rows] of byCampaign) {
           let totalSpend = 0, totalImpressions = 0, totalClicks = 0;
@@ -178,9 +197,9 @@ export async function GET(request: NextRequest) {
           // Skip campaigns with no spend
           if (totalSpend <= 0) continue;
 
-          // Extract objective and status from the campaign nested object
-          const objective = rows[0]['campaign.objective'] || rows[0].campaign?.objective || 'UNKNOWN';
-          const effectiveStatus = rows[0]['campaign.effective_status'] || rows[0].campaign?.effective_status || 'UNKNOWN';
+          const meta = campaignMeta[campaignId] || { objective: 'UNKNOWN', status: 'UNKNOWN' };
+          const objective = meta.objective;
+          const effectiveStatus = meta.status;
           // Calculate blended frequency (weighted by impressions)
           let totalFreqWeighted = 0;
           for (const row of rows) {
