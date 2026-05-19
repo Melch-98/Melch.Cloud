@@ -78,6 +78,10 @@ export async function POST(request: NextRequest) {
       'google_ads_customer_id', 'meta_ad_account_id', 'website_url',
       'shopify_store_domain', 'shopify_client_id', 'shopify_client_secret',
       'shopify_gross_margin_pct',
+      'target_roas', 'roas_floor', 'nc_share_pct',
+      'ltv_3m_mult', 'ltv_6m_mult', 'ltv_12m_mult',
+      'payment_processing_pct', 'returns_rate_pct', 'shipping_cost_per_order',
+      'creative_cost_static', 'creative_cost_video',
     ];
     if (!allowedFields.includes(field)) {
       return NextResponse.json({ error: `Field ${field} not allowed` }, { status: 400 });
@@ -98,6 +102,10 @@ export async function POST(request: NextRequest) {
       'google_ads_customer_id', 'meta_ad_account_id', 'website_url',
       'shopify_store_domain', 'shopify_client_id', 'shopify_client_secret',
       'shopify_gross_margin_pct', 'name', 'slug',
+      'target_roas', 'roas_floor', 'nc_share_pct',
+      'ltv_3m_mult', 'ltv_6m_mult', 'ltv_12m_mult',
+      'payment_processing_pct', 'returns_rate_pct', 'shipping_cost_per_order',
+      'creative_cost_static', 'creative_cost_video',
     ];
     const update: Record<string, any> = {};
     for (const [k, v] of Object.entries(fields)) {

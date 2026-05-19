@@ -300,9 +300,19 @@ function aggregateOrdersByDay(orders: ShopifyOrder[]): Map<string, DayBucket> {
   const firstOrderIds = new Set<number>();
   for (const [, custOrds] of customerOrders) {
     custOrds.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-    const lifetimeCount = (custOrds[0] as ShopifyOrder & { lifetimeOrdersCount?: number }).lifetimeOrdersCount ?? 0;
-    if (lifetimeCount > 0 && lifetimeCount <= custOrds.length) {
-      firstOrderIds.add(custOrds[0].id);
+    const enriched = custOrds[0] as ShopifyOrder & { lifetimeOrdersCount?: number };
+    const lifetimeCount = enriched.lifetimeOrdersCount ?? 0;
+    if (lifetimeCount > 0) {
+      // Enrichment succeeded — use reliable lifetime count
+      if (lifetimeCount <= custOrds.length) {
+        firstOrderIds.add(custOrds[0].id);
+      }
+    } else {
+      // Enrichment failed (lifetimeCount=0) — fall back to embedded orders_count
+      const embeddedCount = custOrds[0].customer?.orders_count ?? 0;
+      if (embeddedCount <= 1 || embeddedCount <= custOrds.length) {
+        firstOrderIds.add(custOrds[0].id);
+      }
     }
   }
 
