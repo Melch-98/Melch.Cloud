@@ -427,25 +427,26 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Resolve auth: prefer public-app OAuth token from shopify_stores (the App
-  // Store install flow), fall back to custom distribution client credentials.
+  // Resolve Shopify auth (skip for spend-only mode)
   let oauthAccessToken: string | null = null;
-  {
-    const { data: storeRow } = await supabase
-      .from('shopify_stores')
-      .select('access_token, uninstalled_at')
-      .eq('shop_domain', brand.shopify_store_domain)
-      .maybeSingle();
-    if (storeRow?.access_token && !storeRow.uninstalled_at) {
-      oauthAccessToken = storeRow.access_token;
+  if (!spendOnly) {
+    if (brand.shopify_store_domain) {
+      const { data: storeRow } = await supabase
+        .from('shopify_stores')
+        .select('access_token, uninstalled_at')
+        .eq('shop_domain', brand.shopify_store_domain)
+        .maybeSingle();
+      if (storeRow?.access_token && !storeRow.uninstalled_at) {
+        oauthAccessToken = storeRow.access_token;
+      }
     }
-  }
 
-  if (!oauthAccessToken && (!brand.shopify_client_id || !brand.shopify_client_secret)) {
-    return NextResponse.json(
-      { error: 'Shopify not connected for this brand. Install the Melch.Cloud app on your store first.' },
-      { status: 400 }
-    );
+    if (!oauthAccessToken && (!brand.shopify_client_id || !brand.shopify_client_secret)) {
+      return NextResponse.json(
+        { error: 'Shopify not connected for this brand. Install the Melch.Cloud app on your store first.' },
+        { status: 400 }
+      );
+    }
   }
 
   // ── Rate limit: 5 syncs per minute per brand ──
