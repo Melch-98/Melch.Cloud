@@ -650,8 +650,13 @@ export default function DailyPnlPage() {
       setFetchingData(true);
       setFetchError(null);
       try {
-        // Fetch Shopify data and saved settings in parallel
-        const [pnlRes, settingsRes] = await Promise.all([
+        // Fetch brand margin directly (not cached), P&L data, and saved settings in parallel
+        const [brandRes, pnlRes, settingsRes] = await Promise.all([
+          supabase
+            .from('brands')
+            .select('gross_margin_pct')
+            .eq('id', selectedBrandId)
+            .single(),
           fetch(
             `/api/shopify-sync?brand_id=${selectedBrandId}&year=${currentYear}`,
             { headers: { Authorization: `Bearer ${authToken}` } }
@@ -661,6 +666,11 @@ export default function DailyPnlPage() {
             { headers: { Authorization: `Bearer ${authToken}` } }
           ),
         ]);
+
+        // Always use the brand's current margin — single source of truth
+        if (brandRes.data?.gross_margin_pct != null) {
+          setGrossMargin(brandRes.data.gross_margin_pct);
+        }
 
         const pnlData = await pnlRes.json();
         const settingsData = await settingsRes.json();
@@ -673,8 +683,6 @@ export default function DailyPnlPage() {
           const yearData = buildYearData(pnlData.rows, currentYear);
           setLiveData(yearData);
           setLiveDataYear(currentYear);
-          // Use brand default margin as baseline
-          if (pnlData.gross_margin_pct) setGrossMargin(pnlData.gross_margin_pct);
         } else {
           setLiveData(null);
           setLiveDataYear(null);
