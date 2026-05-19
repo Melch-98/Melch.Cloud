@@ -997,8 +997,6 @@ export default function DailyPnlPage() {
 
   // ─── Preset buttons ──────────────────────────────────────
 
-  const marginPresets = [40, 50, 60, 70, 80];
-  const activePreset = marginPresets.find((p) => Math.abs(grossMargin - p) < 3);
 
   // ─── Loading state ────────────────────────────────────────
 
@@ -1198,25 +1196,12 @@ export default function DailyPnlPage() {
               {/* ── Left: Inputs ── */}
               <div className="flex items-center flex-wrap gap-x-1 gap-y-2">
 
-                {/* Margin */}
+                {/* Margin (read-only — set on Team page) */}
                 <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg" style={{ background: 'rgba(255,255,255,0.02)' }}>
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#555' }}>Margin</span>
-                  <div className="flex items-center rounded-md" style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(200,184,154,0.12)' }}>
-                    <input
-                      type="text"
-                      value={grossMargin}
-                      onChange={(e) => {
-                        const val = parseInt(e.target.value, 10);
-                        if (!isNaN(val) && val >= 0 && val <= 100) setGrossMargin(val);
-                        else if (e.target.value === '') setGrossMargin(0);
-                      }}
-                      className="w-[38px] px-1.5 py-1 bg-transparent border-none text-sm font-bold text-right outline-none"
-                      style={{ color: '#C8B89A' }}
-                    />
-                    <span className="text-sm font-bold pr-2" style={{ color: '#C8B89A' }}>%</span>
-                  </div>
-                  <span className="text-[10px] hidden 2xl:inline" style={{ color: '#444' }}>
-                    COGS <strong style={{ color: '#666' }}>{100 - grossMargin}%</strong>
+                  <span className="text-sm font-bold" style={{ color: '#C8B89A' }}>{grossMargin}%</span>
+                  <span className="text-[10px]" style={{ color: '#444' }}>
+                    COGS {100 - grossMargin}%
                   </span>
                 </div>
 
