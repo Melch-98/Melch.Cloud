@@ -59,53 +59,6 @@ interface SubmissionFormProps {
 
 const CREATIVE_TYPES = ['UGC', 'Static', 'Video', 'Other'];
 
-/** Map of brand slug → 3-letter brand code used in batch/file names */
-const BRAND_CODES: Record<string, string> = {
-  'tallow-twins': 'TLW',
-  'fond-regenerative': 'FND',
-  'nimi-skincare': 'NIM',
-  'seven-weeks-coffee-co': 'SWC',
-  'organic-jaguar': 'OJG',
-};
-
-/** Get 3-letter brand code for a slug, fallback = first 3 letters uppercased */
-function getBrandCode(slug: string | undefined): string {
-  if (!slug) return 'XXX';
-  return BRAND_CODES[slug] || slug.replace(/[^a-z]/g, '').slice(0, 3).toUpperCase() || 'XXX';
-}
-
-/** YYMMDD for a given date */
-function yymmdd(date: Date = new Date()): string {
-  const yy = String(date.getFullYear()).slice(-2);
-  const mm = String(date.getMonth() + 1).padStart(2, '0');
-  const dd = String(date.getDate()).padStart(2, '0');
-  return `${yy}${mm}${dd}`;
-}
-
-/** Build today's batch name prefix for a brand, e.g. "TLW_260408" */
-function batchNamePrefix(brandCode: string, date: Date = new Date()): string {
-  return `${brandCode}_${yymmdd(date)}`;
-}
-
-/**
- * Given existing batch names for this brand, return the next daily sequence.
- * First batch of the day → "TLW_260408_0001", second → "TLW_260408_0002", etc.
- */
-function nextBatchName(brandCode: string, existingNames: string[]): string {
-  const prefix = batchNamePrefix(brandCode);
-  const pattern = new RegExp(`^${prefix}_(\\d{4})$`);
-  let max = 0;
-  for (const n of existingNames) {
-    const m = n.match(pattern);
-    if (m) {
-      const num = parseInt(m[1], 10);
-      if (num > max) max = num;
-    }
-  }
-  return `${prefix}_${String(max + 1).padStart(4, '0')}`;
-}
-
-
 const createEmptyBatch = (batchName: string): BatchFormState => ({
   id: `batch-${Date.now()}-${Math.random()}`,
   batchName,
@@ -205,7 +158,6 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
   isLoading = false,
 }) => {
   const [batches, setBatches] = useState<BatchFormState[]>([]);
-  const [existingBatchNames, setExistingBatchNames] = useState<string[]>([]);
   // Track batch IDs that successfully committed during this form session,
   // so that if a later batch fails, retrying the submit skips already-saved
   // batches instead of re-uploading and creating duplicates.
@@ -248,40 +200,39 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
     fetchCopyTemplates();
   }, [selectedBrandId]);
 
-  const selectedBrand = useMemo(
-    () => brands.find((b) => b.id === selectedBrandId),
-    [brands, selectedBrandId]
-  );
-  const brandCode = useMemo(
-    () => getBrandCode(selectedBrand?.slug),
-    [selectedBrand]
-  );
+  // Fetch a batch name from the server. `reserved` holds names already claimed
+  // in this form session so the API skips those sequence numbers.
+  const fetchBatchName = useCallback(async (reserved: string[] = []): Promise<string> => {
+    if (!selectedBrandId) return 'XXX_000000_0001';
+    const supabase = createClient();
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return 'XXX_000000_0001';
+    const res = await fetch('/api/batch-name', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ brand_id: selectedBrandId, reserved }),
+    });
+    if (!res.ok) return 'XXX_000000_0001';
+    const json = await res.json();
+    return json.batch_name;
+  }, [selectedBrandId]);
 
-  // Fetch existing batch names for this brand + today from DB
+  // Initialize first batch on mount / brand change
   useEffect(() => {
-    const fetchExistingNames = async () => {
+    let cancelled = false;
+    const init = async () => {
       if (!selectedBrandId) return;
-      const supabase = createClient();
-      const prefix = batchNamePrefix(brandCode);
-      const { data } = await supabase
-        .from('submissions')
-        .select('batch_name')
-        .eq('brand_id', selectedBrandId)
-        .like('batch_name', `${prefix}%`);
-
-      const names = (data || []).map((r: { batch_name: string }) => r.batch_name);
-      setExistingBatchNames(names);
+      const name = await fetchBatchName();
+      if (!cancelled) {
+        setBatches([createEmptyBatch(name)]);
+      }
     };
-    fetchExistingNames();
-  }, [selectedBrandId, brandCode]);
-
-  // Initialize first batch once existing names are loaded
-  useEffect(() => {
-    if (batches.length === 0) {
-      const name = nextBatchName(brandCode, existingBatchNames);
-      setBatches([createEmptyBatch(name)]);
-    }
-  }, [existingBatchNames, brandCode]); // eslint-disable-line react-hooks/exhaustive-deps
+    init();
+    return () => { cancelled = true; };
+  }, [selectedBrandId, fetchBatchName]);
 
   // Auto-dismiss success messages
   useEffect(() => {
@@ -309,18 +260,15 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
     });
   }, []);
 
-  const addBatch = useCallback(() => {
+  const addBatch = useCallback(async () => {
+    // Pass current form batch names as reserved so the API skips them
+    const reserved = batches.map((b) => b.batchName);
+    const name = await fetchBatchName(reserved);
     setBatches((prev) => {
-      // Collect all names (DB + already in form) to avoid duplicates
-      const allNames = [
-        ...existingBatchNames,
-        ...prev.map((b) => b.batchName),
-      ];
-      const name = nextBatchName(brandCode, allNames);
       const collapsed = prev.map((b) => ({ ...b, isExpanded: false }));
       return [...collapsed, createEmptyBatch(name)];
     });
-  }, [existingBatchNames, brandCode]);
+  }, [batches, fetchBatchName]);
 
   const validateBatch = (batch: BatchFormState): boolean => {
     const errors: Record<string, string> = {};
@@ -536,22 +484,15 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
       });
 
       setUploadProgress(null);
-      // Refresh existing names from DB so the next batch name accounts for what was just uploaded
-      const supabase2 = createClient();
-      const prefix2 = batchNamePrefix(brandCode);
-      const { data: refreshedData } = await supabase2
-        .from('submissions')
-        .select('batch_name')
-        .eq('brand_id', selectedBrandId)
-        .like('batch_name', `${prefix2}%`);
-      const refreshedNames = (refreshedData || []).map((r: { batch_name: string }) => r.batch_name);
-      setExistingBatchNames(refreshedNames);
+
+      // Get a fresh batch name from the server for the reset form
+      const freshName = await fetchBatchName();
 
       setSubmitMessage({
         type: 'success',
         text: `${batches.length} batch${batches.length > 1 ? 'es' : ''} submitted — ${batches.reduce((s, b) => s + b.files.length, 0)} files uploaded`,
       });
-      setBatches([createEmptyBatch(nextBatchName(brandCode, refreshedNames))]);
+      setBatches([createEmptyBatch(freshName)]);
       setSavedBatchIds(new Set());
 
       if (onSubmit) {
