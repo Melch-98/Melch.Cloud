@@ -29,6 +29,7 @@ import {
   Video,
   Home,
   Target,
+  Grid3X3,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
 
