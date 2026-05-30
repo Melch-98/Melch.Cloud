@@ -67,8 +67,6 @@ interface SubmissionFormProps {
   isLoading?: boolean;
 }
 
-const CREATIVE_TYPES = ['UGC', 'Static', 'Video', 'Other'];
-
 const createEmptyBatch = (batchName: string): BatchFormState => ({
   id: `batch-${Date.now()}-${Math.random()}`,
   batchName,
@@ -376,16 +374,8 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
   const validateBatch = (batch: BatchFormState): boolean => {
     const errors: Record<string, string> = {};
 
-    if (!batch.creativeType) {
-      errors.creativeType = 'Creative type is required';
-    }
-
     if (batch.files.length === 0) {
       errors.files = 'At least one file is required';
-    }
-
-    if (!batch.landingPageUrl.trim()) {
-      errors.landingPageUrl = 'Landing page URL is required';
     }
 
     // Whitelist requires creator name + social handle
@@ -485,7 +475,16 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
             brand_id: selectedBrandId,
             user_id: user?.id,
             batch_name: batch.batchName,
-            creative_type: batch.creativeType.toLowerCase(),
+            creative_type: (() => {
+              // Derive from file-level creative types — use the most common, or 'mixed'
+              const types = Object.values(batch.fileContexts)
+                .map((c: any) => c?.creativeType)
+                .filter(Boolean);
+              if (types.length === 0) return 'mixed';
+              const counts: Record<string, number> = {};
+              for (const t of types) counts[t] = (counts[t] || 0) + 1;
+              return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+            })(),
             creator_name: batch.creatorName || '',
             creator_social_handle: batch.creatorSocialHandle || null,
             landing_page_url: batch.landingPageUrl || null,
@@ -757,8 +756,8 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                 </div>
 
                 {/* ─── Form Fields ─── */}
-                <div className="grid grid-cols-2 gap-4">
-                  {/* Row 1: Batch Name + Creative Type — ALL MODES */}
+                <div className="grid grid-cols-2 gap-3">
+                  {/* Batch Name */}
                   <Field label="Batch Name" error={batch.errors.batchName}>
                     <div
                       className={`${inputClass} cursor-default flex items-center justify-between gap-2`}
@@ -772,24 +771,6 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                       <span className="truncate">{batch.batchName}</span>
                       <CopyButton text={batch.batchName} />
                     </div>
-                  </Field>
-
-                  <Field label="Creative Type" error={batch.errors.creativeType}>
-                    <select
-                      value={batch.creativeType}
-                      onChange={(e) =>
-                        updateBatch(batch.id, { creativeType: e.target.value })
-                      }
-                      className={`${selectClass} ${inputFocusStyle}`}
-                      style={inputStyle}
-                    >
-                      <option value="">Select type</option>
-                      {CREATIVE_TYPES.map((type) => (
-                        <option key={type} value={type}>
-                          {type}
-                        </option>
-                      ))}
-                    </select>
                   </Field>
 
                   {/* Creator Name — NORMAL + WHITELIST only */}
@@ -834,23 +815,6 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                       />
                     </Field>
                   )}
-
-                  {/* Landing Page URL — ALL MODES */}
-                  <Field
-                    label="Landing Page URL"
-                    error={batch.errors.landingPageUrl}
-                  >
-                    <input
-                      type="url"
-                      value={batch.landingPageUrl}
-                      onChange={(e) =>
-                        updateBatch(batch.id, { landingPageUrl: e.target.value })
-                      }
-                      className={`${inputClass} ${inputFocusStyle}`}
-                      style={inputStyle}
-                      placeholder="https://..."
-                    />
-                  </Field>
 
                   {/* Primary Text — CAROUSEL only */}
                   {batch.isCarousel && (

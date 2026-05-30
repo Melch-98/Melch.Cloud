@@ -255,7 +255,7 @@ const FileCard: React.FC<FileCardProps> = ({
         </div>
 
         {/* Bottom row: inline tag dropdowns */}
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-1">
           <select
             value={productId}
             onChange={(e) => {
@@ -263,8 +263,8 @@ const FileCard: React.FC<FileCardProps> = ({
               const pname = products.find((p) => p.shopify_product_id === pid)?.title || '';
               onProductChange(index, pid, pname);
             }}
-            className="flex-1 min-w-[120px] px-2 py-1 rounded-md text-xs text-[#F5F5F8] focus:outline-none focus:border-[#C8B89A]/40 transition-all"
-            style={{ ...selectStyle, height: 30 }}
+            className="flex-1 min-w-[100px] px-1.5 py-0.5 rounded-md text-[11px] text-[#F5F5F8] focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+            style={{ ...selectStyle, height: 26 }}
           >
             <option value="">Product...</option>
             <ProductOptions products={products} />
@@ -273,8 +273,8 @@ const FileCard: React.FC<FileCardProps> = ({
           <select
             value={creativeType}
             onChange={(e) => onCreativeTypeChange(index, e.target.value)}
-            className="flex-1 min-w-[120px] px-2 py-1 rounded-md text-xs text-[#F5F5F8] focus:outline-none focus:border-[#C8B89A]/40 transition-all"
-            style={{ ...selectStyle, height: 30 }}
+            className="flex-1 min-w-[100px] px-1.5 py-0.5 rounded-md text-[11px] text-[#F5F5F8] focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+            style={{ ...selectStyle, height: 26 }}
           >
             <option value="">Type...</option>
             {CREATIVE_TYPE_GROUPS.map((group) => (
@@ -293,8 +293,8 @@ const FileCard: React.FC<FileCardProps> = ({
             placeholder="Hook / angle..."
             value={hookAngle}
             onChange={(e) => onHookAngleChange(index, e.target.value)}
-            className="flex-1 min-w-[100px] px-2 py-1 rounded-md text-xs text-[#F5F5F8] placeholder-gray-600 focus:outline-none focus:border-[#C8B89A]/40 transition-all"
-            style={{ ...selectStyle, height: 30 }}
+            className="flex-1 min-w-[80px] px-1.5 py-0.5 rounded-md text-[11px] text-[#F5F5F8] placeholder-gray-600 focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+            style={{ ...selectStyle, height: 26 }}
           />
         </div>
       </div>
