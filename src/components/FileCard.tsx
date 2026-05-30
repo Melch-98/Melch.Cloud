@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Play } from 'lucide-react';
+import { X, Play, AlertTriangle } from 'lucide-react';
 import { CREATIVE_TYPE_GROUPS } from '@/lib/creative-types';
 
 interface FileMediaInfo {
@@ -45,6 +45,7 @@ interface FileCardProps {
   onCopyTemplateChange: (index: number, value: string) => void;
   onCreatorNameChange: (index: number, value: string) => void;
   onCreatorHandleChange: (index: number, value: string) => void;
+  dupeWarning?: string;
 }
 
 function formatSize(bytes: number): string {
@@ -137,6 +138,7 @@ const FileCard: React.FC<FileCardProps> = ({
   onCopyTemplateChange,
   onCreatorNameChange,
   onCreatorHandleChange,
+  dupeWarning = '',
 }) => {
   const [thumbUrl, setThumbUrl] = useState<string | null>(null);
   const [thumbError, setThumbError] = useState(false);
@@ -199,8 +201,10 @@ const FileCard: React.FC<FileCardProps> = ({
     <div
       className="flex flex-wrap gap-3 p-3 rounded-xl transition-colors"
       style={{
-        backgroundColor: 'rgba(255,255,255,0.03)',
-        border: '0.5px solid rgba(255,255,255,0.08)',
+        backgroundColor: dupeWarning ? 'rgba(234,179,8,0.03)' : 'rgba(255,255,255,0.03)',
+        border: dupeWarning
+          ? '0.5px solid rgba(234,179,8,0.2)'
+          : '0.5px solid rgba(255,255,255,0.08)',
       }}
     >
       {/* Hidden canvas for video frame extraction */}
@@ -276,6 +280,21 @@ const FileCard: React.FC<FileCardProps> = ({
             <X className="w-3.5 h-3.5 text-gray-500 hover:text-red-400" />
           </button>
         </div>
+
+        {/* Duplicate warning */}
+        {dupeWarning && (
+          <div
+            className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px]"
+            style={{
+              backgroundColor: 'rgba(234,179,8,0.08)',
+              border: '1px solid rgba(234,179,8,0.15)',
+              color: '#EAB308',
+            }}
+          >
+            <AlertTriangle className="w-3 h-3 flex-shrink-0" />
+            <span>{dupeWarning}</span>
+          </div>
+        )}
 
         {/* Tag row 1: Product + Type + Hook */}
         <div className="flex flex-wrap gap-1.5">

@@ -174,6 +174,8 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
   >([]);
   const [syncingProducts, setSyncingProducts] = useState(false);
   const [syncSuccess, setSyncSuccess] = useState(false);
+  const [existingFiles, setExistingFiles] = useState<Map<string, string>>(new Map());
+  // Map<file_name, batch_name>
 
   const handleSyncProducts = useCallback(async () => {
     if (!selectedBrandId || syncingProducts) return;
@@ -266,6 +268,40 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
       }
     };
     fetchProducts();
+  }, [selectedBrandId]);
+
+  // Fetch existing filenames for duplicate detection
+  useEffect(() => {
+    const fetchExistingFiles = async () => {
+      if (!selectedBrandId) {
+        setExistingFiles(new Map());
+        return;
+      }
+      try {
+        const supabase = createClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+
+        const { data: files } = await supabase
+          .from('submission_files')
+          .select('file_name, submissions!inner(batch_name, brand_id)')
+          .eq('submissions.brand_id', selectedBrandId);
+
+        const map = new Map<string, string>();
+        if (files) {
+          for (const f of files) {
+            const batchName = (f as any).submissions?.batch_name || 'unknown batch';
+            if (!map.has(f.file_name)) {
+              map.set(f.file_name, batchName);
+            }
+          }
+        }
+        setExistingFiles(map);
+      } catch (err) {
+        console.error('Failed to fetch existing files:', err);
+      }
+    };
+    fetchExistingFiles();
   }, [selectedBrandId]);
 
   // Fetch copy template options for the brand
@@ -649,6 +685,40 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
     }
   };
 
+  // Compute duplicate warnings for each file
+  const fileDupeWarnings = useMemo(() => {
+    const warnings: Record<string, Record<number, string>> = {};
+
+    for (const batch of batches) {
+      const batchWarnings: Record<number, string> = {};
+      const seenInBatch = new Map<string, number>();
+
+      for (let i = 0; i < batch.files.length; i++) {
+        const name = batch.files[i].name;
+
+        // Check same-batch duplicate
+        if (seenInBatch.has(name)) {
+          batchWarnings[i] = `Duplicate in this batch`;
+          const firstIdx = seenInBatch.get(name)!;
+          if (!batchWarnings[firstIdx]) {
+            batchWarnings[firstIdx] = `Duplicate in this batch`;
+          }
+        } else {
+          seenInBatch.set(name, i);
+        }
+
+        // Check archive duplicate (only if not already flagged as same-batch dupe)
+        if (!batchWarnings[i] && existingFiles.has(name)) {
+          const priorBatch = existingFiles.get(name)!;
+          batchWarnings[i] = `Already uploaded in ${priorBatch}`;
+        }
+      }
+
+      warnings[batch.id] = batchWarnings;
+    }
+    return warnings;
+  }, [batches, existingFiles]);
+
   const stats = useMemo(() => {
     return {
       batchCount: batches.length,
@@ -897,6 +967,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                         key={`${file.name}-${fileIndex}`}
                         file={file}
                         index={fileIndex}
+                        dupeWarning={fileDupeWarnings[batch.id]?.[fileIndex] || ''}
                         mediaInfo={batch.fileMediaInfo[fileIndex]}
                         productId={(batch.fileContexts[fileIndex] as any)?.productId || ''}
                         productName={(batch.fileContexts[fileIndex] as any)?.productName || ''}
