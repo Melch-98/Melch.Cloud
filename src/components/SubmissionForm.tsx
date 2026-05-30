@@ -14,7 +14,6 @@ import {
   Layers,
   Shuffle,
   Users,
-  AtSign,
   Copy,
   Check,
   RefreshCw,
@@ -41,20 +40,10 @@ export interface BatchFormData {
   fileMediaInfo: Record<number, FileMediaInfo>;
 }
 
-interface BatchDefaults {
-  productId: string;
-  productName: string;
-  creativeType: string;
-  copyTemplate: string;
-  creatorName: string;
-  creatorHandle: string;
-}
-
 interface BatchFormState extends BatchFormData {
   id: string;
   isExpanded: boolean;
   errors: Record<string, string>;
-  tagDefaults: BatchDefaults;
 }
 
 interface Brand {
@@ -87,7 +76,6 @@ const createEmptyBatch = (batchName: string): BatchFormState => ({
   fileMediaInfo: {},
   isExpanded: true,
   errors: {},
-  tagDefaults: { productId: '', productName: '', creativeType: '', copyTemplate: '', creatorName: '', creatorHandle: '' },
 });
 
 // Input field component for consistency and speed
@@ -836,16 +824,41 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
 
                 {/* ─── File Uploader (drop zone) ─── */}
                 <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm font-medium text-gray-200">
-                      Files
-                    </span>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-sm font-medium text-gray-200">Files</span>
                     {batch.files.length > 0 && (
                       <span className="text-xs text-gray-500">
                         {batch.files.length} file{batch.files.length !== 1 ? 's' : ''} selected
                       </span>
                     )}
+                    <button
+                      type="button"
+                      onClick={handleSyncProducts}
+                      disabled={syncingProducts}
+                      title="Sync products from Shopify"
+                      className="ml-auto p-1 rounded-md transition-all hover:bg-[rgba(200,184,154,0.12)]"
+                      style={{ color: syncSuccess ? '#7FD48F' : '#C8B89A' }}
+                    >
+                      {syncSuccess ? (
+                        <Check className="w-3 h-3" />
+                      ) : (
+                        <RefreshCw className={`w-3 h-3 ${syncingProducts ? 'animate-spin' : ''}`} />
+                      )}
+                    </button>
                   </div>
+                  {brandProducts.length <= 1 && (
+                    <p className="text-[11px] text-gray-500 italic mb-1">
+                      No products yet —{' '}
+                      <button
+                        type="button"
+                        onClick={handleSyncProducts}
+                        disabled={syncingProducts}
+                        className="text-[#C8B89A] hover:underline"
+                      >
+                        {syncingProducts ? 'syncing...' : 'sync from Shopify'}
+                      </button>
+                    </p>
+                  )}
                   <FileUploader
                     files={batch.files}
                     onFilesChange={(files: File[]) =>
@@ -875,208 +888,6 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                     </p>
                   )}
                 </div>
-
-                {/* ─── Batch Defaults Bar (2+ files only) ─── */}
-                {batch.files.length >= 2 && (
-                  <div
-                    className="flex flex-wrap items-center gap-2.5 px-3.5 py-2 rounded-xl"
-                    style={{
-                      backgroundColor: 'rgba(200,184,154,0.04)',
-                      border: '1px solid rgba(200,184,154,0.12)',
-                    }}
-                  >
-                    <span className="text-xs text-gray-500 font-medium whitespace-nowrap">
-                      Batch defaults
-                    </span>
-
-                    <div className="flex items-center gap-1 flex-1 min-w-[140px] max-w-[250px]">
-                      <select
-                        value={batch.tagDefaults.productId}
-                        onChange={(e) => {
-                          const pid = e.target.value;
-                          const pname = brandProducts.find((p) => p.shopify_product_id === pid)?.title || '';
-                          updateBatch(batch.id, {
-                            tagDefaults: { ...batch.tagDefaults, productId: pid, productName: pname },
-                          });
-                        }}
-                        className="flex-1 px-2.5 py-1.5 rounded-lg text-[13px] text-[#F5F5F8] focus:outline-none focus:border-[#C8B89A]/40 transition-all"
-                        style={inputStyle}
-                      >
-                        <option value="">Product...</option>
-                      {(() => {
-                        const groups = new Map<string, typeof brandProducts>();
-                        for (const p of brandProducts) {
-                          const key = p.product_type || '';
-                          if (!groups.has(key)) groups.set(key, []);
-                          groups.get(key)!.push(p);
-                        }
-                        const entries = Array.from(groups.entries());
-                        if (entries.length === 1 && entries[0][0] === '') {
-                          return entries[0][1].map((p) => (
-                            <option key={p.shopify_product_id} value={p.shopify_product_id}>
-                              {p.title}
-                            </option>
-                          ));
-                        }
-                        return entries.map(([type, prods]) => {
-                          if (!type) {
-                            return prods.map((p) => (
-                              <option key={p.shopify_product_id} value={p.shopify_product_id}>
-                                {p.title}
-                              </option>
-                            ));
-                          }
-                          return (
-                            <optgroup key={type} label={type}>
-                              {prods.map((p) => (
-                                <option key={p.shopify_product_id} value={p.shopify_product_id}>
-                                  {p.title}
-                                </option>
-                              ))}
-                            </optgroup>
-                          );
-                        });
-                      })()}
-                      </select>
-
-                      <button
-                        type="button"
-                        onClick={handleSyncProducts}
-                        disabled={syncingProducts}
-                        title="Sync products from Shopify"
-                        className="p-1.5 rounded-md transition-all shrink-0 hover:bg-[rgba(200,184,154,0.12)]"
-                        style={{ color: syncSuccess ? '#7FD48F' : '#C8B89A' }}
-                      >
-                        {syncSuccess ? (
-                          <Check className="w-3.5 h-3.5" />
-                        ) : (
-                          <RefreshCw className={`w-3.5 h-3.5 ${syncingProducts ? 'animate-spin' : ''}`} />
-                        )}
-                      </button>
-                    </div>
-
-                    <select
-                      value={batch.tagDefaults.creativeType}
-                      onChange={(e) =>
-                        updateBatch(batch.id, {
-                          tagDefaults: { ...batch.tagDefaults, creativeType: e.target.value },
-                        })
-                      }
-                      className="flex-1 min-w-[110px] max-w-[180px] px-2.5 py-1.5 rounded-lg text-[13px] text-[#F5F5F8] focus:outline-none focus:border-[#C8B89A]/40 transition-all"
-                      style={inputStyle}
-                    >
-                      <option value="">Type...</option>
-                      {CREATIVE_TYPE_GROUPS.map((group) => (
-                        <optgroup key={group.label} label={group.label}>
-                          {group.types.map((t) => (
-                            <option key={t.value} value={t.value}>
-                              {t.label}
-                            </option>
-                          ))}
-                        </optgroup>
-                      ))}
-                    </select>
-
-                    {!batch.isCarousel && (
-                      <select
-                        value={batch.tagDefaults.copyTemplate || ''}
-                        onChange={(e) =>
-                          updateBatch(batch.id, {
-                            tagDefaults: { ...batch.tagDefaults, copyTemplate: e.target.value },
-                          })
-                        }
-                        className="flex-1 min-w-[120px] max-w-[200px] px-2.5 py-1.5 rounded-lg text-[13px] text-[#F5F5F8] focus:outline-none focus:border-[#C8B89A]/40 transition-all"
-                        style={inputStyle}
-                      >
-                        <option value="">Copy template...</option>
-                        {copyTemplateOptions.map((tpl) => (
-                          <option key={tpl.id} value={tpl.title}>
-                            {tpl.title}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-
-                    <input
-                      type="text"
-                      placeholder="Creator..."
-                      value={batch.tagDefaults.creatorName || ''}
-                      onChange={(e) =>
-                        updateBatch(batch.id, {
-                          tagDefaults: { ...batch.tagDefaults, creatorName: e.target.value },
-                        })
-                      }
-                      className="flex-1 min-w-[100px] max-w-[160px] px-2.5 py-1.5 rounded-lg text-[13px] text-[#F5F5F8] placeholder-gray-600 focus:outline-none focus:border-[#C8B89A]/40 transition-all"
-                      style={inputStyle}
-                    />
-                    {batch.isWhitelist && (
-                      <input
-                        type="text"
-                        placeholder="@handle..."
-                        value={batch.tagDefaults.creatorHandle || ''}
-                        onChange={(e) =>
-                          updateBatch(batch.id, {
-                            tagDefaults: { ...batch.tagDefaults, creatorHandle: e.target.value },
-                          })
-                        }
-                        className="flex-1 min-w-[90px] max-w-[140px] px-2.5 py-1.5 rounded-lg text-[13px] text-[#F5F5F8] placeholder-gray-600 focus:outline-none focus:border-[#C8B89A]/40 transition-all"
-                        style={inputStyle}
-                      />
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const d = batch.tagDefaults;
-                        if (!d.productId && !d.creativeType && !d.copyTemplate && !d.creatorName && !d.creatorHandle) return;
-                        const updated = { ...batch.fileContexts };
-                        for (let i = 0; i < batch.files.length; i++) {
-                          const existing = updated[i] || {} as any;
-                          if (d.productId && !existing.productId) {
-                            existing.productId = d.productId;
-                            existing.productName = d.productName;
-                          }
-                          if (d.creativeType && !existing.creativeType) {
-                            existing.creativeType = d.creativeType;
-                          }
-                          if (d.copyTemplate && !existing.copyTemplate) {
-                            existing.copyTemplate = d.copyTemplate;
-                          }
-                          if (d.creatorName && !existing.creatorName) {
-                            existing.creatorName = d.creatorName;
-                          }
-                          if (d.creatorHandle && !existing.creatorHandle) {
-                            existing.creatorHandle = d.creatorHandle;
-                          }
-                          updated[i] = existing;
-                        }
-                        updateBatch(batch.id, { fileContexts: updated });
-                      }}
-                      className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shrink-0"
-                      style={{
-                        backgroundColor: 'rgba(200,184,154,0.15)',
-                        border: '1px solid rgba(200,184,154,0.25)',
-                        color: '#C8B89A',
-                      }}
-                    >
-                      Apply to all
-                    </button>
-
-                    {brandProducts.length <= 1 && (
-                      <span className="text-[11px] text-gray-500 italic whitespace-nowrap">
-                        No products yet —{' '}
-                        <button
-                          type="button"
-                          onClick={handleSyncProducts}
-                          disabled={syncingProducts}
-                          className="text-[#C8B89A] hover:underline"
-                        >
-                          {syncingProducts ? 'syncing...' : 'sync from Shopify'}
-                        </button>
-                      </span>
-                    )}
-                  </div>
-                )}
 
                 {/* ─── File Cards with Inline Tags ─── */}
                 {batch.files.length > 0 && (

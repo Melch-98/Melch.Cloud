@@ -257,7 +257,7 @@ const FileCard: React.FC<FileCardProps> = ({
       </div>
 
       {/* Content area */}
-      <div className="flex-1 min-w-0 flex flex-col gap-2">
+      <div className="flex-1 min-w-0 flex flex-col gap-2.5">
         {/* Top row: filename + meta + delete */}
         <div className="flex items-start gap-2">
           <div className="flex-1 min-w-0">
@@ -277,8 +277,8 @@ const FileCard: React.FC<FileCardProps> = ({
           </button>
         </div>
 
-        {/* Bottom row: inline tag dropdowns */}
-        <div className="flex flex-wrap gap-1">
+        {/* Tag row 1: Product + Type + Hook */}
+        <div className="flex flex-wrap gap-1.5">
           <select
             value={productId}
             onChange={(e) => {
@@ -286,8 +286,8 @@ const FileCard: React.FC<FileCardProps> = ({
               const pname = products.find((p) => p.shopify_product_id === pid)?.title || '';
               onProductChange(index, pid, pname);
             }}
-            className="flex-1 min-w-[100px] px-1.5 py-0.5 rounded-md text-[11px] text-[#F5F5F8] focus:outline-none focus:border-[#C8B89A]/40 transition-all"
-            style={{ ...selectStyle, height: 26 }}
+            className="flex-1 min-w-[130px] max-w-[220px] px-2 py-1 rounded-md text-[11px] text-[#F5F5F8] focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+            style={{ ...selectStyle, height: 28 }}
           >
             <option value="">Product...</option>
             <ProductOptions products={products} />
@@ -296,8 +296,8 @@ const FileCard: React.FC<FileCardProps> = ({
           <select
             value={creativeType}
             onChange={(e) => onCreativeTypeChange(index, e.target.value)}
-            className="flex-1 min-w-[100px] px-1.5 py-0.5 rounded-md text-[11px] text-[#F5F5F8] focus:outline-none focus:border-[#C8B89A]/40 transition-all"
-            style={{ ...selectStyle, height: 26 }}
+            className="flex-1 min-w-[110px] max-w-[180px] px-2 py-1 rounded-md text-[11px] text-[#F5F5F8] focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+            style={{ ...selectStyle, height: 28 }}
           >
             <option value="">Type...</option>
             {CREATIVE_TYPE_GROUPS.map((group) => (
@@ -316,16 +316,19 @@ const FileCard: React.FC<FileCardProps> = ({
             placeholder="Hook / angle..."
             value={hookAngle}
             onChange={(e) => onHookAngleChange(index, e.target.value)}
-            className="flex-1 min-w-[80px] px-1.5 py-0.5 rounded-md text-[11px] text-[#F5F5F8] placeholder-gray-600 focus:outline-none focus:border-[#C8B89A]/40 transition-all"
-            style={{ ...selectStyle, height: 26 }}
+            className="flex-1 min-w-[90px] max-w-[160px] px-2 py-1 rounded-md text-[11px] text-[#F5F5F8] placeholder-gray-600 focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+            style={{ ...selectStyle, height: 28 }}
           />
+        </div>
 
+        {/* Tag row 2: Copy + Creator + Handle */}
+        <div className="flex flex-wrap gap-1.5">
           {!isCarousel && (
             <select
               value={copyTemplate}
               onChange={(e) => onCopyTemplateChange(index, e.target.value)}
-              className="flex-1 min-w-[100px] px-1.5 py-0.5 rounded-md text-[11px] text-[#F5F5F8] focus:outline-none focus:border-[#C8B89A]/40 transition-all"
-              style={{ ...selectStyle, height: 26 }}
+              className="flex-1 min-w-[110px] max-w-[180px] px-2 py-1 rounded-md text-[11px] text-[#F5F5F8] focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+              style={{ ...selectStyle, height: 28 }}
             >
               <option value="">Copy...</option>
               {copyTemplateOptions.map((tpl) => (
@@ -335,26 +338,24 @@ const FileCard: React.FC<FileCardProps> = ({
               ))}
             </select>
           )}
-        </div>
 
-        {/* Creator row */}
-        <div className="flex flex-wrap gap-1">
           <input
             type="text"
             placeholder="Creator name..."
             value={creatorName}
             onChange={(e) => onCreatorNameChange(index, e.target.value)}
-            className="flex-1 min-w-[120px] px-1.5 py-0.5 rounded-md text-[11px] text-[#F5F5F8] placeholder-gray-600 focus:outline-none focus:border-[#C8B89A]/40 transition-all"
-            style={{ ...selectStyle, height: 26 }}
+            className="flex-1 min-w-[110px] max-w-[180px] px-2 py-1 rounded-md text-[11px] text-[#F5F5F8] placeholder-gray-600 focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+            style={{ ...selectStyle, height: 28 }}
           />
+
           {isWhitelist && (
             <input
               type="text"
               placeholder="@handle"
               value={creatorHandle}
               onChange={(e) => onCreatorHandleChange(index, e.target.value)}
-              className="flex-1 min-w-[100px] px-1.5 py-0.5 rounded-md text-[11px] text-[#F5F5F8] placeholder-gray-600 focus:outline-none focus:border-[#C8B89A]/40 transition-all"
-              style={{ ...selectStyle, height: 26 }}
+              className="flex-1 min-w-[100px] max-w-[150px] px-2 py-1 rounded-md text-[11px] text-[#F5F5F8] placeholder-gray-600 focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+              style={{ ...selectStyle, height: 28 }}
             />
           )}
         </div>
