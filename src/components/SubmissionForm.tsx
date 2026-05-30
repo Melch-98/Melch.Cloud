@@ -17,6 +17,7 @@ import {
   AtSign,
   Copy,
   Check,
+  RefreshCw,
 } from 'lucide-react';
 import FileUploader, { FileMediaInfo } from './FileUploader';
 import FileCard from './FileCard';
@@ -182,6 +183,44 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
   const [brandProducts, setBrandProducts] = useState<
     { shopify_product_id: string; title: string; product_type: string; handle: string }[]
   >([]);
+  const [syncingProducts, setSyncingProducts] = useState(false);
+  const [syncSuccess, setSyncSuccess] = useState(false);
+
+  const handleSyncProducts = useCallback(async () => {
+    if (!selectedBrandId || syncingProducts) return;
+    setSyncingProducts(true);
+    setSyncSuccess(false);
+    try {
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+
+      await fetch('/api/sync-products', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ brand_id: selectedBrandId }),
+      });
+
+      // Refresh the product list
+      const productsRes = await fetch(`/api/brand-products?brand_id=${selectedBrandId}`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (productsRes.ok) {
+        const productsData = await productsRes.json();
+        setBrandProducts(productsData.products || []);
+      }
+
+      setSyncSuccess(true);
+      setTimeout(() => setSyncSuccess(false), 2000);
+    } catch (err) {
+      console.error('Product sync failed:', err);
+    } finally {
+      setSyncingProducts(false);
+    }
+  }, [selectedBrandId, syncingProducts]);
 
   // Fetch brand products for tagging dropdowns
   useEffect(() => {
@@ -893,19 +932,20 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                       Batch defaults
                     </span>
 
-                    <select
-                      value={batch.tagDefaults.productId}
-                      onChange={(e) => {
-                        const pid = e.target.value;
-                        const pname = brandProducts.find((p) => p.shopify_product_id === pid)?.title || '';
-                        updateBatch(batch.id, {
-                          tagDefaults: { ...batch.tagDefaults, productId: pid, productName: pname },
-                        });
-                      }}
-                      className="flex-1 min-w-[120px] px-2.5 py-1.5 rounded-lg text-[13px] text-[#F5F5F8] focus:outline-none focus:border-[#C8B89A]/40 transition-all"
-                      style={inputStyle}
-                    >
-                      <option value="">Product...</option>
+                    <div className="flex items-center gap-1 flex-1 min-w-[120px]">
+                      <select
+                        value={batch.tagDefaults.productId}
+                        onChange={(e) => {
+                          const pid = e.target.value;
+                          const pname = brandProducts.find((p) => p.shopify_product_id === pid)?.title || '';
+                          updateBatch(batch.id, {
+                            tagDefaults: { ...batch.tagDefaults, productId: pid, productName: pname },
+                          });
+                        }}
+                        className="flex-1 px-2.5 py-1.5 rounded-lg text-[13px] text-[#F5F5F8] focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+                        style={inputStyle}
+                      >
+                        <option value="">Product...</option>
                       {(() => {
                         const groups = new Map<string, typeof brandProducts>();
                         for (const p of brandProducts) {
@@ -940,7 +980,23 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                           );
                         });
                       })()}
-                    </select>
+                      </select>
+
+                      <button
+                        type="button"
+                        onClick={handleSyncProducts}
+                        disabled={syncingProducts}
+                        title="Sync products from Shopify"
+                        className="p-1.5 rounded-md transition-all shrink-0 hover:bg-[rgba(200,184,154,0.12)]"
+                        style={{ color: syncSuccess ? '#7FD48F' : '#C8B89A' }}
+                      >
+                        {syncSuccess ? (
+                          <Check className="w-3.5 h-3.5" />
+                        ) : (
+                          <RefreshCw className={`w-3.5 h-3.5 ${syncingProducts ? 'animate-spin' : ''}`} />
+                        )}
+                      </button>
+                    </div>
 
                     <select
                       value={batch.tagDefaults.creativeType}
@@ -992,6 +1048,20 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                     >
                       Apply to all
                     </button>
+
+                    {brandProducts.length <= 1 && (
+                      <span className="text-[11px] text-gray-500 italic whitespace-nowrap">
+                        No products yet —{' '}
+                        <button
+                          type="button"
+                          onClick={handleSyncProducts}
+                          disabled={syncingProducts}
+                          className="text-[#C8B89A] hover:underline"
+                        >
+                          {syncingProducts ? 'syncing...' : 'sync from Shopify'}
+                        </button>
+                      </span>
+                    )}
                   </div>
                 )}
 
