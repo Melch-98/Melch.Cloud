@@ -482,6 +482,7 @@ export async function POST(request: NextRequest) {
   try {
     let ordersProcessed = 0;
     let daysSynced = 0;
+    let productsSynced = 0;
 
     // ── Shopify order sync (skip if spend-only mode) ──
     if (!spendOnly) {
@@ -581,6 +582,73 @@ export async function POST(request: NextRequest) {
 
     ordersProcessed = orders.length;
     daysSynced = rows.length;
+
+    // ── Sync Shopify products alongside orders ──
+    try {
+      let allProducts: any[] = [];
+      let nextProductUrl: string | null = null;
+
+      const firstProducts = await shopifyFetch(
+        brand.shopify_store_domain,
+        shopifyToken,
+        'products',
+        { limit: '250', status: 'active' }
+      );
+      const firstProductData = firstProducts.data as { products: any[] };
+      allProducts.push(...firstProductData.products);
+      nextProductUrl = firstProducts.nextLink;
+
+      while (nextProductUrl) {
+        const res = await fetch(nextProductUrl, {
+          headers: {
+            'X-Shopify-Access-Token': shopifyToken,
+            'Content-Type': 'application/json',
+          },
+        });
+        if (!res.ok) break;
+        const linkHeader = res.headers.get('Link') || '';
+        const nextMatch = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
+        nextProductUrl = nextMatch ? nextMatch[1] : null;
+        const data = (await res.json()) as { products: any[] };
+        allProducts.push(...data.products);
+        await new Promise((r) => setTimeout(r, 100));
+      }
+
+      if (allProducts.length > 0) {
+        const productRows = allProducts.map((p) => ({
+          shop_domain: brand.shopify_store_domain,
+          brand_id: brand.id,
+          shopify_product_id: `gid://shopify/Product/${p.id}`,
+          title: p.title,
+          handle: p.handle,
+          status: p.status,
+          product_type: p.product_type || '',
+          vendor: p.vendor || '',
+          tags: p.tags ? p.tags.split(', ') : [],
+          variants: p.variants || [],
+          images: p.images || [],
+          shopify_created_at: p.created_at,
+          shopify_updated_at: p.updated_at,
+          raw: p,
+          updated_at: new Date().toISOString(),
+        }));
+
+        const CHUNK = 200;
+        for (let i = 0; i < productRows.length; i += CHUNK) {
+          const chunk = productRows.slice(i, i + CHUNK);
+          const { error: prodErr } = await supabase
+            .from('shopify_products')
+            .upsert(chunk, { onConflict: 'shop_domain,shopify_product_id' });
+          if (prodErr) {
+            console.error('Product upsert error:', prodErr.message);
+          }
+        }
+        productsSynced = allProducts.length;
+      }
+    } catch (e) {
+      console.error('Product sync failed (non-fatal):', e);
+    }
+
     } // end if (!spendOnly)
 
     // ── Sync ad spend from Google Ads (Windsor) + Meta in parallel ──
@@ -677,6 +745,7 @@ export async function POST(request: NextRequest) {
       brand: brand.name,
       mode: spendOnly ? 'spend_only' : 'full',
       orders_processed: ordersProcessed,
+      products_synced: productsSynced,
       days_synced: daysSynced,
       google_spend_days: googleDaysSynced,
       meta_spend_days: metaDaysSynced,

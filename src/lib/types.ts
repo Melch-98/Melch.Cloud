@@ -85,6 +85,13 @@ export interface SubmissionFile {
   launch_time: string | null;
   ad_name: string | null;
   notes: string | null;
+  product_id: string | null;
+  product_name: string | null;
+  creative_type: string | null;
+  fidelity: 'high_def' | 'lofi' | 'other' | null;
+  hook_angle: string | null;
+  creative_concept: string | null;
+  tags: string[];
   created_at: string;
   updated_at: string;
 }
@@ -131,6 +138,10 @@ export interface FileContext {
   copyHeadline: string;
   copyBody: string;
   copyCta: string;
+  productId: string;
+  productName: string;
+  creativeType: string;
+  hookAngle: string;
 }
 
 // ─── Batch Form Data (upload form) ──────────────────────────────
