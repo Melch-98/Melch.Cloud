@@ -109,7 +109,7 @@ export async function POST(request: NextRequest) {
           {
             shop_domain: brand.shopify_store_domain,
             brand_id: brand.id,
-            shopify_product_id: `gid://shopify/Product/${product.id}`,
+            shopify_product_id: product.id,
             title: product.title,
             handle: product.handle,
             status: product.status,

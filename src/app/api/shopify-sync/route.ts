@@ -618,7 +618,7 @@ export async function POST(request: NextRequest) {
         const productRows = allProducts.map((p) => ({
           shop_domain: brand.shopify_store_domain,
           brand_id: brand.id,
-          shopify_product_id: `gid://shopify/Product/${p.id}`,
+          shopify_product_id: p.id,
           title: p.title,
           handle: p.handle,
           status: p.status,
