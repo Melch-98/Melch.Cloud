@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useCallback } from 'react';
-import { Upload, X, FileText, Image, Video, Music } from 'lucide-react';
+import { Upload } from 'lucide-react';
 
 export interface FileMediaInfo {
   format: 'VIDEO' | 'STATIC' | 'AUDIO' | 'DOCUMENT';
@@ -85,13 +85,6 @@ const formatSize = (bytes: number): string => {
   return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
 };
 
-const getFileIcon = (type: string) => {
-  if (type.startsWith('image/')) return <Image size={20} className="text-[#C8B89A]" />;
-  if (type.startsWith('video/')) return <Video size={20} className="text-[#C8B89A]" />;
-  if (type.startsWith('audio/')) return <Music size={20} className="text-[#C8B89A]" />;
-  return <FileText size={20} className="text-[#C8B89A]" />;
-};
-
 export default function FileUploader({
   files,
   onFilesChange,
@@ -132,14 +125,6 @@ export default function FileUploader({
     [files, onFilesChange, onMediaInfoChange, maxFileSize]
   );
 
-  const handleRemoveFile = useCallback(
-    (index: number) => {
-      const updated = files.filter((_, i) => i !== index);
-      onFilesChange(updated);
-    },
-    [files, onFilesChange]
-  );
-
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
@@ -150,15 +135,6 @@ export default function FileUploader({
     },
     [handleNewFiles]
   );
-
-  const formatBadgeColor = (format: string) => {
-    switch (format) {
-      case 'VIDEO': return { bg: 'rgba(168,85,247,0.15)', text: '#a855f7' };
-      case 'STATIC': return { bg: 'rgba(59,130,246,0.15)', text: '#3b82f6' };
-      case 'AUDIO': return { bg: 'rgba(245,158,11,0.15)', text: '#f59e0b' };
-      default: return { bg: 'rgba(107,114,128,0.15)', text: '#6b7280' };
-    }
-  };
 
   return (
     <div>
@@ -190,67 +166,6 @@ export default function FileUploader({
           onChange={(e) => e.target.files && handleNewFiles(e.target.files)}
         />
       </div>
-
-      {/* File List */}
-      {files.length > 0 && (
-        <div className="mt-4 space-y-2">
-          {files.map((file, idx) => {
-            const info = mediaInfo[idx];
-            const isAnalyzing = analyzing.has(idx);
-            const fmtColor = info ? formatBadgeColor(info.format) : null;
-
-            return (
-              <div
-                key={`${file.name}-${idx}`}
-                className="flex items-center gap-3 rounded-xl p-3 transition-colors"
-                style={{
-                  backgroundColor: '#111111',
-                  border: '1px solid rgba(255,255,255,0.06)',
-                }}
-              >
-                <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0"
-                  style={{ backgroundColor: 'rgba(200,184,154,0.1)' }}>
-                  {getFileIcon(file.type)}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-medium text-[#F5F5F8] truncate max-w-[200px]">
-                      {file.name}
-                    </span>
-                    {isAnalyzing && (
-                      <span className="text-xs text-[#C8B89A] animate-pulse">detecting...</span>
-                    )}
-                    {info && fmtColor && (
-                      <>
-                        <span
-                          className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded"
-                          style={{ backgroundColor: fmtColor.bg, color: fmtColor.text }}
-                        >
-                          {info.format}
-                        </span>
-                        <span
-                          className="text-[10px] font-bold tracking-wider px-2 py-0.5 rounded"
-                          style={{ backgroundColor: 'rgba(200,184,154,0.15)', color: '#C8B89A' }}
-                        >
-                          {info.aspectRatio}
-                        </span>
-                      </>
-                    )}
-                  </div>
-                  <span className="text-xs text-[#666]">{formatSize(file.size)}</span>
-                </div>
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleRemoveFile(idx); }}
-                  className="p-1.5 rounded-lg transition-colors flex-shrink-0"
-                  style={{ backgroundColor: 'rgba(244,67,54,0.1)' }}
-                >
-                  <X size={14} className="text-red-400" />
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }

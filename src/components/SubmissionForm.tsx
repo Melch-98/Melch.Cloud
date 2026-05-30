@@ -19,6 +19,7 @@ import {
   Check,
 } from 'lucide-react';
 import FileUploader, { FileMediaInfo } from './FileUploader';
+import FileCard from './FileCard';
 import { createClient } from '@/lib/supabase';
 import { FileContext } from '@/lib/types';
 import { CREATIVE_TYPE_GROUPS, CREATIVE_TYPES_MAP } from '@/lib/creative-types';
@@ -837,7 +838,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                   )}
                 </div>
 
-                {/* ─── File Uploader ─── */}
+                {/* ─── File Uploader (drop zone) ─── */}
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm font-medium text-gray-200">
@@ -879,249 +880,167 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                   )}
                 </div>
 
-                {/* ─── Per-File Creative Tags ─── */}
-                {batch.files.length > 0 && (
-                  <div className="space-y-3">
-                    <span className="text-sm font-medium text-gray-200">
-                      Creative Tags
+                {/* ─── Batch Defaults Bar (2+ files only) ─── */}
+                {batch.files.length >= 2 && (
+                  <div
+                    className="flex flex-wrap items-center gap-2.5 px-3.5 py-2 rounded-xl"
+                    style={{
+                      backgroundColor: 'rgba(200,184,154,0.04)',
+                      border: '1px solid rgba(200,184,154,0.12)',
+                    }}
+                  >
+                    <span className="text-xs text-gray-500 font-medium whitespace-nowrap">
+                      Batch defaults
                     </span>
 
-                    {/* Batch defaults bar */}
-                    <div
-                      className="flex flex-wrap items-end gap-3 p-3 rounded-lg"
-                      style={{
-                        backgroundColor: 'rgba(200,184,154,0.04)',
-                        border: '1px solid rgba(200,184,154,0.12)',
+                    <select
+                      value={batch.tagDefaults.productId}
+                      onChange={(e) => {
+                        const pid = e.target.value;
+                        const pname = brandProducts.find((p) => p.shopify_product_id === pid)?.title || '';
+                        updateBatch(batch.id, {
+                          tagDefaults: { ...batch.tagDefaults, productId: pid, productName: pname },
+                        });
                       }}
+                      className="flex-1 min-w-[120px] px-2.5 py-1.5 rounded-lg text-[13px] text-[#F5F5F8] focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+                      style={inputStyle}
                     >
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#C8B89A] self-center">
-                        Set defaults
-                      </span>
-
-                      <div className="flex-1 min-w-[140px]">
-                        <label className="block text-[10px] text-gray-500 uppercase tracking-wider mb-1">Product</label>
-                        <select
-                          value={batch.tagDefaults.productId}
-                          onChange={(e) => {
-                            const pid = e.target.value;
-                            const pname = brandProducts.find((p) => p.shopify_product_id === pid)?.title || '';
-                            updateBatch(batch.id, {
-                              tagDefaults: { ...batch.tagDefaults, productId: pid, productName: pname },
-                            });
-                          }}
-                          className={`${selectClass} ${inputFocusStyle} text-xs`}
-                          style={inputStyle}
-                        >
-                          <option value="">-- Select --</option>
-                          {(() => {
-                            const groups = new Map<string, typeof brandProducts>();
-                            for (const p of brandProducts) {
-                              const key = p.product_type || '';
-                              if (!groups.has(key)) groups.set(key, []);
-                              groups.get(key)!.push(p);
-                            }
-                            const entries = Array.from(groups.entries());
-                            // If there's only the ungrouped set, render flat
-                            if (entries.length === 1 && entries[0][0] === '') {
-                              return entries[0][1].map((p) => (
+                      <option value="">Product...</option>
+                      {(() => {
+                        const groups = new Map<string, typeof brandProducts>();
+                        for (const p of brandProducts) {
+                          const key = p.product_type || '';
+                          if (!groups.has(key)) groups.set(key, []);
+                          groups.get(key)!.push(p);
+                        }
+                        const entries = Array.from(groups.entries());
+                        if (entries.length === 1 && entries[0][0] === '') {
+                          return entries[0][1].map((p) => (
+                            <option key={p.shopify_product_id} value={p.shopify_product_id}>
+                              {p.title}
+                            </option>
+                          ));
+                        }
+                        return entries.map(([type, prods]) => {
+                          if (!type) {
+                            return prods.map((p) => (
+                              <option key={p.shopify_product_id} value={p.shopify_product_id}>
+                                {p.title}
+                              </option>
+                            ));
+                          }
+                          return (
+                            <optgroup key={type} label={type}>
+                              {prods.map((p) => (
                                 <option key={p.shopify_product_id} value={p.shopify_product_id}>
                                   {p.title}
                                 </option>
-                              ));
-                            }
-                            return entries.map(([type, prods]) => {
-                              if (!type) {
-                                return prods.map((p) => (
-                                  <option key={p.shopify_product_id} value={p.shopify_product_id}>
-                                    {p.title}
-                                  </option>
-                                ));
-                              }
-                              return (
-                                <optgroup key={type} label={type}>
-                                  {prods.map((p) => (
-                                    <option key={p.shopify_product_id} value={p.shopify_product_id}>
-                                      {p.title}
-                                    </option>
-                                  ))}
-                                </optgroup>
-                              );
-                            });
-                          })()}
-                        </select>
-                      </div>
-
-                      <div className="flex-1 min-w-[140px]">
-                        <label className="block text-[10px] text-gray-500 uppercase tracking-wider mb-1">Creative Type</label>
-                        <select
-                          value={batch.tagDefaults.creativeType}
-                          onChange={(e) =>
-                            updateBatch(batch.id, {
-                              tagDefaults: { ...batch.tagDefaults, creativeType: e.target.value },
-                            })
-                          }
-                          className={`${selectClass} ${inputFocusStyle} text-xs`}
-                          style={inputStyle}
-                        >
-                          <option value="">-- Select --</option>
-                          {CREATIVE_TYPE_GROUPS.map((group) => (
-                            <optgroup key={group.label} label={group.label}>
-                              {group.types.map((t) => (
-                                <option key={t.value} value={t.value}>
-                                  {t.label}
-                                </option>
                               ))}
                             </optgroup>
+                          );
+                        });
+                      })()}
+                    </select>
+
+                    <select
+                      value={batch.tagDefaults.creativeType}
+                      onChange={(e) =>
+                        updateBatch(batch.id, {
+                          tagDefaults: { ...batch.tagDefaults, creativeType: e.target.value },
+                        })
+                      }
+                      className="flex-1 min-w-[120px] px-2.5 py-1.5 rounded-lg text-[13px] text-[#F5F5F8] focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+                      style={inputStyle}
+                    >
+                      <option value="">Type...</option>
+                      {CREATIVE_TYPE_GROUPS.map((group) => (
+                        <optgroup key={group.label} label={group.label}>
+                          {group.types.map((t) => (
+                            <option key={t.value} value={t.value}>
+                              {t.label}
+                            </option>
                           ))}
-                        </select>
-                      </div>
+                        </optgroup>
+                      ))}
+                    </select>
 
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const d = batch.tagDefaults;
-                          if (!d.productId && !d.creativeType) return;
-                          const updated = { ...batch.fileContexts };
-                          for (let i = 0; i < batch.files.length; i++) {
-                            const existing = updated[i] || {} as any;
-                            if (d.productId && !existing.productId) {
-                              existing.productId = d.productId;
-                              existing.productName = d.productName;
-                            }
-                            if (d.creativeType && !existing.creativeType) {
-                              existing.creativeType = d.creativeType;
-                            }
-                            updated[i] = existing;
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = batch.tagDefaults;
+                        if (!d.productId && !d.creativeType) return;
+                        const updated = { ...batch.fileContexts };
+                        for (let i = 0; i < batch.files.length; i++) {
+                          const existing = updated[i] || {} as any;
+                          if (d.productId && !existing.productId) {
+                            existing.productId = d.productId;
+                            existing.productName = d.productName;
                           }
-                          updateBatch(batch.id, { fileContexts: updated });
-                        }}
-                        className="px-3 py-2 rounded-lg text-xs font-semibold transition-all shrink-0"
-                        style={{
-                          backgroundColor: 'rgba(200,184,154,0.15)',
-                          border: '1px solid rgba(200,184,154,0.25)',
-                          color: '#C8B89A',
-                        }}
-                      >
-                        Apply to all
-                      </button>
-                    </div>
+                          if (d.creativeType && !existing.creativeType) {
+                            existing.creativeType = d.creativeType;
+                          }
+                          updated[i] = existing;
+                        }
+                        updateBatch(batch.id, { fileContexts: updated });
+                      }}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shrink-0"
+                      style={{
+                        backgroundColor: 'rgba(200,184,154,0.15)',
+                        border: '1px solid rgba(200,184,154,0.25)',
+                        color: '#C8B89A',
+                      }}
+                    >
+                      Apply to all
+                    </button>
+                  </div>
+                )}
 
-                    {/* Per-file tag rows */}
+                {/* ─── File Cards with Inline Tags ─── */}
+                {batch.files.length > 0 && (
+                  <div className="space-y-2">
                     {batch.files.map((file, fileIndex) => (
-                      <div
-                        key={fileIndex}
-                        className="flex flex-wrap items-center gap-3 p-3 rounded-lg"
-                        style={{
-                          backgroundColor: 'rgba(255,255,255,0.02)',
-                          border: '1px solid rgba(255,255,255,0.06)',
+                      <FileCard
+                        key={`${file.name}-${fileIndex}`}
+                        file={file}
+                        index={fileIndex}
+                        mediaInfo={batch.fileMediaInfo[fileIndex]}
+                        productId={(batch.fileContexts[fileIndex] as any)?.productId || ''}
+                        productName={(batch.fileContexts[fileIndex] as any)?.productName || ''}
+                        creativeType={(batch.fileContexts[fileIndex] as any)?.creativeType || ''}
+                        hookAngle={(batch.fileContexts[fileIndex] as any)?.hookAngle || ''}
+                        products={brandProducts}
+                        onRemove={(idx) => {
+                          const updatedFiles = batch.files.filter((_, i) => i !== idx);
+                          updateBatch(batch.id, { files: updatedFiles });
                         }}
-                      >
-                        <p className="text-xs text-gray-400 font-medium w-full sm:w-auto truncate max-w-[180px]">
-                          {file.name}
-                        </p>
-
-                        <div className="flex-1 min-w-[120px]">
-                          <select
-                            value={(batch.fileContexts[fileIndex] as any)?.productId || ''}
-                            onChange={(e) => {
-                              const pid = e.target.value;
-                              const pname = brandProducts.find((p) => p.shopify_product_id === pid)?.title || '';
-                              const context = batch.fileContexts[fileIndex] || {} as any;
-                              updateBatch(batch.id, {
-                                fileContexts: {
-                                  ...batch.fileContexts,
-                                  [fileIndex]: { ...context, productId: pid, productName: pname },
-                                },
-                              });
-                            }}
-                            className={`${selectClass} ${inputFocusStyle} text-xs`}
-                            style={inputStyle}
-                          >
-                            <option value="">Product...</option>
-                            {(() => {
-                              const groups = new Map<string, typeof brandProducts>();
-                              for (const p of brandProducts) {
-                                const key = p.product_type || '';
-                                if (!groups.has(key)) groups.set(key, []);
-                                groups.get(key)!.push(p);
-                              }
-                              const entries = Array.from(groups.entries());
-                              if (entries.length === 1 && entries[0][0] === '') {
-                                return entries[0][1].map((p) => (
-                                  <option key={p.shopify_product_id} value={p.shopify_product_id}>
-                                    {p.title}
-                                  </option>
-                                ));
-                              }
-                              return entries.map(([type, prods]) => {
-                                if (!type) {
-                                  return prods.map((p) => (
-                                    <option key={p.shopify_product_id} value={p.shopify_product_id}>
-                                      {p.title}
-                                    </option>
-                                  ));
-                                }
-                                return (
-                                  <optgroup key={type} label={type}>
-                                    {prods.map((p) => (
-                                      <option key={p.shopify_product_id} value={p.shopify_product_id}>
-                                        {p.title}
-                                      </option>
-                                    ))}
-                                  </optgroup>
-                                );
-                              });
-                            })()}
-                          </select>
-                        </div>
-
-                        <div className="flex-1 min-w-[120px]">
-                          <select
-                            value={(batch.fileContexts[fileIndex] as any)?.creativeType || ''}
-                            onChange={(e) => {
-                              const context = batch.fileContexts[fileIndex] || {} as any;
-                              updateBatch(batch.id, {
-                                fileContexts: {
-                                  ...batch.fileContexts,
-                                  [fileIndex]: { ...context, creativeType: e.target.value },
-                                },
-                              });
-                            }}
-                            className={`${selectClass} ${inputFocusStyle} text-xs`}
-                            style={inputStyle}
-                          >
-                            <option value="">Type...</option>
-                            {CREATIVE_TYPE_GROUPS.map((group) => (
-                              <optgroup key={group.label} label={group.label}>
-                                {group.types.map((t) => (
-                                  <option key={t.value} value={t.value}>
-                                    {t.label}
-                                  </option>
-                                ))}
-                              </optgroup>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div className="flex-1 min-w-[100px]">
-                          <input
-                            type="text"
-                            placeholder="Hook / angle..."
-                            value={(batch.fileContexts[fileIndex] as any)?.hookAngle || ''}
-                            onChange={(e) => {
-                              const context = batch.fileContexts[fileIndex] || {} as any;
-                              updateBatch(batch.id, {
-                                fileContexts: {
-                                  ...batch.fileContexts,
-                                  [fileIndex]: { ...context, hookAngle: e.target.value },
-                                },
-                              });
-                            }}
-                            className={`${inputClass} ${inputFocusStyle} text-xs`}
-                            style={inputStyle}
-                          />
-                        </div>
-                      </div>
+                        onProductChange={(idx, pid, pname) => {
+                          const context = batch.fileContexts[idx] || {} as any;
+                          updateBatch(batch.id, {
+                            fileContexts: {
+                              ...batch.fileContexts,
+                              [idx]: { ...context, productId: pid, productName: pname },
+                            },
+                          });
+                        }}
+                        onCreativeTypeChange={(idx, val) => {
+                          const context = batch.fileContexts[idx] || {} as any;
+                          updateBatch(batch.id, {
+                            fileContexts: {
+                              ...batch.fileContexts,
+                              [idx]: { ...context, creativeType: val },
+                            },
+                          });
+                        }}
+                        onHookAngleChange={(idx, val) => {
+                          const context = batch.fileContexts[idx] || {} as any;
+                          updateBatch(batch.id, {
+                            fileContexts: {
+                              ...batch.fileContexts,
+                              [idx]: { ...context, hookAngle: val },
+                            },
+                          });
+                        }}
+                      />
                     ))}
                   </div>
                 )}
