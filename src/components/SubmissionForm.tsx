@@ -204,14 +204,26 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
         body: JSON.stringify({ brand_id: selectedBrandId }),
       });
 
-      // Refresh the product list
-      const productsRes = await fetch(`/api/brand-products?brand_id=${selectedBrandId}`, {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
-      if (productsRes.ok) {
-        const productsData = await productsRes.json();
-        setBrandProducts(productsData.products || []);
-      }
+      // Refresh the product list directly from Supabase
+      const refreshSupabase = createClient();
+      const { data: refreshedProducts } = await refreshSupabase
+        .from('shopify_products')
+        .select('shopify_product_id, title, product_type, handle')
+        .eq('brand_id', selectedBrandId)
+        .eq('status', 'active')
+        .order('product_type')
+        .order('title');
+
+      const refreshedResult = [
+        { shopify_product_id: '__brand_general__', title: 'Brand / General', product_type: '', handle: '' },
+        ...(refreshedProducts || []).map((p: any) => ({
+          shopify_product_id: String(p.shopify_product_id),
+          title: p.title,
+          product_type: p.product_type || '',
+          handle: p.handle || '',
+        })),
+      ];
+      setBrandProducts(refreshedResult);
 
       setSyncSuccess(true);
       setTimeout(() => setSyncSuccess(false), 2000);
@@ -231,17 +243,31 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
       }
       try {
         const supabase = createClient();
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
-        const res = await fetch(`/api/brand-products?brand_id=${selectedBrandId}`, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
-        if (res.ok) {
-          const json = await res.json();
-          setBrandProducts(json.products || []);
+        const { data: products, error } = await supabase
+          .from('shopify_products')
+          .select('shopify_product_id, title, product_type, handle')
+          .eq('brand_id', selectedBrandId)
+          .eq('status', 'active')
+          .order('product_type')
+          .order('title');
+
+        if (error) {
+          console.error('Product fetch error:', error);
+          return;
         }
-      } catch {
-        // silently fail — products are optional
+
+        const result = [
+          { shopify_product_id: '__brand_general__', title: 'Brand / General', product_type: '', handle: '' },
+          ...(products || []).map((p: any) => ({
+            shopify_product_id: String(p.shopify_product_id),
+            title: p.title,
+            product_type: p.product_type || '',
+            handle: p.handle || '',
+          })),
+        ];
+        setBrandProducts(result);
+      } catch (err) {
+        console.error('Product fetch failed:', err);
       }
     };
     fetchProducts();
