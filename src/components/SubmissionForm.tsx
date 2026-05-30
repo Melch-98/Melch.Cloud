@@ -45,6 +45,7 @@ interface BatchDefaults {
   productId: string;
   productName: string;
   creativeType: string;
+  copyTemplate: string;
 }
 
 interface BatchFormState extends BatchFormData {
@@ -84,7 +85,7 @@ const createEmptyBatch = (batchName: string): BatchFormState => ({
   fileMediaInfo: {},
   isExpanded: true,
   errors: {},
-  tagDefaults: { productId: '', productName: '', creativeType: '' },
+  tagDefaults: { productId: '', productName: '', creativeType: '', copyTemplate: '' },
 });
 
 // Input field component for consistency and speed
@@ -204,6 +205,8 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
 
       // Refresh the product list directly from Supabase
       const refreshSupabase = createClient();
+      await refreshSupabase.auth.getSession(); // ensure auth loaded
+
       const { data: refreshedProducts } = await refreshSupabase
         .from('shopify_products')
         .select('shopify_product_id, title, product_type, handle')
@@ -241,6 +244,10 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
       }
       try {
         const supabase = createClient();
+        // Must load session from cookies before making authenticated queries
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+
         const { data: products, error } = await supabase
           .from('shopify_products')
           .select('shopify_product_id, title, product_type, handle')
@@ -488,7 +495,16 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
             creator_name: batch.creatorName || '',
             creator_social_handle: batch.creatorSocialHandle || null,
             landing_page_url: batch.landingPageUrl || null,
-            copy_title: batch.copyTemplate || null,
+            copy_title: (() => {
+              // Derive from per-file copy templates — use the most common, or null
+              const templates = Object.values(batch.fileContexts)
+                .map((c: any) => c?.copyTemplate)
+                .filter(Boolean);
+              if (templates.length === 0) return null;
+              const counts: Record<string, number> = {};
+              for (const t of templates) counts[t] = (counts[t] || 0) + 1;
+              return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+            })(),
             copy_headline: null,
             copy_body: batch.isCarousel ? batch.primaryText || null : null,
             copy_cta: null,
@@ -531,6 +547,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
               ? (CREATIVE_TYPES_MAP.get((fileContext as any).creativeType)?.fidelity ?? null)
               : null,
             hook_angle: (fileContext as any)?.hookAngle || null,
+            copy_title: (fileContext as any)?.copyTemplate || null,
           });
           if (fileError) {
             console.error(`File insert error for ${batch.files[i].name}:`, fileError);
@@ -832,39 +849,6 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                     </Field>
                   )}
 
-                  {/* Copy Template to Use — NORMAL, FLEXIBLE, WHITELIST (not carousel) */}
-                  {!batch.isCarousel && (
-                    <Field label="Copy Template to Use">
-                      {copyTemplateOptions.length > 0 ? (
-                        <select
-                          value={batch.copyTemplate}
-                          onChange={(e) =>
-                            updateBatch(batch.id, { copyTemplate: e.target.value })
-                          }
-                          className={`${selectClass} ${inputFocusStyle}`}
-                          style={inputStyle}
-                        >
-                          <option value="">Select a template…</option>
-                          {copyTemplateOptions.map((tpl) => (
-                            <option key={tpl.id} value={tpl.title}>
-                              {tpl.title}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <input
-                          type="text"
-                          value={batch.copyTemplate}
-                          onChange={(e) =>
-                            updateBatch(batch.id, { copyTemplate: e.target.value })
-                          }
-                          className={`${inputClass} ${inputFocusStyle}`}
-                          style={inputStyle}
-                          placeholder="No templates yet — type a name"
-                        />
-                      )}
-                    </Field>
-                  )}
                 </div>
 
                 {/* ─── File Uploader (drop zone) ─── */}
@@ -922,7 +906,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                       Batch defaults
                     </span>
 
-                    <div className="flex items-center gap-1 flex-1 min-w-[120px]">
+                    <div className="flex items-center gap-1 flex-1 min-w-[140px] max-w-[250px]">
                       <select
                         value={batch.tagDefaults.productId}
                         onChange={(e) => {
@@ -995,7 +979,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                           tagDefaults: { ...batch.tagDefaults, creativeType: e.target.value },
                         })
                       }
-                      className="flex-1 min-w-[120px] px-2.5 py-1.5 rounded-lg text-[13px] text-[#F5F5F8] focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+                      className="flex-1 min-w-[110px] max-w-[180px] px-2.5 py-1.5 rounded-lg text-[13px] text-[#F5F5F8] focus:outline-none focus:border-[#C8B89A]/40 transition-all"
                       style={inputStyle}
                     >
                       <option value="">Type...</option>
@@ -1010,11 +994,31 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                       ))}
                     </select>
 
+                    {!batch.isCarousel && (
+                      <select
+                        value={batch.tagDefaults.copyTemplate || ''}
+                        onChange={(e) =>
+                          updateBatch(batch.id, {
+                            tagDefaults: { ...batch.tagDefaults, copyTemplate: e.target.value },
+                          })
+                        }
+                        className="flex-1 min-w-[120px] max-w-[200px] px-2.5 py-1.5 rounded-lg text-[13px] text-[#F5F5F8] focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+                        style={inputStyle}
+                      >
+                        <option value="">Copy template...</option>
+                        {copyTemplateOptions.map((tpl) => (
+                          <option key={tpl.id} value={tpl.title}>
+                            {tpl.title}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+
                     <button
                       type="button"
                       onClick={() => {
                         const d = batch.tagDefaults;
-                        if (!d.productId && !d.creativeType) return;
+                        if (!d.productId && !d.creativeType && !d.copyTemplate) return;
                         const updated = { ...batch.fileContexts };
                         for (let i = 0; i < batch.files.length; i++) {
                           const existing = updated[i] || {} as any;
@@ -1024,6 +1028,9 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                           }
                           if (d.creativeType && !existing.creativeType) {
                             existing.creativeType = d.creativeType;
+                          }
+                          if (d.copyTemplate && !existing.copyTemplate) {
+                            existing.copyTemplate = d.copyTemplate;
                           }
                           updated[i] = existing;
                         }
@@ -1068,7 +1075,10 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                         productName={(batch.fileContexts[fileIndex] as any)?.productName || ''}
                         creativeType={(batch.fileContexts[fileIndex] as any)?.creativeType || ''}
                         hookAngle={(batch.fileContexts[fileIndex] as any)?.hookAngle || ''}
+                        copyTemplate={(batch.fileContexts[fileIndex] as any)?.copyTemplate || ''}
                         products={brandProducts}
+                        copyTemplateOptions={copyTemplateOptions}
+                        isCarousel={batch.isCarousel}
                         onRemove={(idx) => {
                           const updatedFiles = batch.files.filter((_, i) => i !== idx);
                           updateBatch(batch.id, { files: updatedFiles });
@@ -1097,6 +1107,15 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                             fileContexts: {
                               ...batch.fileContexts,
                               [idx]: { ...context, hookAngle: val },
+                            },
+                          });
+                        }}
+                        onCopyTemplateChange={(idx, val) => {
+                          const context = batch.fileContexts[idx] || {} as any;
+                          updateBatch(batch.id, {
+                            fileContexts: {
+                              ...batch.fileContexts,
+                              [idx]: { ...context, copyTemplate: val },
                             },
                           });
                         }}

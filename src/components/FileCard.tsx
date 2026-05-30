@@ -18,6 +18,11 @@ interface Product {
   handle: string;
 }
 
+interface CopyTemplateOption {
+  id: string;
+  title: string;
+}
+
 interface FileCardProps {
   file: File;
   index: number;
@@ -26,11 +31,15 @@ interface FileCardProps {
   productName: string;
   creativeType: string;
   hookAngle: string;
+  copyTemplate: string;
   products: Product[];
+  copyTemplateOptions: CopyTemplateOption[];
+  isCarousel: boolean;
   onRemove: (index: number) => void;
   onProductChange: (index: number, productId: string, productName: string) => void;
   onCreativeTypeChange: (index: number, value: string) => void;
   onHookAngleChange: (index: number, value: string) => void;
+  onCopyTemplateChange: (index: number, value: string) => void;
 }
 
 function formatSize(bytes: number): string {
@@ -109,11 +118,15 @@ const FileCard: React.FC<FileCardProps> = ({
   productName,
   creativeType,
   hookAngle,
+  copyTemplate,
   products,
+  copyTemplateOptions,
+  isCarousel,
   onRemove,
   onProductChange,
   onCreativeTypeChange,
   onHookAngleChange,
+  onCopyTemplateChange,
 }) => {
   const [thumbUrl, setThumbUrl] = useState<string | null>(null);
   const [thumbError, setThumbError] = useState(false);
@@ -296,6 +309,22 @@ const FileCard: React.FC<FileCardProps> = ({
             className="flex-1 min-w-[80px] px-1.5 py-0.5 rounded-md text-[11px] text-[#F5F5F8] placeholder-gray-600 focus:outline-none focus:border-[#C8B89A]/40 transition-all"
             style={{ ...selectStyle, height: 26 }}
           />
+
+          {!isCarousel && (
+            <select
+              value={copyTemplate}
+              onChange={(e) => onCopyTemplateChange(index, e.target.value)}
+              className="flex-1 min-w-[100px] px-1.5 py-0.5 rounded-md text-[11px] text-[#F5F5F8] focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+              style={{ ...selectStyle, height: 26 }}
+            >
+              <option value="">Copy...</option>
+              {copyTemplateOptions.map((tpl) => (
+                <option key={tpl.id} value={tpl.title}>
+                  {tpl.title}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
       </div>
     </div>
