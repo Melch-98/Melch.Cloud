@@ -46,6 +46,8 @@ interface BatchDefaults {
   productName: string;
   creativeType: string;
   copyTemplate: string;
+  creatorName: string;
+  creatorHandle: string;
 }
 
 interface BatchFormState extends BatchFormData {
@@ -85,7 +87,7 @@ const createEmptyBatch = (batchName: string): BatchFormState => ({
   fileMediaInfo: {},
   isExpanded: true,
   errors: {},
-  tagDefaults: { productId: '', productName: '', creativeType: '', copyTemplate: '' },
+  tagDefaults: { productId: '', productName: '', creativeType: '', copyTemplate: '', creatorName: '', creatorHandle: '' },
 });
 
 // Input field component for consistency and speed
@@ -385,13 +387,18 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
       errors.files = 'At least one file is required';
     }
 
-    // Whitelist requires creator name + social handle
+    // Whitelist requires creator name + social handle per file
     if (batch.isWhitelist) {
-      if (!batch.creatorName.trim()) {
-        errors.creatorName = 'Creator name is required for whitelist';
-      }
-      if (!batch.creatorSocialHandle.trim()) {
-        errors.creatorSocialHandle = 'Social handle is required for whitelist';
+      for (let i = 0; i < batch.files.length; i++) {
+        const ctx = batch.fileContexts[i] as any;
+        if (!ctx?.creatorName?.trim()) {
+          errors[`file_${i}_creator`] = 'Creator name required for whitelist';
+          if (!errors.files) errors.files = 'All files need a creator name for whitelist submissions';
+        }
+        if (!ctx?.creatorHandle?.trim()) {
+          errors[`file_${i}_handle`] = 'Handle required for whitelist';
+          if (!errors.files) errors.files = 'All files need a @handle for whitelist submissions';
+        }
       }
     }
 
@@ -492,8 +499,25 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
               for (const t of types) counts[t] = (counts[t] || 0) + 1;
               return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
             })(),
-            creator_name: batch.creatorName || '',
-            creator_social_handle: batch.creatorSocialHandle || null,
+            creator_name: (() => {
+              // Derive from per-file creators — use the most common, or empty
+              const names = Object.values(batch.fileContexts)
+                .map((c: any) => c?.creatorName)
+                .filter(Boolean);
+              if (names.length === 0) return '';
+              const counts: Record<string, number> = {};
+              for (const n of names) counts[n] = (counts[n] || 0) + 1;
+              return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+            })(),
+            creator_social_handle: (() => {
+              const handles = Object.values(batch.fileContexts)
+                .map((c: any) => c?.creatorHandle)
+                .filter(Boolean);
+              if (handles.length === 0) return null;
+              const counts: Record<string, number> = {};
+              for (const h of handles) counts[h] = (counts[h] || 0) + 1;
+              return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+            })(),
             landing_page_url: batch.landingPageUrl || null,
             copy_title: (() => {
               // Derive from per-file copy templates — use the most common, or null
@@ -548,6 +572,8 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
               : null,
             hook_angle: (fileContext as any)?.hookAngle || null,
             copy_title: (fileContext as any)?.copyTemplate || null,
+            creator_name: (fileContext as any)?.creatorName || null,
+            creator_social_handle: (fileContext as any)?.creatorHandle || null,
           });
           if (fileError) {
             console.error(`File insert error for ${batch.files[i].name}:`, fileError);
@@ -790,49 +816,6 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                     </div>
                   </Field>
 
-                  {/* Creator Name — NORMAL + WHITELIST only */}
-                  {(!batch.isCarousel && !batch.isFlexible) || batch.isWhitelist ? (
-                    <Field
-                      label={batch.isWhitelist ? 'Creator Name *' : 'Creator Name'}
-                      error={batch.errors.creatorName}
-                    >
-                      <input
-                        type="text"
-                        value={batch.creatorName}
-                        onChange={(e) =>
-                          updateBatch(batch.id, { creatorName: e.target.value })
-                        }
-                        className={`${inputClass} ${inputFocusStyle}`}
-                        style={inputStyle}
-                        placeholder={
-                          batch.isWhitelist ? 'Required for whitelist' : 'Optional'
-                        }
-                      />
-                    </Field>
-                  ) : null}
-
-                  {/* Creator Social Handle — WHITELIST only */}
-                  {batch.isWhitelist && (
-                    <Field
-                      label="Creator Social Handle *"
-                      icon={<AtSign className="w-3.5 h-3.5 text-amber-600" />}
-                      error={batch.errors.creatorSocialHandle}
-                    >
-                      <input
-                        type="text"
-                        value={batch.creatorSocialHandle}
-                        onChange={(e) =>
-                          updateBatch(batch.id, {
-                            creatorSocialHandle: e.target.value,
-                          })
-                        }
-                        className={`${inputClass} ${inputFocusStyle}`}
-                        style={inputStyle}
-                        placeholder="@handle"
-                      />
-                    </Field>
-                  )}
-
                   {/* Primary Text — CAROUSEL only */}
                   {batch.isCarousel && (
                     <Field label="Primary Text" error={batch.errors.primaryText}>
@@ -1014,11 +997,38 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                       </select>
                     )}
 
+                    <input
+                      type="text"
+                      placeholder="Creator..."
+                      value={batch.tagDefaults.creatorName || ''}
+                      onChange={(e) =>
+                        updateBatch(batch.id, {
+                          tagDefaults: { ...batch.tagDefaults, creatorName: e.target.value },
+                        })
+                      }
+                      className="flex-1 min-w-[100px] max-w-[160px] px-2.5 py-1.5 rounded-lg text-[13px] text-[#F5F5F8] placeholder-gray-600 focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+                      style={inputStyle}
+                    />
+                    {batch.isWhitelist && (
+                      <input
+                        type="text"
+                        placeholder="@handle..."
+                        value={batch.tagDefaults.creatorHandle || ''}
+                        onChange={(e) =>
+                          updateBatch(batch.id, {
+                            tagDefaults: { ...batch.tagDefaults, creatorHandle: e.target.value },
+                          })
+                        }
+                        className="flex-1 min-w-[90px] max-w-[140px] px-2.5 py-1.5 rounded-lg text-[13px] text-[#F5F5F8] placeholder-gray-600 focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+                        style={inputStyle}
+                      />
+                    )}
+
                     <button
                       type="button"
                       onClick={() => {
                         const d = batch.tagDefaults;
-                        if (!d.productId && !d.creativeType && !d.copyTemplate) return;
+                        if (!d.productId && !d.creativeType && !d.copyTemplate && !d.creatorName && !d.creatorHandle) return;
                         const updated = { ...batch.fileContexts };
                         for (let i = 0; i < batch.files.length; i++) {
                           const existing = updated[i] || {} as any;
@@ -1031,6 +1041,12 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                           }
                           if (d.copyTemplate && !existing.copyTemplate) {
                             existing.copyTemplate = d.copyTemplate;
+                          }
+                          if (d.creatorName && !existing.creatorName) {
+                            existing.creatorName = d.creatorName;
+                          }
+                          if (d.creatorHandle && !existing.creatorHandle) {
+                            existing.creatorHandle = d.creatorHandle;
                           }
                           updated[i] = existing;
                         }
@@ -1076,9 +1092,12 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                         creativeType={(batch.fileContexts[fileIndex] as any)?.creativeType || ''}
                         hookAngle={(batch.fileContexts[fileIndex] as any)?.hookAngle || ''}
                         copyTemplate={(batch.fileContexts[fileIndex] as any)?.copyTemplate || ''}
+                        creatorName={(batch.fileContexts[fileIndex] as any)?.creatorName || ''}
+                        creatorHandle={(batch.fileContexts[fileIndex] as any)?.creatorHandle || ''}
                         products={brandProducts}
                         copyTemplateOptions={copyTemplateOptions}
                         isCarousel={batch.isCarousel}
+                        isWhitelist={batch.isWhitelist}
                         onRemove={(idx) => {
                           const updatedFiles = batch.files.filter((_, i) => i !== idx);
                           updateBatch(batch.id, { files: updatedFiles });
@@ -1116,6 +1135,24 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                             fileContexts: {
                               ...batch.fileContexts,
                               [idx]: { ...context, copyTemplate: val },
+                            },
+                          });
+                        }}
+                        onCreatorNameChange={(idx, val) => {
+                          const context = batch.fileContexts[idx] || {} as any;
+                          updateBatch(batch.id, {
+                            fileContexts: {
+                              ...batch.fileContexts,
+                              [idx]: { ...context, creatorName: val },
+                            },
+                          });
+                        }}
+                        onCreatorHandleChange={(idx, val) => {
+                          const context = batch.fileContexts[idx] || {} as any;
+                          updateBatch(batch.id, {
+                            fileContexts: {
+                              ...batch.fileContexts,
+                              [idx]: { ...context, creatorHandle: val },
                             },
                           });
                         }}

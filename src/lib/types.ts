@@ -143,6 +143,8 @@ export interface FileContext {
   creativeType: string;
   hookAngle: string;
   copyTemplate: string;
+  creatorName: string;
+  creatorHandle: string;
 }
 
 // ─── Batch Form Data (upload form) ──────────────────────────────

@@ -32,14 +32,19 @@ interface FileCardProps {
   creativeType: string;
   hookAngle: string;
   copyTemplate: string;
+  creatorName: string;
+  creatorHandle: string;
   products: Product[];
   copyTemplateOptions: CopyTemplateOption[];
   isCarousel: boolean;
+  isWhitelist: boolean;
   onRemove: (index: number) => void;
   onProductChange: (index: number, productId: string, productName: string) => void;
   onCreativeTypeChange: (index: number, value: string) => void;
   onHookAngleChange: (index: number, value: string) => void;
   onCopyTemplateChange: (index: number, value: string) => void;
+  onCreatorNameChange: (index: number, value: string) => void;
+  onCreatorHandleChange: (index: number, value: string) => void;
 }
 
 function formatSize(bytes: number): string {
@@ -119,14 +124,19 @@ const FileCard: React.FC<FileCardProps> = ({
   creativeType,
   hookAngle,
   copyTemplate,
+  creatorName,
+  creatorHandle,
   products,
   copyTemplateOptions,
   isCarousel,
+  isWhitelist,
   onRemove,
   onProductChange,
   onCreativeTypeChange,
   onHookAngleChange,
   onCopyTemplateChange,
+  onCreatorNameChange,
+  onCreatorHandleChange,
 }) => {
   const [thumbUrl, setThumbUrl] = useState<string | null>(null);
   const [thumbError, setThumbError] = useState(false);
@@ -324,6 +334,28 @@ const FileCard: React.FC<FileCardProps> = ({
                 </option>
               ))}
             </select>
+          )}
+        </div>
+
+        {/* Creator row */}
+        <div className="flex flex-wrap gap-1">
+          <input
+            type="text"
+            placeholder="Creator name..."
+            value={creatorName}
+            onChange={(e) => onCreatorNameChange(index, e.target.value)}
+            className="flex-1 min-w-[120px] px-1.5 py-0.5 rounded-md text-[11px] text-[#F5F5F8] placeholder-gray-600 focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+            style={{ ...selectStyle, height: 26 }}
+          />
+          {isWhitelist && (
+            <input
+              type="text"
+              placeholder="@handle"
+              value={creatorHandle}
+              onChange={(e) => onCreatorHandleChange(index, e.target.value)}
+              className="flex-1 min-w-[100px] px-1.5 py-0.5 rounded-md text-[11px] text-[#F5F5F8] placeholder-gray-600 focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+              style={{ ...selectStyle, height: 26 }}
+            />
           )}
         </div>
       </div>
