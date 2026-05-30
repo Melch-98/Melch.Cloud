@@ -1,14 +1,16 @@
-# Claude Code Prompt: Fix Product Dropdown, Fix Overlap, Move Copy Template Per-File
+# Claude Code Prompt: Fix Product Dropdown, Fix Layout, Move Copy Template + Creator Per-File
 
 ## Context
 
-Three issues with the upload form at `src/components/SubmissionForm.tsx` and `src/components/FileCard.tsx`:
+Four changes to the upload form at `src/components/SubmissionForm.tsx` and `src/components/FileCard.tsx`:
 
 1. **Product dropdown is empty** — The direct Supabase query works correctly, but the browser client's session isn't loaded from cookies before the query fires. The `createBrowserClient` from `@supabase/ssr` needs `getSession()` called first to load auth cookies into memory.
 
 2. **Batch defaults bar overlap** — The "Product..." and "Type..." dropdowns in the batch defaults bar overlap each other on narrow viewports because both use `flex-1`.
 
 3. **Copy template should be per-file** — Currently the copy template is a batch-level field. It should move to the per-file FileCard (alongside product, type, hook/angle). The `submission_files` table already has a `copy_title` column, so no database changes needed.
+
+4. **Creator name + social handle should be per-file** — Currently batch-level fields. Move them into FileCard as a second row of inputs. The `submission_files` table does NOT have these columns yet — need a database migration via Supabase MCP `apply_migration`.
 
 ---
 
@@ -306,14 +308,19 @@ interface FileCardProps {
   creativeType: string;
   hookAngle: string;
   copyTemplate: string;
+  creatorName: string;
+  creatorHandle: string;
   products: Product[];
   copyTemplateOptions: CopyTemplateOption[];
   isCarousel: boolean;
+  isWhitelist: boolean;
   onRemove: (index: number) => void;
   onProductChange: (index: number, productId: string, productName: string) => void;
   onCreativeTypeChange: (index: number, value: string) => void;
   onHookAngleChange: (index: number, value: string) => void;
   onCopyTemplateChange: (index: number, value: string) => void;
+  onCreatorNameChange: (index: number, value: string) => void;
+  onCreatorHandleChange: (index: number, value: string) => void;
 }
 ```
 
@@ -348,14 +355,19 @@ const FileCard: React.FC<FileCardProps> = ({
   creativeType,
   hookAngle,
   copyTemplate,
+  creatorName,
+  creatorHandle,
   products,
   copyTemplateOptions,
   isCarousel,
+  isWhitelist,
   onRemove,
   onProductChange,
   onCreativeTypeChange,
   onHookAngleChange,
   onCopyTemplateChange,
+  onCreatorNameChange,
+  onCreatorHandleChange,
 }) => {
 ```
 
@@ -379,6 +391,32 @@ In the bottom tag row, after the hook/angle `<input>` and before the closing `</
     ))}
   </select>
 )}
+```
+
+Then add a SECOND row after the tag row's closing `</div>`, for creator name and handle. This goes inside the content area `<div>` (the `flex-1 min-w-0 flex flex-col gap-2` div), as a new row after the existing tag row:
+
+```tsx
+{/* Creator row */}
+<div className="flex flex-wrap gap-1">
+  <input
+    type="text"
+    placeholder="Creator name..."
+    value={creatorName}
+    onChange={(e) => onCreatorNameChange(index, e.target.value)}
+    className="flex-1 min-w-[120px] px-1.5 py-0.5 rounded-md text-[11px] text-[#F5F5F8] placeholder-gray-600 focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+    style={{ ...selectStyle, height: 26 }}
+  />
+  {isWhitelist && (
+    <input
+      type="text"
+      placeholder="@handle"
+      value={creatorHandle}
+      onChange={(e) => onCreatorHandleChange(index, e.target.value)}
+      className="flex-1 min-w-[100px] px-1.5 py-0.5 rounded-md text-[11px] text-[#F5F5F8] placeholder-gray-600 focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+      style={{ ...selectStyle, height: 26 }}
+    />
+  )}
+</div>
 ```
 
 ### 3c. Pass copyTemplate props from SubmissionForm to FileCard
@@ -411,12 +449,15 @@ In `src/components/SubmissionForm.tsx`, update the `<FileCard>` rendering (~line
   creativeType={(batch.fileContexts[fileIndex] as any)?.creativeType || ''}
   hookAngle={(batch.fileContexts[fileIndex] as any)?.hookAngle || ''}
   copyTemplate={(batch.fileContexts[fileIndex] as any)?.copyTemplate || ''}
+  creatorName={(batch.fileContexts[fileIndex] as any)?.creatorName || ''}
+  creatorHandle={(batch.fileContexts[fileIndex] as any)?.creatorHandle || ''}
   products={brandProducts}
   copyTemplateOptions={copyTemplateOptions}
   isCarousel={batch.isCarousel}
+  isWhitelist={batch.isWhitelist}
 ```
 
-After the existing `onHookAngleChange` handler, add the `onCopyTemplateChange` handler:
+After the existing `onHookAngleChange` handler, add these three handlers:
 
 ```tsx
 onCopyTemplateChange={(idx, val) => {
@@ -425,6 +466,24 @@ onCopyTemplateChange={(idx, val) => {
     fileContexts: {
       ...batch.fileContexts,
       [idx]: { ...context, copyTemplate: val },
+    },
+  });
+}}
+onCreatorNameChange={(idx, val) => {
+  const context = batch.fileContexts[idx] || {} as any;
+  updateBatch(batch.id, {
+    fileContexts: {
+      ...batch.fileContexts,
+      [idx]: { ...context, creatorName: val },
+    },
+  });
+}}
+onCreatorHandleChange={(idx, val) => {
+  const context = batch.fileContexts[idx] || {} as any;
+  updateBatch(batch.id, {
+    fileContexts: {
+      ...batch.fileContexts,
+      [idx]: { ...context, creatorHandle: val },
     },
   });
 }}
@@ -490,20 +549,247 @@ copy_title: (() => {
 
 ---
 
+## Change 4: Move creator name + social handle per-file
+
+### 4a. Database migration — ALREADY APPLIED
+
+The `creator_name` and `creator_social_handle` columns have already been added to `submission_files`. No migration needed — just use them in the insert.
+
+### 4b. Remove batch-level Creator Name and Creator Social Handle fields
+
+In `src/components/SubmissionForm.tsx`, delete the Creator Name `<Field>` block (~lines 793-812):
+
+```tsx
+// DELETE THIS ENTIRE BLOCK:
+{(!batch.isCarousel && !batch.isFlexible) || batch.isWhitelist ? (
+  <Field
+    label={batch.isWhitelist ? 'Creator Name *' : 'Creator Name'}
+    error={batch.errors.creatorName}
+  >
+    <input
+      type="text"
+      value={batch.creatorName}
+      onChange={(e) =>
+        updateBatch(batch.id, { creatorName: e.target.value })
+      }
+      className={`${inputClass} ${inputFocusStyle}`}
+      style={inputStyle}
+      placeholder={
+        batch.isWhitelist ? 'Required for whitelist' : 'Optional'
+      }
+    />
+  </Field>
+) : null}
+```
+
+And delete the Creator Social Handle `<Field>` block (~lines 814-834):
+
+```tsx
+// DELETE THIS ENTIRE BLOCK:
+{batch.isWhitelist && (
+  <Field
+    label="Creator Social Handle *"
+    icon={<AtSign className="w-3.5 h-3.5 text-amber-600" />}
+    error={batch.errors.creatorSocialHandle}
+  >
+    <input
+      type="text"
+      value={batch.creatorSocialHandle}
+      onChange={(e) =>
+        updateBatch(batch.id, {
+          creatorSocialHandle: e.target.value,
+        })
+      }
+      className={`${inputClass} ${inputFocusStyle}`}
+      style={inputStyle}
+      placeholder="@handle"
+    />
+  </Field>
+)}
+```
+
+### 4c. Add creator to batch defaults bar
+
+In the batch defaults bar, add creator name and handle inputs to the "Apply to all" logic. Update the `BatchDefaults` interface:
+
+**Current (after Change 2 updates):**
+```typescript
+interface BatchDefaults {
+  productId: string;
+  productName: string;
+  creativeType: string;
+  copyTemplate: string;
+}
+```
+
+**Replace with:**
+```typescript
+interface BatchDefaults {
+  productId: string;
+  productName: string;
+  creativeType: string;
+  copyTemplate: string;
+  creatorName: string;
+  creatorHandle: string;
+}
+```
+
+Update `createEmptyBatch` tagDefaults:
+
+**Current (after Change 2 updates):**
+```typescript
+tagDefaults: { productId: '', productName: '', creativeType: '', copyTemplate: '' },
+```
+
+**Replace with:**
+```typescript
+tagDefaults: { productId: '', productName: '', creativeType: '', copyTemplate: '', creatorName: '', creatorHandle: '' },
+```
+
+Add creator name + handle inputs to the batch defaults bar, after the copy template select and before the "Apply to all" button:
+
+```tsx
+<input
+  type="text"
+  placeholder="Creator..."
+  value={batch.tagDefaults.creatorName || ''}
+  onChange={(e) =>
+    updateBatch(batch.id, {
+      tagDefaults: { ...batch.tagDefaults, creatorName: e.target.value },
+    })
+  }
+  className="flex-1 min-w-[100px] max-w-[160px] px-2.5 py-1.5 rounded-lg text-[13px] text-[#F5F5F8] placeholder-gray-600 focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+  style={inputStyle}
+/>
+{batch.isWhitelist && (
+  <input
+    type="text"
+    placeholder="@handle..."
+    value={batch.tagDefaults.creatorHandle || ''}
+    onChange={(e) =>
+      updateBatch(batch.id, {
+        tagDefaults: { ...batch.tagDefaults, creatorHandle: e.target.value },
+      })
+    }
+    className="flex-1 min-w-[90px] max-w-[140px] px-2.5 py-1.5 rounded-lg text-[13px] text-[#F5F5F8] placeholder-gray-600 focus:outline-none focus:border-[#C8B89A]/40 transition-all"
+    style={inputStyle}
+  />
+)}
+```
+
+Update the "Apply to all" onClick to include creator fields:
+
+In the Apply to all button, update the condition and logic (adding to what Change 2 already updated):
+
+**The condition check:**
+```typescript
+if (!d.productId && !d.creativeType && !d.copyTemplate && !d.creatorName && !d.creatorHandle) return;
+```
+
+**Add these inside the for loop, after the copyTemplate block:**
+```typescript
+if (d.creatorName && !existing.creatorName) {
+  existing.creatorName = d.creatorName;
+}
+if (d.creatorHandle && !existing.creatorHandle) {
+  existing.creatorHandle = d.creatorHandle;
+}
+```
+
+### 4d. Update submission insert to write creator per-file
+
+In the `submission_files` insert (~line 513), add these fields after `copy_title`:
+
+```typescript
+creator_name: (fileContext as any)?.creatorName || null,
+creator_social_handle: (fileContext as any)?.creatorHandle || null,
+```
+
+### 4e. Derive batch-level creator_name from per-file values
+
+In the `submissions` insert (~line 472), update `creator_name` and `creator_social_handle`:
+
+**Current:**
+```typescript
+creator_name: batch.creatorName || '',
+creator_social_handle: batch.creatorSocialHandle || null,
+```
+
+**Replace with:**
+```typescript
+creator_name: (() => {
+  // Derive from per-file creators — use the most common, or empty
+  const names = Object.values(batch.fileContexts)
+    .map((c: any) => c?.creatorName)
+    .filter(Boolean);
+  if (names.length === 0) return '';
+  const counts: Record<string, number> = {};
+  for (const n of names) counts[n] = (counts[n] || 0) + 1;
+  return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+})(),
+creator_social_handle: (() => {
+  const handles = Object.values(batch.fileContexts)
+    .map((c: any) => c?.creatorHandle)
+    .filter(Boolean);
+  if (handles.length === 0) return null;
+  const counts: Record<string, number> = {};
+  for (const h of handles) counts[h] = (counts[h] || 0) + 1;
+  return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+})(),
+```
+
+### 4f. Update whitelist validation
+
+In the `validateBatch` function, update the whitelist validation to check per-file contexts instead of batch-level fields.
+
+Find the whitelist validation block (checks `batch.isWhitelist`). The creator name and handle are now per-file, so the batch-level `batch.creatorName` and `batch.creatorSocialHandle` won't be filled.
+
+**Current validation (approximately):**
+```typescript
+if (batch.isWhitelist) {
+  if (!batch.creatorName.trim()) {
+    errors.creatorName = 'Creator name is required for whitelist';
+  }
+  if (!batch.creatorSocialHandle.trim()) {
+    errors.creatorSocialHandle = 'Social handle is required for whitelist';
+  }
+}
+```
+
+**Replace with:**
+```typescript
+if (batch.isWhitelist) {
+  // Check that every file has creator name + handle
+  for (let i = 0; i < batch.files.length; i++) {
+    const ctx = batch.fileContexts[i] as any;
+    if (!ctx?.creatorName?.trim()) {
+      errors[`file_${i}_creator`] = 'Creator name required for whitelist';
+      if (!errors.files) errors.files = 'All files need a creator name for whitelist submissions';
+    }
+    if (!ctx?.creatorHandle?.trim()) {
+      errors[`file_${i}_handle`] = 'Handle required for whitelist';
+      if (!errors.files) errors.files = 'All files need a @handle for whitelist submissions';
+    }
+  }
+}
+```
+
+---
+
 ## Files to modify
 
-1. `src/components/SubmissionForm.tsx` — Fix product auth, fix batch defaults overlap, add copy template to batch defaults + apply-to-all, remove batch-level copy template field, pass new props to FileCard, update submission insert
-2. `src/components/FileCard.tsx` — Add copyTemplate prop + select dropdown
+1. `src/components/SubmissionForm.tsx` — Fix product auth, fix batch defaults overlap, add copy template + creator to batch defaults + apply-to-all, remove batch-level copy template / creator / handle fields, pass new props to FileCard, update submission + file inserts, update whitelist validation
+2. `src/components/FileCard.tsx` — Add copyTemplate, creatorName, creatorHandle props + UI elements
+3. **Database migration** — ALREADY APPLIED. `creator_name` and `creator_social_handle` columns exist on `submission_files`. No action needed.
 
 ## What NOT to change
 
-- Don't modify the `submissions` or `submission_files` database tables (both already have the needed columns)
 - Don't change the FileCard thumbnail logic
 - Don't change the carousel per-card details section (headline + description)
 - Don't change the file uploader component
 - Don't change the Dropbox sync or notification logic
-- Don't change the ad-lab page (it still assigns copy_title at batch level — that's fine)
+- Don't change the ad-lab page (it still reads copy_title + creator at batch level — that's fine)
 - Don't change the submissions page or admin page displays
-- Don't change the export route
-- Don't remove `copyTemplate` or `landingPageUrl` from the BatchFormData interface
+- Don't change the export route or file_tracker view
+- Don't remove `copyTemplate`, `creatorName`, `creatorSocialHandle`, or `landingPageUrl` from the BatchFormData interface — keep them with empty defaults
 - Don't change the `/api/copy-templates` or `/api/sync-products` or `/api/brand-products` routes
