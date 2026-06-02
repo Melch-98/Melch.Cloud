@@ -484,6 +484,61 @@ export async function POST(request: NextRequest) {
     let daysSynced = 0;
     let productsSynced = 0;
 
+    // ── Ad spend fetch functions (shared by full-sync and spend-only paths) ──
+    const adSpendErrors: string[] = [];
+    let googleDaysSynced = 0;
+    let metaDaysSynced = 0;
+
+    const fetchGoogle = async (): Promise<Map<string, number>> => {
+      const dailyGoogle = new Map<string, number>();
+      if (!brand.google_ads_customer_id || !brand.google_ads_customer_id.trim()) return dailyGoogle;
+      const windsorKey = process.env.WINDSOR_API_KEY || '';
+      if (!windsorKey) return dailyGoogle;
+      try {
+        const custId = brand.google_ads_customer_id.replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3');
+        const windsorUrl = new URL('https://connectors.windsor.ai/google_ads');
+        windsorUrl.searchParams.set('api_key', windsorKey);
+        windsorUrl.searchParams.set('date_from', sinceDate.split('T')[0]);
+        windsorUrl.searchParams.set('date_to', untilDate.split('T')[0]);
+        windsorUrl.searchParams.set('fields', 'account_id,date,spend');
+        windsorUrl.searchParams.set('_renderer', 'json');
+        const wRes = await fetch(windsorUrl.toString());
+        const wData = await wRes.json();
+        const wRows = Array.isArray(wData) ? wData
+          : wData?.data ? wData.data
+          : wData?.result ? wData.result : [];
+        for (const r of wRows) {
+          if (r.account_id !== custId) continue;
+          dailyGoogle.set(r.date, (dailyGoogle.get(r.date) || 0) + (r.spend || 0));
+        }
+      } catch (e: any) {
+        adSpendErrors.push(`Google: ${e.message}`);
+      }
+      return dailyGoogle;
+    };
+
+    const fetchMeta = async (): Promise<Map<string, number>> => {
+      const dailyMeta = new Map<string, number>();
+      if (!brand.meta_ad_account_id || !brand.meta_ad_account_id.trim()) return dailyMeta;
+      const metaToken = process.env.META_ACCESS_TOKEN || '';
+      if (!metaToken) return dailyMeta;
+      try {
+        const metaUrl = `https://graph.facebook.com/v21.0/${brand.meta_ad_account_id}/insights?` +
+          `time_range=${encodeURIComponent(JSON.stringify({ since: sinceDate.split('T')[0], until: untilDate.split('T')[0] }))}` +
+          `&time_increment=1&fields=spend&limit=500&access_token=${metaToken}`;
+        const mRes = await fetch(metaUrl);
+        const mData = await mRes.json();
+        if (mData.data && mData.data.length > 0) {
+          for (const r of mData.data) {
+            dailyMeta.set(r.date_start, parseFloat(r.spend || '0'));
+          }
+        }
+      } catch (e: any) {
+        adSpendErrors.push(`Meta: ${e.message}`);
+      }
+      return dailyMeta;
+    };
+
     // ── Shopify order sync (skip if spend-only mode) ──
     if (!spendOnly) {
     const shopifyToken = oauthAccessToken
@@ -509,7 +564,10 @@ export async function POST(request: NextRequest) {
 
     const dayBuckets = aggregateOrdersByDay(orders);
 
-    // Upsert into daily_pnl
+    // Fetch ad spend in parallel with order processing
+    const [dailyGoogle, dailyMeta] = await Promise.all([fetchGoogle(), fetchMeta()]);
+
+    // Build order rows WITH spend data merged in
     const rows = Array.from(dayBuckets.entries()).map(([date, bucket]) => ({
       brand_id: brand.id,
       date,
@@ -523,7 +581,14 @@ export async function POST(request: NextRequest) {
       taxes: Math.round(bucket.taxes * 100) / 100,
       shipping: Math.round(bucket.shipping * 100) / 100,
       synced_at: new Date().toISOString(),
+      // Merge spend data if we have it for this date — omit if not available
+      // so Supabase won't overwrite existing spend values
+      ...(dailyMeta.has(date) ? { meta_spend: Math.round(dailyMeta.get(date)! * 100) / 100 } : {}),
+      ...(dailyGoogle.has(date) ? { google_spend: Math.round(dailyGoogle.get(date)! * 100) / 100 } : {}),
     }));
+
+    googleDaysSynced = dailyGoogle.size;
+    metaDaysSynced = dailyMeta.size;
 
     if (rows.length > 0) {
       const { error: upsertError } = await supabase
@@ -533,6 +598,31 @@ export async function POST(request: NextRequest) {
       if (upsertError) {
         console.error('Upsert error:', upsertError);
         return NextResponse.json({ error: 'Failed to save data', details: upsertError.message }, { status: 500 });
+      }
+    }
+
+    // Upsert any spend-only dates (dates with ad spend but no orders)
+    const orderDates = new Set(dayBuckets.keys());
+    const spendOnlyRows: any[] = [];
+    const allSpendDates = new Set([...dailyGoogle.keys(), ...dailyMeta.keys()]);
+
+    for (const date of allSpendDates) {
+      if (!orderDates.has(date)) {
+        spendOnlyRows.push({
+          brand_id: brand.id,
+          date,
+          ...(dailyMeta.has(date) ? { meta_spend: Math.round(dailyMeta.get(date)! * 100) / 100 } : {}),
+          ...(dailyGoogle.has(date) ? { google_spend: Math.round(dailyGoogle.get(date)! * 100) / 100 } : {}),
+        });
+      }
+    }
+
+    if (spendOnlyRows.length > 0) {
+      const { error: spendOnlyErr } = await supabase
+        .from('daily_pnl')
+        .upsert(spendOnlyRows, { onConflict: 'brand_id,date' });
+      if (spendOnlyErr) {
+        adSpendErrors.push(`Spend-only upsert: ${spendOnlyErr.message}`);
       }
     }
 
@@ -649,91 +739,35 @@ export async function POST(request: NextRequest) {
       console.error('Product sync failed (non-fatal):', e);
     }
 
-    } // end if (!spendOnly)
+    } else {
+      // ── Spend-only mode: fetch and upsert ad spend without touching order columns ──
+      const [dailyGoogle, dailyMeta] = await Promise.all([fetchGoogle(), fetchMeta()]);
 
-    // ── Sync ad spend from Google Ads (Windsor) + Meta in parallel ──
-    const adSpendErrors: string[] = [];
-    let googleDaysSynced = 0;
-    let metaDaysSynced = 0;
-
-    const fetchGoogle = async (): Promise<Map<string, number>> => {
-      const dailyGoogle = new Map<string, number>();
-      if (!brand.google_ads_customer_id || !brand.google_ads_customer_id.trim()) return dailyGoogle;
-      const windsorKey = process.env.WINDSOR_API_KEY || '';
-      if (!windsorKey) return dailyGoogle;
-      try {
-        const custId = brand.google_ads_customer_id.replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3');
-        const windsorUrl = new URL('https://connectors.windsor.ai/google_ads');
-        windsorUrl.searchParams.set('api_key', windsorKey);
-        windsorUrl.searchParams.set('date_from', sinceDate.split('T')[0]);
-        windsorUrl.searchParams.set('date_to', untilDate.split('T')[0]);
-        windsorUrl.searchParams.set('fields', 'account_id,date,spend');
-        windsorUrl.searchParams.set('_renderer', 'json');
-        const wRes = await fetch(windsorUrl.toString());
-        const wData = await wRes.json();
-        const wRows = Array.isArray(wData) ? wData
-          : wData?.data ? wData.data
-          : wData?.result ? wData.result : [];
-        for (const r of wRows) {
-          if (r.account_id !== custId) continue;
-          dailyGoogle.set(r.date, (dailyGoogle.get(r.date) || 0) + (r.spend || 0));
-        }
-      } catch (e: any) {
-        adSpendErrors.push(`Google: ${e.message}`);
+      const adSpendByDate = new Map<string, { google_spend?: number; meta_spend?: number }>();
+      for (const [date, spend] of dailyGoogle) {
+        adSpendByDate.set(date, { google_spend: Math.round(spend * 100) / 100 });
       }
-      return dailyGoogle;
-    };
-
-    const fetchMeta = async (): Promise<Map<string, number>> => {
-      const dailyMeta = new Map<string, number>();
-      if (!brand.meta_ad_account_id || !brand.meta_ad_account_id.trim()) return dailyMeta;
-      const metaToken = process.env.META_ACCESS_TOKEN || '';
-      if (!metaToken) return dailyMeta;
-      try {
-        const metaUrl = `https://graph.facebook.com/v21.0/${brand.meta_ad_account_id}/insights?` +
-          `time_range=${encodeURIComponent(JSON.stringify({ since: sinceDate.split('T')[0], until: untilDate.split('T')[0] }))}` +
-          `&time_increment=1&fields=spend&limit=500&access_token=${metaToken}`;
-        const mRes = await fetch(metaUrl);
-        const mData = await mRes.json();
-        if (mData.data && mData.data.length > 0) {
-          for (const r of mData.data) {
-            dailyMeta.set(r.date_start, parseFloat(r.spend || '0'));
-          }
-        }
-      } catch (e: any) {
-        adSpendErrors.push(`Meta: ${e.message}`);
+      for (const [date, spend] of dailyMeta) {
+        const existing = adSpendByDate.get(date) || {};
+        existing.meta_spend = Math.round(spend * 100) / 100;
+        adSpendByDate.set(date, existing);
       }
-      return dailyMeta;
-    };
 
-    // Run Google + Meta fetches concurrently
-    const [dailyGoogle, dailyMeta] = await Promise.all([fetchGoogle(), fetchMeta()]);
-
-    // Build a single merged upsert payload keyed by date
-    const adSpendByDate = new Map<string, { google_spend?: number; meta_spend?: number }>();
-    for (const [date, spend] of dailyGoogle) {
-      adSpendByDate.set(date, { google_spend: Math.round(spend * 100) / 100 });
-    }
-    for (const [date, spend] of dailyMeta) {
-      const existing = adSpendByDate.get(date) || {};
-      existing.meta_spend = Math.round(spend * 100) / 100;
-      adSpendByDate.set(date, existing);
-    }
-
-    if (adSpendByDate.size > 0) {
-      const adRows = Array.from(adSpendByDate.entries()).map(([date, vals]) => ({
-        brand_id: brand.id,
-        date,
-        ...vals,
-      }));
-      const { error: adErr } = await supabase
-        .from('daily_pnl')
-        .upsert(adRows, { onConflict: 'brand_id,date' });
-      if (adErr) {
-        adSpendErrors.push(`Ad spend upsert: ${adErr.message}`);
-      } else {
-        googleDaysSynced = dailyGoogle.size;
-        metaDaysSynced = dailyMeta.size;
+      if (adSpendByDate.size > 0) {
+        const adRows = Array.from(adSpendByDate.entries()).map(([date, vals]) => ({
+          brand_id: brand.id,
+          date,
+          ...vals,
+        }));
+        const { error: adErr } = await supabase
+          .from('daily_pnl')
+          .upsert(adRows, { onConflict: 'brand_id,date' });
+        if (adErr) {
+          adSpendErrors.push(`Ad spend upsert: ${adErr.message}`);
+        } else {
+          googleDaysSynced = dailyGoogle.size;
+          metaDaysSynced = dailyMeta.size;
+        }
       }
     }
 
