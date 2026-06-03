@@ -1,6 +1,6 @@
 // ─── Database Enums ─────────────────────────────────────────────
 
-export type CreativeType = 'ugc' | 'static' | 'video' | 'carousel' | 'flexible' | 'other';
+export type CreativeType = string;
 
 export type FileStatus =
   | 'pending'
