@@ -157,10 +157,9 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Default date range: last 7 days
+  // Default date range: month-to-date (1st of current month → today)
   const now = new Date();
-  const defaultStart = new Date(now);
-  defaultStart.setDate(defaultStart.getDate() - 7);
+  const defaultStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
   const start = startDate || defaultStart.toISOString().split('T')[0];
   const end = endDate || now.toISOString().split('T')[0];
