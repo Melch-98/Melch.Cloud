@@ -200,10 +200,30 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Build daily_pnl rows
-    const rows = blendedData.map((day) => ({
+    // Deduplicate blended data by event_date (TW can return multiple rows per date)
+    const blendedByDate = new Map<string, Record<string, number>>();
+    for (const day of blendedData) {
+      const prev = blendedByDate.get(day.event_date);
+      if (prev) {
+        // Sum numeric fields for duplicate dates
+        prev.orders_count = (prev.orders_count || 0) + (day.orders_count || 0);
+        prev.new_customer_orders = (prev.new_customer_orders || 0) + (day.new_customer_orders || 0);
+        prev.new_customer_revenue = (prev.new_customer_revenue || 0) + (day.new_customer_revenue || 0);
+        prev.gross_product_sales = (prev.gross_product_sales || 0) + (day.gross_product_sales || 0);
+        prev.order_revenue = (prev.order_revenue || 0) + (day.order_revenue || 0);
+        prev.discounts = (prev.discounts || 0) + (day.discounts || 0);
+        prev.refund_money = (prev.refund_money || 0) + (day.refund_money || 0);
+        prev.taxes = (prev.taxes || 0) + (day.taxes || 0);
+        prev.shipping_price = (prev.shipping_price || 0) + (day.shipping_price || 0);
+      } else {
+        blendedByDate.set(day.event_date, { ...day });
+      }
+    }
+
+    // Build daily_pnl rows from deduplicated data
+    const rows = Array.from(blendedByDate.entries()).map(([date, day]) => ({
       brand_id: brand.id,
-      date: day.event_date,
+      date,
       nc_orders: day.new_customer_orders || 0,
       nc_revenue: round2(day.new_customer_revenue || 0),
       rc_orders: (day.orders_count || 0) - (day.new_customer_orders || 0),
@@ -213,18 +233,18 @@ export async function POST(request: NextRequest) {
       refunds: round2(-(day.refund_money || 0)),
       taxes: round2(day.taxes || 0),
       shipping: round2(day.shipping_price || 0),
-      ...(metaSpendMap.has(day.event_date) ? { meta_spend: round2(metaSpendMap.get(day.event_date)!) } : {}),
-      ...(googleSpendMap.has(day.event_date) ? { google_spend: round2(googleSpendMap.get(day.event_date)!) } : {}),
-      ...(otherSpendMap.has(day.event_date) ? { other_spend: round2(otherSpendMap.get(day.event_date)!) } : {}),
+      ...(metaSpendMap.has(date) ? { meta_spend: round2(metaSpendMap.get(date)!) } : {}),
+      ...(googleSpendMap.has(date) ? { google_spend: round2(googleSpendMap.get(date)!) } : {}),
+      ...(otherSpendMap.has(date) ? { other_spend: round2(otherSpendMap.get(date)!) } : {}),
       synced_at: new Date().toISOString(),
     }));
 
-    if (blendedData.length === 0) {
+    if (blendedByDate.size === 0) {
       console.warn(`Triple Whale returned no blended stats for ${brand.name} (${start} to ${end})`);
     }
 
     // Upsert spend-only dates (dates with ad spend but no blended stats)
-    const blendedDates = new Set(blendedData.map((d) => d.event_date));
+    const blendedDates = new Set(blendedByDate.keys());
     const allAdDates = new Set([...Array.from(metaSpendMap.keys()), ...Array.from(googleSpendMap.keys()), ...Array.from(otherSpendMap.keys())]);
     const spendOnlyRows = [];
 
