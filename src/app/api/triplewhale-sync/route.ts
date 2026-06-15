@@ -53,10 +53,18 @@ async function tripleWhaleSQL(
   }
 
   const json = await res.json();
-  if (!json.success) {
-    throw new Error(`Triple Whale query failed: ${JSON.stringify(json)}`);
+
+  // TW Custom SQL returns a raw array, not {success, data}
+  if (Array.isArray(json)) {
+    return json;
   }
 
+  // Handle unexpected error object responses
+  if (json.error) {
+    throw new Error(`Triple Whale query failed: ${json.error}`);
+  }
+
+  // Fallback: if they ever change to {data: [...]} format
   return json.data || [];
 }
 

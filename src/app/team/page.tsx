@@ -328,7 +328,7 @@ function TeamCard({
 
       const data = await res.json();
       if (!res.ok) {
-        setTwSyncResult(`Error: ${data.error || 'Sync failed'}`);
+        setTwSyncResult(`Error: ${data.details || data.error || 'Sync failed'}`);
       } else {
         setTwSyncResult(`Synced ${data.daysUpserted} days (${data.dateRange.start} to ${data.dateRange.end})`);
       }
