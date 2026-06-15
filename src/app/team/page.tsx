@@ -291,6 +291,8 @@ function TeamCard({
   const [shopifyClientSecret, setShopifyClientSecret] = useState(brand.shopify_client_secret || '');
   const [shopifyMargin, setShopifyMargin] = useState(String(brand.gross_margin_pct ?? '62'));
   const [showShopifySecret, setShowShopifySecret] = useState(false);
+  const [twSyncing, setTwSyncing] = useState(false);
+  const [twSyncResult, setTwSyncResult] = useState<string | null>(null);
   // Financial settings state
   const [targetRoas, setTargetRoas] = useState(String(brand.target_roas ?? '1.5'));
   const [roasFloor, setRoasFloor] = useState(String(brand.roas_floor ?? '1.5'));
@@ -306,6 +308,36 @@ function TeamCard({
   const unassignedUsers = allUsers.filter(
     (u) => !u.brand_id && u.role !== 'admin'
   );
+
+  const triggerTripleWhaleSync = async (brandId: string) => {
+    setTwSyncing(true);
+    setTwSyncResult(null);
+    try {
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) { setTwSyncResult('Not authenticated'); setTwSyncing(false); return; }
+
+      const res = await fetch('/api/triplewhale-sync', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ brandId }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setTwSyncResult(`Error: ${data.error || 'Sync failed'}`);
+      } else {
+        setTwSyncResult(`Synced ${data.daysUpserted} days (${data.dateRange.start} to ${data.dateRange.end})`);
+      }
+    } catch {
+      setTwSyncResult('Error: Something went wrong');
+    } finally {
+      setTwSyncing(false);
+    }
+  };
 
   return (
     <div
@@ -645,6 +677,27 @@ function TeamCard({
                   </button>
                 </div>
               </div>
+            </div>
+
+            {/* Triple Whale Sync */}
+            <div className="mt-3 flex items-center gap-3">
+              <button
+                onClick={() => triggerTripleWhaleSync(brand.id)}
+                disabled={!brand.shopify_store_domain || twSyncing}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all disabled:opacity-50"
+                style={{
+                  backgroundColor: 'rgba(147,51,234,0.15)',
+                  color: '#A855F7',
+                  border: '1px solid rgba(147,51,234,0.2)',
+                }}
+              >
+                {twSyncing ? 'Syncing...' : 'Sync from Triple Whale'}
+              </button>
+              {twSyncResult && (
+                <span className={`text-[11px] ${twSyncResult.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
+                  {twSyncResult}
+                </span>
+              )}
             </div>
           </div>
 
