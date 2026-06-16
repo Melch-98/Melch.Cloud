@@ -278,10 +278,67 @@ export async function POST(request: NextRequest) {
     // Invalidate cached P&L
     await invalidatePnlCache(brand.id);
 
+    // ── Call 3: Order-level data for LTV cohorts ──────────────────
+    // Pulls from TW orders_table and upserts into shopify_orders.
+    // This enables the LTV page for brands without direct Shopify API credentials.
+    let ordersUpserted = 0;
+    try {
+      const ordersData = await tripleWhaleSQL(
+        twApiKey,
+        brand.shopify_store_domain,
+        `SELECT event_date, order_id, customer_id, order_revenue, gross_sales, taxes, discount_amount, is_new_customer, processed_at, platform
+         FROM orders_table
+         WHERE event_date BETWEEN @startDate AND @endDate AND platform = 'shopify'`,
+        start,
+        end
+      );
+
+      if (ordersData.length > 0) {
+        // Map TW orders to shopify_orders schema — batch in chunks of 500
+        const CHUNK_SIZE = 500;
+        for (let i = 0; i < ordersData.length; i += CHUNK_SIZE) {
+          const chunk = ordersData.slice(i, i + CHUNK_SIZE);
+          const orderRows = chunk
+            .filter((o) => o.order_id && !isNaN(Number(o.order_id)))
+            .map((o) => ({
+              shop_domain: brand.shopify_store_domain,
+              brand_id: brand.id,
+              shopify_order_id: Number(o.order_id),
+              customer_id: o.customer_id ? Number(o.customer_id) : null,
+              email: null, // TW orders_table doesn't expose email
+              total_price: round2(o.order_revenue || 0),
+              subtotal_price: round2(o.gross_sales || 0),
+              total_tax: round2(o.taxes || 0),
+              total_discounts: round2(o.discount_amount || 0),
+              financial_status: 'paid', // TW doesn't expose financial_status
+              shopify_created_at: o.processed_at || `${o.event_date}T00:00:00.000Z`,
+              source_name: 'triplewhale-sync',
+              updated_at: new Date().toISOString(),
+            }));
+
+          if (orderRows.length > 0) {
+            const { error: ordersUpsertError } = await supabase
+              .from('shopify_orders')
+              .upsert(orderRows, { onConflict: 'shop_domain,shopify_order_id' });
+
+            if (ordersUpsertError) {
+              console.error('Orders upsert error:', ordersUpsertError);
+            } else {
+              ordersUpserted += orderRows.length;
+            }
+          }
+        }
+      }
+    } catch (ordersErr) {
+      // Non-fatal — log but don't fail the whole sync
+      console.error('TW orders sync error (non-fatal):', ordersErr instanceof Error ? ordersErr.message : ordersErr);
+    }
+
     return NextResponse.json({
       success: true,
       brand: brand.name,
       daysUpserted: allRows.length,
+      ordersUpserted,
       dateRange: { start, end },
     });
   } catch (err: unknown) {
