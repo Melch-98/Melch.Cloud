@@ -29,6 +29,11 @@ interface ShopifyOrder {
   total_shipping_price_set: {
     shop_money: { amount: string };
   };
+  shipping_lines: {
+    discounted_price_set?: { shop_money: { amount: string } };
+    discounted_price?: string;
+    price: string;
+  }[];
   refunds: ShopifyRefund[];
   customer: {
     id: number;
@@ -329,7 +334,10 @@ function aggregateOrdersByDay(orders: ShopifyOrder[]): Map<string, DayBucket> {
     const grossSales = subtotal + totalDiscounts;
     const discounts = -Math.abs(totalDiscounts);
     const taxes = parseFloat(order.total_tax);
-    const shipping = parseFloat(order.total_shipping_price_set?.shop_money?.amount || '0');
+    // Use post-discount shipping (what customer actually paid), not gross shipping price
+    const shipping = (order.shipping_lines || []).reduce((sum: number, line) => {
+      return sum + parseFloat(line.discounted_price_set?.shop_money?.amount || line.discounted_price || line.price || '0');
+    }, 0);
 
     // NC = guest order OR first order for this customer
     const isNewCustomer = !order.customer || firstOrderIds.has(order.id);
