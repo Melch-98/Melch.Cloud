@@ -7,8 +7,6 @@ import {
   Loader,
   Plus,
   Trash2,
-  ChevronDown,
-  ChevronUp,
   Upload,
   Package,
   Layers,
@@ -17,12 +15,16 @@ import {
   Copy,
   Check,
   RefreshCw,
+  FileText,
+  X,
 } from 'lucide-react';
 import FileUploader, { FileMediaInfo } from './FileUploader';
-import FileCard from './FileCard';
+import AssetThumbnail from './AssetThumbnail';
+import AssetDetailPanel from './AssetDetailPanel';
+import CreativeMatrixSummary from './CreativeMatrixSummary';
 import { createClient } from '@/lib/supabase';
 import { FileContext } from '@/lib/types';
-import { CREATIVE_TYPE_GROUPS, CREATIVE_TYPES_MAP } from '@/lib/creative-types';
+import { CREATIVE_TYPES_MAP } from '@/lib/creative-types';
 
 export interface BatchFormData {
   batchName: string;
@@ -42,7 +44,8 @@ export interface BatchFormData {
 
 interface BatchFormState extends BatchFormData {
   id: string;
-  isExpanded: boolean;
+  /** UI-only: primary text variation cards. Joined into primaryText on change. */
+  primaryVariations: string[];
   errors: Record<string, string>;
 }
 
@@ -67,6 +70,7 @@ const createEmptyBatch = (batchName: string): BatchFormState => ({
   landingPageUrl: '',
   copyTemplate: '',
   primaryText: '',
+  primaryVariations: [''],
   files: [],
   isCarousel: false,
   isFlexible: false,
@@ -74,39 +78,8 @@ const createEmptyBatch = (batchName: string): BatchFormState => ({
   creatorSocialHandle: '',
   fileContexts: {},
   fileMediaInfo: {},
-  isExpanded: true,
   errors: {},
 });
-
-// Input field component for consistency and speed
-const Field = ({
-  label,
-  icon,
-  error,
-  children,
-  className = '',
-}: {
-  label: string;
-  icon?: React.ReactNode;
-  error?: string;
-  children: React.ReactNode;
-  className?: string;
-}) => (
-  <div className={className}>
-    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5">
-      {icon ? (
-        <span className="flex items-center gap-1.5">
-          {icon}
-          {label}
-        </span>
-      ) : (
-        label
-      )}
-    </label>
-    {children}
-    {error && <p className="text-xs text-red-400 mt-1">{error}</p>}
-  </div>
-);
 
 const CopyButton: React.FC<{ text: string }> = ({ text }) => {
   const [copied, setCopied] = useState(false);
@@ -134,21 +107,42 @@ const CopyButton: React.FC<{ text: string }> = ({ text }) => {
 };
 
 const inputClass =
-  'w-full px-3.5 py-2.5 rounded-lg text-sm text-[#F5F5F8] placeholder-gray-600 focus:outline-none transition-all';
+  'w-full px-3.5 py-2.5 rounded-lg text-sm text-[#F5F5F8] placeholder-gray-600 focus:outline-none transition-all focus:border-[#C8B89A]/40';
 
-const inputStyle = {
+const inputStyle: React.CSSProperties = {
   backgroundColor: 'rgba(255,255,255,0.04)',
   border: '1px solid rgba(255,255,255,0.08)',
 };
 
-const inputFocusStyle = 'focus:border-[#C8B89A]/40 focus:bg-[rgba(255,255,255,0.06)]';
+const sectionLabelClass =
+  'text-xs font-medium text-gray-500 uppercase tracking-wider mb-2 block';
 
-const selectClass =
-  'w-full px-3.5 py-2.5 rounded-lg text-sm text-[#F5F5F8] focus:outline-none transition-all';
+const cardStyle: React.CSSProperties = {
+  backgroundColor: '#111111',
+  border: '1px solid rgba(255,255,255,0.06)',
+};
 
 interface CopyTemplateOption {
   id: string;
   title: string;
+}
+
+function formatSize(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
+}
+
+/** Remap an index-keyed record after files are reordered.
+ *  mapping[newIndex] = oldIndex */
+function remapRecord<T>(rec: Record<number, T>, mapping: number[]): Record<number, T> {
+  const out: Record<number, T> = {};
+  mapping.forEach((oldIdx, newIdx) => {
+    if (rec[oldIdx] !== undefined) out[newIdx] = rec[oldIdx];
+  });
+  return out;
 }
 
 const SubmissionForm: React.FC<SubmissionFormProps> = ({
@@ -158,6 +152,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
   isLoading = false,
 }) => {
   const [batches, setBatches] = useState<BatchFormState[]>([]);
+  const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
   // Track batch IDs that successfully committed during this form session,
   // so that if a later batch fails, retrying the submit skips already-saved
   // batches instead of re-uploading and creating duplicates.
@@ -168,6 +163,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
   } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
+  const [uploadPct, setUploadPct] = useState<number | null>(null);
   const [copyTemplateOptions, setCopyTemplateOptions] = useState<CopyTemplateOption[]>([]);
   const [brandProducts, setBrandProducts] = useState<
     { shopify_product_id: string; title: string; product_type: string; handle: string }[]
@@ -176,6 +172,27 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
   const [syncSuccess, setSyncSuccess] = useState(false);
   const [existingFiles, setExistingFiles] = useState<Map<string, string>>(new Map());
   // Map<file_name, batch_name>
+
+  // Asset selection within the active batch
+  const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
+  const activeBatch = useMemo(
+    () => batches.find((b) => b.id === activeBatchId) || batches[0] || null,
+    [batches, activeBatchId]
+  );
+
+  // Reset selection when the active batch changes
+  useEffect(() => {
+    setSelectedIndices([]);
+  }, [activeBatchId]);
+
+  // Clamp selection when files change
+  useEffect(() => {
+    if (!activeBatch) return;
+    setSelectedIndices((prev) => prev.filter((i) => i < activeBatch.files.length));
+  }, [activeBatch]);
 
   const handleSyncProducts = useCallback(async () => {
     if (!selectedBrandId || syncingProducts) return;
@@ -361,7 +378,9 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
       if (!selectedBrandId) return;
       const name = await fetchBatchName();
       if (!cancelled) {
-        setBatches([createEmptyBatch(name)]);
+        const batch = createEmptyBatch(name);
+        setBatches([batch]);
+        setActiveBatchId(batch.id);
       }
     };
     init();
@@ -387,10 +406,29 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
     []
   );
 
+  /** Apply a partial FileContext update to a set of file indices in a batch */
+  const updateFileContexts = useCallback(
+    (batchId: string, indices: number[], updates: Partial<FileContext>) => {
+      setBatches((prev) =>
+        prev.map((b) => {
+          if (b.id !== batchId) return b;
+          const contexts = { ...b.fileContexts };
+          for (const i of indices) {
+            contexts[i] = { ...(contexts[i] || {}), ...updates } as FileContext;
+          }
+          return { ...b, fileContexts: contexts, errors: {} };
+        })
+      );
+    },
+    []
+  );
+
   const removeBatch = useCallback((id: string) => {
     setBatches((prev) => {
       if (prev.length <= 1) return prev;
-      return prev.filter((batch) => batch.id !== id);
+      const next = prev.filter((batch) => batch.id !== id);
+      setActiveBatchId((cur) => (cur === id ? next[0]?.id ?? null : cur));
+      return next;
     });
   }, []);
 
@@ -398,11 +436,63 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
     // Pass current form batch names as reserved so the API skips them
     const reserved = batches.map((b) => b.batchName);
     const name = await fetchBatchName(reserved);
-    setBatches((prev) => {
-      const collapsed = prev.map((b) => ({ ...b, isExpanded: false }));
-      return [...collapsed, createEmptyBatch(name)];
-    });
+    const batch = createEmptyBatch(name);
+    setBatches((prev) => [...prev, batch]);
+    setActiveBatchId(batch.id);
   }, [batches, fetchBatchName]);
+
+  /** Reorder files inside a batch (drag-and-drop in the asset grid) */
+  const moveFile = useCallback((batchId: string, from: number, to: number) => {
+    if (from === to) return;
+    setBatches((prev) =>
+      prev.map((b) => {
+        if (b.id !== batchId) return b;
+        const order = b.files.map((_, i) => i);
+        const [moved] = order.splice(from, 1);
+        order.splice(to, 0, moved);
+        return {
+          ...b,
+          files: order.map((i) => b.files[i]),
+          fileContexts: remapRecord(b.fileContexts, order),
+          fileMediaInfo: remapRecord(b.fileMediaInfo, order),
+        };
+      })
+    );
+    setSelectedIndices([]);
+  }, []);
+
+  /** Remove a file and re-index contexts/media info */
+  const removeFile = useCallback((batchId: string, index: number) => {
+    setBatches((prev) =>
+      prev.map((b) => {
+        if (b.id !== batchId) return b;
+        const order = b.files.map((_, i) => i).filter((i) => i !== index);
+        return {
+          ...b,
+          files: order.map((i) => b.files[i]),
+          fileContexts: remapRecord(b.fileContexts, order),
+          fileMediaInfo: remapRecord(b.fileMediaInfo, order),
+        };
+      })
+    );
+    setSelectedIndices((prev) =>
+      prev.filter((i) => i !== index).map((i) => (i > index ? i - 1 : i))
+    );
+  }, []);
+
+  const handleAssetClick = useCallback((index: number, shiftKey: boolean) => {
+    setSelectedIndices((prev) => {
+      if (shiftKey) {
+        // Multi-select toggle
+        return prev.includes(index)
+          ? prev.filter((i) => i !== index)
+          : [...prev, index];
+      }
+      // Single select — clicking the only selected asset deselects
+      if (prev.length === 1 && prev[0] === index) return [];
+      return [index];
+    });
+  }, []);
 
   const validateBatch = (batch: BatchFormState): boolean => {
     const errors: Record<string, string> = {};
@@ -436,8 +526,6 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
       }
     }
 
-    updateBatch(batch.id, { errors });
-    // Re-set errors without clearing them
     setBatches((prev) =>
       prev.map((b) => (b.id === batch.id ? { ...b, errors } : b))
     );
@@ -465,10 +553,14 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
 
     setIsSubmitting(true);
     setUploadProgress(null);
+    setUploadPct(0);
 
     try {
       const supabase = createClient();
       const totalBatches = batches.length;
+      const pendingBatches = batches.filter((b) => !savedBatchIds.has(b.id));
+      const totalWork = pendingBatches.reduce((s, b) => s + b.files.length, 0) || 1;
+      let doneWork = 0;
 
       for (let bIdx = 0; bIdx < batches.length; bIdx++) {
         const batch = batches[bIdx];
@@ -501,6 +593,9 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
             path: uploadData.path,
             name: file.name,
           });
+
+          doneWork += 1;
+          setUploadPct(Math.round((doneWork / totalWork) * 90));
         }
 
         setUploadProgress(`Saving batch ${bIdx + 1} of ${totalBatches}...`);
@@ -637,6 +732,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
 
       // Call notify endpoint
       setUploadProgress('Sending notification...');
+      setUploadPct(95);
       const brandName =
         brands.find((b) => b.id === selectedBrandId)?.name || 'Unknown brand';
       await fetch('/api/notify', {
@@ -659,6 +755,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
         }),
       });
 
+      setUploadPct(100);
       setUploadProgress(null);
 
       // Get a fresh batch name from the server for the reset form
@@ -668,8 +765,11 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
         type: 'success',
         text: `${batches.length} batch${batches.length > 1 ? 'es' : ''} submitted — ${batches.reduce((s, b) => s + b.files.length, 0)} files uploaded`,
       });
-      setBatches([createEmptyBatch(freshName)]);
+      const fresh = createEmptyBatch(freshName);
+      setBatches([fresh]);
+      setActiveBatchId(fresh.id);
       setSavedBatchIds(new Set());
+      setSelectedIndices([]);
 
       if (onSubmit) {
         onSubmit(batches);
@@ -682,6 +782,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
       });
     } finally {
       setIsSubmitting(false);
+      setUploadPct(null);
     }
   };
 
@@ -723,14 +824,73 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
     return {
       batchCount: batches.length,
       totalFiles: batches.reduce((sum, b) => sum + b.files.length, 0),
-      carouselCount: batches.filter((b) => b.isCarousel).length,
-      flexibleCount: batches.filter((b) => b.isFlexible).length,
-      whitelistCount: batches.filter((b) => b.isWhitelist).length,
+      totalSize: batches.reduce(
+        (sum, b) => sum + b.files.reduce((s, f) => s + f.size, 0),
+        0
+      ),
     };
   }, [batches]);
 
+  // Pending tags for the creative matrix (+N indicators)
+  const pendingTags = useMemo(() => {
+    const tags: { creativeType: string; productName: string }[] = [];
+    for (const batch of batches) {
+      for (const ctx of Object.values(batch.fileContexts)) {
+        const c = ctx as any;
+        if (c?.creativeType) {
+          tags.push({
+            creativeType: c.creativeType,
+            productName: c.productName || '',
+          });
+        }
+      }
+    }
+    return tags;
+  }, [batches]);
+
+  if (!activeBatch) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <Loader className="w-6 h-6 text-[#C8B89A] animate-spin" />
+      </div>
+    );
+  }
+
+  const batch = activeBatch;
+  const allIndices = batch.files.map((_, i) => i);
+  const dupes = fileDupeWarnings[batch.id] || {};
+
+  /** Batch-level bulk field: update batch state AND bulk-apply to all file contexts */
+  const applyBatchField = (
+    batchField: Partial<BatchFormState>,
+    contextUpdates: Partial<FileContext>
+  ) => {
+    updateBatch(batch.id, batchField);
+    if (allIndices.length > 0) {
+      updateFileContexts(batch.id, allIndices, contextUpdates);
+    }
+  };
+
+  const setPrimaryVariations = (variations: string[]) => {
+    updateBatch(batch.id, {
+      primaryVariations: variations,
+      primaryText: variations.map((v) => v.trim()).filter(Boolean).join('\n\n'),
+    });
+  };
+
+  const toggles: {
+    key: 'isCarousel' | 'isFlexible' | 'isWhitelist';
+    icon: React.ComponentType<{ className?: string }>;
+    label: string;
+    exclusive: 'isCarousel' | 'isFlexible' | null;
+  }[] = [
+    { key: 'isCarousel', icon: Package, label: 'Carousel', exclusive: 'isFlexible' },
+    { key: 'isFlexible', icon: Shuffle, label: 'Flexible', exclusive: 'isCarousel' },
+    { key: 'isWhitelist', icon: Users, label: 'Whitelist', exclusive: null },
+  ];
+
   return (
-    <div className="space-y-4 pb-32">
+    <div className="pb-24">
       {/* Message Toast */}
       {submitMessage && (
         <div
@@ -755,412 +915,546 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
         </div>
       )}
 
-      {/* Batches */}
-      <div className="space-y-4">
-        {batches.map((batch, batchIndex) => (
+      {/* ═══ Two-column layout ═══ */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* ─── LEFT COLUMN — batch tabs, copy, creator info ─── */}
+        <div className="order-2 lg:order-1 lg:col-span-7 lg:overflow-y-auto lg:max-h-[calc(100vh-160px)] space-y-4 lg:pr-1">
+          {/* Batch tab bar */}
           <div
-            key={batch.id}
-            className="rounded-xl overflow-hidden"
-            style={{
-              backgroundColor: 'rgba(255,255,255,0.02)',
-              border: '1px solid rgba(255,255,255,0.06)',
-            }}
+            className="rounded-xl px-2 pt-1"
+            style={{ backgroundColor: '#0D0D0D', border: '1px solid rgba(255,255,255,0.06)' }}
           >
-            {/* Batch Header */}
-            <div
-              className="p-4 cursor-pointer hover:bg-white/[0.02] transition-colors flex items-center justify-between"
-              style={{ borderBottom: batch.isExpanded ? '1px solid rgba(255,255,255,0.06)' : 'none' }}
-              onClick={() =>
-                updateBatch(batch.id, { isExpanded: !batch.isExpanded })
-              }
-            >
-              <div className="flex items-center gap-3 flex-1">
-                {batch.isExpanded ? (
-                  <ChevronUp className="w-4 h-4 text-[#C8B89A]" />
-                ) : (
-                  <ChevronDown className="w-4 h-4 text-[#C8B89A]" />
-                )}
-                <span
-                  className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded"
-                  style={{ backgroundColor: 'rgba(200,184,154,0.15)', color: '#C8B89A' }}
-                >
-                  BATCH {batchIndex + 1}
-                </span>
-                <span className="text-sm font-semibold text-[#F5F5F8]">{batch.batchName}</span>
-                <div className="ml-auto flex items-center gap-2">
-                  <span className="text-xs text-gray-500">
-                    {batch.files.length} file{batch.files.length !== 1 ? 's' : ''}
-                  </span>
-                  {batch.isCarousel && (
-                    <span className="text-[10px] font-bold text-[#C8B89A] bg-[rgba(200,184,154,0.1)] px-1.5 py-0.5 rounded">
-                      CAROUSEL
-                    </span>
-                  )}
-                  {batch.isFlexible && (
-                    <span className="text-[10px] font-bold text-[#C8B89A] bg-[rgba(200,184,154,0.1)] px-1.5 py-0.5 rounded">
-                      FLEXIBLE
-                    </span>
-                  )}
-                  {batch.isWhitelist && (
-                    <span className="text-[10px] font-bold text-[#C8B89A] bg-[rgba(200,184,154,0.1)] px-1.5 py-0.5 rounded">
-                      WHITELIST
-                    </span>
-                  )}
-                  {Object.keys(batch.errors).length > 0 && (
-                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ backgroundColor: 'rgba(255,50,50,0.1)', color: '#ef4444' }}>
-                      {Object.keys(batch.errors).length} error{Object.keys(batch.errors).length > 1 ? 's' : ''}
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {batch.isExpanded && (
-              <div className="p-5 space-y-5">
-                {/* Checkbox Toggles */}
-                <div className="grid grid-cols-3 gap-2">
-                  {[
-                    { key: 'isCarousel', icon: Package, label: 'Carousel Ad', desc: 'Multi-card carousel', exclusive: 'isFlexible' },
-                    { key: 'isFlexible', icon: Shuffle, label: 'Flexible Ad', desc: 'Dynamic placements', exclusive: 'isCarousel' },
-                    { key: 'isWhitelist', icon: Users, label: 'Whitelist', desc: 'Creator handle required', exclusive: null },
-                  ].map(({ key, icon: Icon, label, desc, exclusive }) => {
-                    const checked = batch[key as keyof BatchFormState] as boolean;
-                    return (
-                      <label
-                        key={key}
-                        className="flex items-center gap-3 cursor-pointer p-3 rounded-lg transition-all"
-                        style={{
-                          backgroundColor: checked ? 'rgba(200,184,154,0.08)' : 'rgba(255,255,255,0.02)',
-                          border: checked ? '1px solid rgba(200,184,154,0.25)' : '1px solid rgba(255,255,255,0.06)',
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={(e) => {
-                            const updates: any = { [key]: e.target.checked };
-                            if (e.target.checked && exclusive) updates[exclusive] = false;
-                            updateBatch(batch.id, updates);
-                          }}
-                          className="w-4 h-4 accent-[#C8B89A]"
-                        />
-                        <div>
-                          <div className="flex items-center gap-1.5 font-medium text-[#F5F5F8] text-sm">
-                            <Icon className="w-3.5 h-3.5 text-[#C8B89A]" />
-                            {label}
-                          </div>
-                          <p className="text-[10px] text-gray-500">{desc}</p>
-                        </div>
-                      </label>
-                    );
-                  })}
-                </div>
-
-                {/* ─── Form Fields ─── */}
-                <div className="grid grid-cols-2 gap-3">
-                  {/* Batch Name */}
-                  <Field label="Batch Name" error={batch.errors.batchName}>
-                    <div
-                      className={`${inputClass} cursor-default flex items-center justify-between gap-2`}
+            <div className="flex items-center gap-1 overflow-x-auto">
+              {batches.map((b, i) => {
+                const isActive = b.id === batch.id;
+                const errCount = Object.keys(b.errors).length;
+                return (
+                  <button
+                    key={b.id}
+                    type="button"
+                    onClick={() => setActiveBatchId(b.id)}
+                    className="relative flex items-center gap-2 px-3 py-2.5 text-sm whitespace-nowrap transition-colors duration-150"
+                    style={{
+                      color: isActive ? '#F5F5F8' : '#ABABAB',
+                      fontWeight: isActive ? 600 : 400,
+                    }}
+                  >
+                    <span>Batch {i + 1}</span>
+                    <span
+                      className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
                       style={{
-                        ...inputStyle,
-                        color: '#C8B89A',
-                        fontWeight: 600,
-                        letterSpacing: '0.03em',
+                        backgroundColor: isActive
+                          ? 'rgba(200,184,154,0.15)'
+                          : 'rgba(255,255,255,0.06)',
+                        color: isActive ? '#C8B89A' : '#888',
                       }}
                     >
-                      <span className="truncate">{batch.batchName}</span>
-                      <CopyButton text={batch.batchName} />
-                    </div>
-                  </Field>
-
-                  {/* Primary Text — CAROUSEL only */}
-                  {batch.isCarousel && (
-                    <Field label="Primary Text" error={batch.errors.primaryText}>
-                      <input
-                        type="text"
-                        value={batch.primaryText}
-                        onChange={(e) =>
-                          updateBatch(batch.id, { primaryText: e.target.value })
-                        }
-                          className={`${inputClass} ${inputFocusStyle}`}
-                        style={inputStyle}
-                        placeholder="Ad primary text shown above carousel"
-                      />
-                    </Field>
-                  )}
-
-                </div>
-
-                {/* ─── File Uploader (drop zone) ─── */}
-                <div>
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-sm font-medium text-gray-200">Files</span>
-                    {batch.files.length > 0 && (
-                      <span className="text-xs text-gray-500">
-                        {batch.files.length} file{batch.files.length !== 1 ? 's' : ''} selected
+                      {b.files.length}
+                    </span>
+                    {errCount > 0 && (
+                      <span
+                        className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
+                        style={{ backgroundColor: 'rgba(255,50,50,0.12)', color: '#ef4444' }}
+                      >
+                        {errCount}
                       </span>
                     )}
-                    <button
-                      type="button"
-                      onClick={handleSyncProducts}
-                      disabled={syncingProducts}
-                      title="Sync products from Shopify"
-                      className="ml-auto p-1 rounded-md transition-all hover:bg-[rgba(200,184,154,0.12)]"
-                      style={{ color: syncSuccess ? '#7FD48F' : '#C8B89A' }}
-                    >
-                      {syncSuccess ? (
-                        <Check className="w-3 h-3" />
-                      ) : (
-                        <RefreshCw className={`w-3 h-3 ${syncingProducts ? 'animate-spin' : ''}`} />
-                      )}
-                    </button>
-                  </div>
-                  {brandProducts.length <= 1 && (
-                    <p className="text-[11px] text-gray-500 italic mb-1">
-                      No products yet —{' '}
-                      <button
-                        type="button"
-                        onClick={handleSyncProducts}
-                        disabled={syncingProducts}
-                        className="text-[#C8B89A] hover:underline"
+                    {batches.length > 1 && isActive && (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeBatch(b.id);
+                        }}
+                        className="p-0.5 rounded hover:bg-red-500/20"
+                        title="Remove batch"
                       >
-                        {syncingProducts ? 'syncing...' : 'sync from Shopify'}
-                      </button>
-                    </p>
-                  )}
-                  <FileUploader
-                    files={batch.files}
-                    onFilesChange={(files: File[]) =>
-                      updateBatch(batch.id, { files })
-                    }
-                    onMediaInfoChange={(index: number, info: FileMediaInfo) => {
-                      setBatches((prev) =>
-                        prev.map((b) =>
-                          b.id === batch.id
-                            ? {
-                                ...b,
-                                fileMediaInfo: {
-                                  ...b.fileMediaInfo,
-                                  [index]: info,
-                                },
-                              }
-                            : b
-                        )
-                      );
-                    }}
-                    mediaInfo={batch.fileMediaInfo}
-                    maxFileSize={2 * 1024 * 1024 * 1024}
-                  />
-                  {batch.errors.files && (
-                    <p className="text-xs text-red-400 mt-2">
-                      {batch.errors.files}
-                    </p>
-                  )}
-                </div>
-
-                {/* ─── File Cards with Inline Tags ─── */}
-                {batch.files.length > 0 && (
-                  <div className="space-y-2">
-                    {batch.files.map((file, fileIndex) => (
-                      <FileCard
-                        key={`${file.name}-${fileIndex}`}
-                        file={file}
-                        index={fileIndex}
-                        dupeWarning={fileDupeWarnings[batch.id]?.[fileIndex] || ''}
-                        mediaInfo={batch.fileMediaInfo[fileIndex]}
-                        productId={(batch.fileContexts[fileIndex] as any)?.productId || ''}
-                        productName={(batch.fileContexts[fileIndex] as any)?.productName || ''}
-                        creativeType={(batch.fileContexts[fileIndex] as any)?.creativeType || ''}
-                        hookAngle={(batch.fileContexts[fileIndex] as any)?.hookAngle || ''}
-                        copyTemplate={(batch.fileContexts[fileIndex] as any)?.copyTemplate || ''}
-                        creatorName={(batch.fileContexts[fileIndex] as any)?.creatorName || ''}
-                        creatorHandle={(batch.fileContexts[fileIndex] as any)?.creatorHandle || ''}
-                        products={brandProducts}
-                        copyTemplateOptions={copyTemplateOptions}
-                        isCarousel={batch.isCarousel}
-                        isWhitelist={batch.isWhitelist}
-                        onRemove={(idx) => {
-                          const updatedFiles = batch.files.filter((_, i) => i !== idx);
-                          updateBatch(batch.id, { files: updatedFiles });
-                        }}
-                        onProductChange={(idx, pid, pname) => {
-                          const context = batch.fileContexts[idx] || {} as any;
-                          updateBatch(batch.id, {
-                            fileContexts: {
-                              ...batch.fileContexts,
-                              [idx]: { ...context, productId: pid, productName: pname },
-                            },
-                          });
-                        }}
-                        onCreativeTypeChange={(idx, val) => {
-                          const context = batch.fileContexts[idx] || {} as any;
-                          updateBatch(batch.id, {
-                            fileContexts: {
-                              ...batch.fileContexts,
-                              [idx]: { ...context, creativeType: val },
-                            },
-                          });
-                        }}
-                        onHookAngleChange={(idx, val) => {
-                          const context = batch.fileContexts[idx] || {} as any;
-                          updateBatch(batch.id, {
-                            fileContexts: {
-                              ...batch.fileContexts,
-                              [idx]: { ...context, hookAngle: val },
-                            },
-                          });
-                        }}
-                        onCopyTemplateChange={(idx, val) => {
-                          const context = batch.fileContexts[idx] || {} as any;
-                          updateBatch(batch.id, {
-                            fileContexts: {
-                              ...batch.fileContexts,
-                              [idx]: { ...context, copyTemplate: val },
-                            },
-                          });
-                        }}
-                        onCreatorNameChange={(idx, val) => {
-                          const context = batch.fileContexts[idx] || {} as any;
-                          updateBatch(batch.id, {
-                            fileContexts: {
-                              ...batch.fileContexts,
-                              [idx]: { ...context, creatorName: val },
-                            },
-                          });
-                        }}
-                        onCreatorHandleChange={(idx, val) => {
-                          const context = batch.fileContexts[idx] || {} as any;
-                          updateBatch(batch.id, {
-                            fileContexts: {
-                              ...batch.fileContexts,
-                              [idx]: { ...context, creatorHandle: val },
-                            },
-                          });
-                        }}
+                        <Trash2 className="w-3 h-3 text-gray-500" />
+                      </span>
+                    )}
+                    {/* Gold underline for active tab */}
+                    {isActive && (
+                      <span
+                        className="absolute bottom-0 left-2 right-2 h-0.5 rounded-full"
+                        style={{ backgroundColor: '#C8B89A' }}
                       />
-                    ))}
-                  </div>
-                )}
+                    )}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={addBatch}
+                className="p-2 rounded-lg text-[#C8B89A] hover:bg-[rgba(200,184,154,0.1)] transition-colors"
+                title="Add another batch"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
 
-                {/* ─── Per-Card Details (CAROUSEL only) ─── */}
-                {batch.isCarousel && batch.files.length > 0 && (
-                  <div className="space-y-3">
-                    <span className="text-sm font-medium text-gray-200 flex items-center gap-2">
-                      <Layers className="w-4 h-4 text-amber-600" />
-                      Card Details
-                    </span>
-                    {batch.files.map((file, fileIndex) => (
-                      <div
-                        key={fileIndex}
-                        className="p-4 bg-white/[0.03] border border-white/8 rounded-lg"
+              {/* Mode toggles — right side of tab bar */}
+              <div className="ml-auto flex items-center gap-1 pr-1">
+                {toggles.map(({ key, icon: Icon, label, exclusive }) => {
+                  const checked = batch[key];
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      title={label}
+                      onClick={() => {
+                        const updates: Partial<BatchFormState> = { [key]: !checked };
+                        if (!checked && exclusive) (updates as any)[exclusive] = false;
+                        updateBatch(batch.id, updates);
+                      }}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-colors duration-150"
+                      style={{
+                        backgroundColor: checked ? 'rgba(200,184,154,0.15)' : 'transparent',
+                        border: checked
+                          ? '1px solid rgba(200,184,154,0.35)'
+                          : '1px solid rgba(255,255,255,0.06)',
+                        color: checked ? '#C8B89A' : '#888',
+                      }}
+                    >
+                      <Icon className="w-3 h-3" />
+                      <span className="hidden xl:inline">{label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* Batch name */}
+          <div className="rounded-xl p-4 flex items-center justify-between gap-3" style={cardStyle}>
+            <div className="min-w-0">
+              <span className={sectionLabelClass} style={{ marginBottom: 4 }}>
+                Batch Name
+              </span>
+              <p
+                className="text-sm font-semibold truncate"
+                style={{ color: '#C8B89A', letterSpacing: '0.03em' }}
+              >
+                {batch.batchName}
+              </p>
+            </div>
+            <CopyButton text={batch.batchName} />
+          </div>
+
+          {/* Copy template selector — applies to all assets in the batch */}
+          <div className="rounded-xl p-4" style={cardStyle}>
+            <span className={sectionLabelClass}>Copy Template</span>
+            <select
+              value={batch.copyTemplate}
+              onChange={(e) =>
+                applyBatchField(
+                  { copyTemplate: e.target.value },
+                  { copyTemplate: e.target.value }
+                )
+              }
+              className={inputClass}
+              style={inputStyle}
+            >
+              <option value="">No template — tag per asset</option>
+              {copyTemplateOptions.map((tpl) => (
+                <option key={tpl.id} value={tpl.title}>
+                  {tpl.title}
+                </option>
+              ))}
+            </select>
+            <p className="text-[10px] text-gray-500 mt-1.5">
+              Selecting a template applies it to every asset in this batch. You can
+              override per asset in the detail panel.
+            </p>
+          </div>
+
+          {/* Primary text variations — batch-level (carousel) */}
+          {batch.isCarousel && (
+            <div className="rounded-xl p-4" style={cardStyle}>
+              <span className={sectionLabelClass}>Primary Text</span>
+              <div className="space-y-2">
+                {batch.primaryVariations.map((text, vIdx) => (
+                  <div
+                    key={vIdx}
+                    className="rounded-lg p-3"
+                    style={{
+                      backgroundColor: 'rgba(255,255,255,0.03)',
+                      border: '1px solid rgba(255,255,255,0.08)',
+                    }}
+                  >
+                    <div className="flex items-start gap-2">
+                      <textarea
+                        value={text}
+                        rows={2}
+                        placeholder={`Primary text variation ${vIdx + 1}`}
+                        onChange={(e) => {
+                          const next = [...batch.primaryVariations];
+                          next[vIdx] = e.target.value;
+                          setPrimaryVariations(next);
+                        }}
+                        className="flex-1 bg-transparent text-sm text-[#F5F5F8] placeholder-gray-600 focus:outline-none resize-y"
+                      />
+                      {batch.primaryVariations.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setPrimaryVariations(
+                              batch.primaryVariations.filter((_, i) => i !== vIdx)
+                            )
+                          }
+                          className="p-1 rounded-md hover:bg-red-500/10 flex-shrink-0"
+                          title="Delete variation"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 text-gray-500" />
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex justify-end">
+                      <span
+                        className="text-[10px]"
+                        style={{ color: text.length > 125 ? '#EAB308' : '#666' }}
                       >
-                        <p className="text-xs text-gray-400 mb-3 font-medium">
-                          Card {fileIndex + 1} — {file.name}
-                        </p>
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <input
-                              type="text"
-                              placeholder="Headline *"
-                              value={
-                                batch.fileContexts[fileIndex]?.copyHeadline || ''
-                              }
-                              onChange={(e) => {
-                                const context =
-                                  batch.fileContexts[fileIndex] || {};
-                                updateBatch(batch.id, {
-                                  fileContexts: {
-                                    ...batch.fileContexts,
-                                    [fileIndex]: {
-                                      ...context,
-                                      copyHeadline: e.target.value,
-                                    },
-                                  },
-                                });
-                              }}
-                              className={`${inputClass} ${inputFocusStyle}`}
-                              style={inputStyle}
-                            />
-                            {batch.errors[`file_${fileIndex}_headline`] && (
-                              <p className="text-xs text-red-400 mt-1">
+                        {text.length}/125
+                      </span>
+                    </div>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setPrimaryVariations([...batch.primaryVariations, ''])}
+                  className="w-full px-3 py-2.5 rounded-lg flex items-center justify-center gap-2 text-xs font-medium transition-colors"
+                  style={{
+                    border: '1px dashed rgba(200,184,154,0.3)',
+                    color: '#C8B89A',
+                    backgroundColor: 'rgba(200,184,154,0.03)',
+                  }}
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Add variation
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Carousel per-card headlines & descriptions */}
+          {batch.isCarousel && batch.files.length > 0 && (
+            <div className="rounded-xl p-4" style={cardStyle}>
+              <span className={`${sectionLabelClass} flex items-center gap-1.5`}>
+                <Layers className="w-3.5 h-3.5 text-[#C8B89A]" />
+                Card Headlines &amp; Descriptions
+              </span>
+              <div className="space-y-2">
+                {batch.files.map((file, fileIndex) => {
+                  const ctx = batch.fileContexts[fileIndex] || ({} as any);
+                  const headline = ctx.copyHeadline || '';
+                  const body = ctx.copyBody || '';
+                  return (
+                    <div
+                      key={fileIndex}
+                      className="rounded-lg p-3"
+                      style={{
+                        backgroundColor: 'rgba(255,255,255,0.03)',
+                        border: batch.errors[`file_${fileIndex}_headline`]
+                          ? '1px solid rgba(239,68,68,0.4)'
+                          : '1px solid rgba(255,255,255,0.08)',
+                      }}
+                    >
+                      <p className="text-[10px] text-gray-500 mb-2 truncate">
+                        Card {fileIndex + 1} — {file.name}
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <input
+                            type="text"
+                            placeholder="Headline *"
+                            value={headline}
+                            onChange={(e) =>
+                              updateFileContexts(batch.id, [fileIndex], {
+                                copyHeadline: e.target.value,
+                              })
+                            }
+                            className={inputClass}
+                            style={inputStyle}
+                          />
+                          <div className="flex justify-between mt-1">
+                            {batch.errors[`file_${fileIndex}_headline`] ? (
+                              <p className="text-xs text-red-400">
                                 {batch.errors[`file_${fileIndex}_headline`]}
                               </p>
+                            ) : (
+                              <span />
                             )}
+                            <span
+                              className="text-[10px]"
+                              style={{ color: headline.length > 40 ? '#EAB308' : '#666' }}
+                            >
+                              {headline.length}/40
+                            </span>
                           </div>
+                        </div>
+                        <div>
                           <input
                             type="text"
                             placeholder="Description"
-                            value={
-                              batch.fileContexts[fileIndex]?.copyBody || ''
+                            value={body}
+                            onChange={(e) =>
+                              updateFileContexts(batch.id, [fileIndex], {
+                                copyBody: e.target.value,
+                              })
                             }
-                            onChange={(e) => {
-                              const context =
-                                batch.fileContexts[fileIndex] || {};
-                              updateBatch(batch.id, {
-                                fileContexts: {
-                                  ...batch.fileContexts,
-                                  [fileIndex]: {
-                                    ...context,
-                                    copyBody: e.target.value,
-                                  },
-                                },
-                              });
-                            }}
-                            className={`${inputClass} ${inputFocusStyle}`}
+                            className={inputClass}
                             style={inputStyle}
                           />
+                          <div className="flex justify-end mt-1">
+                            <span
+                              className="text-[10px]"
+                              style={{ color: body.length > 30 ? '#EAB308' : '#666' }}
+                            >
+                              {body.length}/30
+                            </span>
+                          </div>
                         </div>
                       </div>
-                    ))}
-                  </div>
-                )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
-                {/* Remove Batch Button */}
-                {batches.length > 1 && (
+          {/* Creator info — batch-level, applies to all assets */}
+          <div className="rounded-xl p-4" style={cardStyle}>
+            <span className={sectionLabelClass}>Creator Info</span>
+            <div className="grid grid-cols-2 gap-3">
+              <input
+                type="text"
+                placeholder="Creator name (applies to all assets)"
+                value={batch.creatorName}
+                onChange={(e) =>
+                  applyBatchField(
+                    { creatorName: e.target.value },
+                    { creatorName: e.target.value }
+                  )
+                }
+                className={inputClass}
+                style={inputStyle}
+              />
+              {batch.isWhitelist ? (
+                <input
+                  type="text"
+                  placeholder="@handle (required for whitelist)"
+                  value={batch.creatorSocialHandle}
+                  onChange={(e) =>
+                    applyBatchField(
+                      { creatorSocialHandle: e.target.value },
+                      { creatorHandle: e.target.value }
+                    )
+                  }
+                  className={inputClass}
+                  style={inputStyle}
+                />
+              ) : (
+                <div className="flex items-center text-[11px] text-gray-600 px-1">
+                  Enable Whitelist to capture @handles
+                </div>
+              )}
+            </div>
+            <p className="text-[10px] text-gray-500 mt-1.5">
+              Applies to every asset in this batch — override per asset in the detail panel.
+            </p>
+          </div>
+
+          {batch.errors.files && (
+            <div
+              className="rounded-lg px-3 py-2 flex items-center gap-2 text-xs"
+              style={{
+                backgroundColor: 'rgba(255,50,50,0.06)',
+                border: '1px solid rgba(255,50,50,0.2)',
+                color: '#f87171',
+              }}
+            >
+              <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+              {batch.errors.files}
+            </div>
+          )}
+        </div>
+
+        {/* ─── RIGHT COLUMN — uploader, asset grid, detail panel, matrix ─── */}
+        <div className="order-1 lg:order-2 lg:col-span-5 lg:overflow-y-auto lg:max-h-[calc(100vh-160px)] space-y-4 lg:pl-1">
+          {/* Uploader header — sticky */}
+          <div
+            className="lg:sticky lg:top-0 z-10 rounded-xl"
+            style={{ backgroundColor: '#0A0A0A' }}
+          >
+            <div className="flex items-center gap-2 mb-2">
+              <FileText className="w-4 h-4 text-[#C8B89A]" />
+              <span className="text-sm font-medium text-gray-200">
+                Assets — Batch {batches.findIndex((b) => b.id === batch.id) + 1}
+              </span>
+              {batch.files.length > 0 && (
+                <span className="text-xs text-gray-500">
+                  {batch.files.length} file{batch.files.length !== 1 ? 's' : ''}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={handleSyncProducts}
+                disabled={syncingProducts}
+                title="Sync products from Shopify"
+                className="ml-auto p-1 rounded-md transition-all hover:bg-[rgba(200,184,154,0.12)]"
+                style={{ color: syncSuccess ? '#7FD48F' : '#C8B89A' }}
+              >
+                {syncSuccess ? (
+                  <Check className="w-3 h-3" />
+                ) : (
+                  <RefreshCw className={`w-3 h-3 ${syncingProducts ? 'animate-spin' : ''}`} />
+                )}
+              </button>
+            </div>
+            {brandProducts.length <= 1 && (
+              <p className="text-[11px] text-gray-500 italic mb-1">
+                No products yet —{' '}
+                <button
+                  type="button"
+                  onClick={handleSyncProducts}
+                  disabled={syncingProducts}
+                  className="text-[#C8B89A] hover:underline"
+                >
+                  {syncingProducts ? 'syncing...' : 'sync from Shopify'}
+                </button>
+              </p>
+            )}
+            <FileUploader
+              files={batch.files}
+              compact={batch.files.length > 0}
+              onFilesChange={(files: File[]) => {
+                // Seed new files' contexts with batch-level defaults
+                const startIdx = batch.files.length;
+                const added = files.length - batch.files.length;
+                updateBatch(batch.id, { files });
+                if (added > 0) {
+                  const defaults: Partial<FileContext> = {};
+                  if (batch.copyTemplate) defaults.copyTemplate = batch.copyTemplate;
+                  if (batch.creatorName) defaults.creatorName = batch.creatorName;
+                  if (batch.creatorSocialHandle)
+                    defaults.creatorHandle = batch.creatorSocialHandle;
+                  if (Object.keys(defaults).length > 0) {
+                    const newIndices = Array.from({ length: added }, (_, i) => startIdx + i);
+                    updateFileContexts(batch.id, newIndices, defaults);
+                  }
+                }
+              }}
+              onMediaInfoChange={(index: number, info: FileMediaInfo) => {
+                setBatches((prev) =>
+                  prev.map((b) =>
+                    b.id === batch.id
+                      ? {
+                          ...b,
+                          fileMediaInfo: {
+                            ...b.fileMediaInfo,
+                            [index]: info,
+                          },
+                        }
+                      : b
+                  )
+                );
+              }}
+              mediaInfo={batch.fileMediaInfo}
+              maxFileSize={2 * 1024 * 1024 * 1024}
+            />
+          </div>
+
+          {/* Asset thumbnail grid */}
+          {batch.files.length > 0 && (
+            <>
+              <div className="flex items-center justify-between">
+                <p className="text-[10px] text-gray-600">
+                  Click to select • Shift+click for multi-select • Drag to reorder
+                </p>
+                {selectedIndices.length > 0 && (
                   <button
-                    onClick={() => removeBatch(batch.id)}
-                    className="w-full px-4 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-all"
-                    style={{
-                      backgroundColor: 'rgba(255,50,50,0.06)',
-                      border: '1px solid rgba(255,50,50,0.15)',
-                      color: '#888',
-                    }}
+                    type="button"
+                    onClick={() => setSelectedIndices([])}
+                    className="text-[10px] text-[#C8B89A] hover:underline flex items-center gap-1"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    Remove Batch
+                    <X className="w-3 h-3" />
+                    Clear selection ({selectedIndices.length})
                   </button>
                 )}
               </div>
-            )}
-          </div>
-        ))}
+              <div className="grid grid-cols-3 gap-2">
+                {batch.files.map((file, fileIndex) => (
+                  <AssetThumbnail
+                    key={`${file.name}-${fileIndex}`}
+                    file={file}
+                    index={fileIndex}
+                    mediaInfo={batch.fileMediaInfo[fileIndex]}
+                    isSelected={selectedIndices.includes(fileIndex)}
+                    isTagged={Boolean((batch.fileContexts[fileIndex] as any)?.creativeType)}
+                    dupeWarning={dupes[fileIndex] || ''}
+                    onClick={handleAssetClick}
+                    onRemove={(idx) => removeFile(batch.id, idx)}
+                    onDragStart={(idx) => setDragIndex(idx)}
+                    onDragOver={(e, idx) => {
+                      e.preventDefault();
+                      setDragOverIndex(idx);
+                    }}
+                    onDrop={(idx) => {
+                      if (dragIndex !== null) moveFile(batch.id, dragIndex, idx);
+                      setDragIndex(null);
+                      setDragOverIndex(null);
+                    }}
+                    isDragTarget={dragOverIndex === fileIndex && dragIndex !== fileIndex}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* Asset detail panel */}
+          {selectedIndices.length > 0 && (
+            <AssetDetailPanel
+              files={batch.files}
+              selectedIndices={selectedIndices}
+              mediaInfo={batch.fileMediaInfo}
+              fileContexts={batch.fileContexts}
+              products={brandProducts}
+              copyTemplateOptions={copyTemplateOptions}
+              isCarousel={batch.isCarousel}
+              isWhitelist={batch.isWhitelist}
+              errors={batch.errors}
+              onContextChange={(indices, updates) =>
+                updateFileContexts(batch.id, indices, updates)
+              }
+            />
+          )}
+
+          {/* Creative matrix mini-summary */}
+          <CreativeMatrixSummary brandId={selectedBrandId} pendingTags={pendingTags} />
+        </div>
       </div>
 
-      {/* Add Another Batch */}
-      <button
-        onClick={addBatch}
-        className="w-full px-4 py-3 rounded-xl flex items-center justify-center gap-2 transition-all text-sm font-medium"
-        style={{
-          border: '1px dashed rgba(200,184,154,0.3)',
-          color: '#C8B89A',
-          backgroundColor: 'rgba(200,184,154,0.04)',
-        }}
-      >
-        <Plus className="w-4 h-4" />
-        Add Another Batch
-      </button>
-
-      {/* Sticky Footer */}
+      {/* ═══ Sticky Footer ═══ */}
       <div
-        className="fixed bottom-0 left-0 right-0 p-4 z-40"
+        className="fixed bottom-0 left-0 right-0 z-40"
         style={{
           backgroundColor: 'rgba(10,10,10,0.95)',
           backdropFilter: 'blur(12px)',
           borderTop: '1px solid rgba(255,255,255,0.06)',
         }}
       >
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+        {/* Upload progress bar */}
+        {uploadPct !== null && (
+          <div className="h-1 w-full" style={{ backgroundColor: 'rgba(255,255,255,0.06)' }}>
+            <div
+              className="h-full transition-all duration-300"
+              style={{
+                width: `${uploadPct}%`,
+                background: 'linear-gradient(90deg, #C8B89A 0%, #A89474 100%)',
+              }}
+            />
+          </div>
+        )}
+        <div className="max-w-7xl mx-auto flex items-center justify-between p-4">
           <div className="flex items-center gap-5 text-sm">
             <div className="flex gap-1.5">
               <span className="text-gray-500">Batches:</span>
@@ -1170,32 +1464,14 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
               <span className="text-gray-500">Files:</span>
               <span className="text-[#F5F5F8] font-semibold">{stats.totalFiles}</span>
             </div>
-            {stats.carouselCount > 0 && (
-              <div className="flex gap-1.5">
-                <span className="text-gray-500">Carousel:</span>
-                <span className="text-[#C8B89A] font-semibold">
-                  {stats.carouselCount}
-                </span>
-              </div>
-            )}
-            {stats.flexibleCount > 0 && (
-              <div className="flex gap-1.5">
-                <span className="text-gray-500">Flexible:</span>
-                <span className="text-[#C8B89A] font-semibold">
-                  {stats.flexibleCount}
-                </span>
-              </div>
-            )}
-            {stats.whitelistCount > 0 && (
-              <div className="flex gap-1.5">
-                <span className="text-gray-500">Whitelist:</span>
-                <span className="text-[#C8B89A] font-semibold">
-                  {stats.whitelistCount}
-                </span>
-              </div>
-            )}
+            <div className="hidden sm:flex gap-1.5">
+              <span className="text-gray-500">Size:</span>
+              <span className="text-[#F5F5F8] font-semibold">
+                {formatSize(stats.totalSize)}
+              </span>
+            </div>
             {uploadProgress && (
-              <span className="text-[#C8B89A] text-xs animate-pulse ml-2">
+              <span className="text-[#C8B89A] text-xs animate-pulse ml-2 hidden md:inline">
                 {uploadProgress}
               </span>
             )}
@@ -1212,7 +1488,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
             {isSubmitting || isLoading ? (
               <>
                 <Loader className="w-4 h-4 animate-spin" />
-                Uploading...
+                Uploading{uploadPct !== null ? ` ${uploadPct}%` : '...'}
               </>
             ) : (
               <>

@@ -17,6 +17,8 @@ interface FileUploaderProps {
   mediaInfo?: Record<number, FileMediaInfo>;
   maxFileSize?: number; // in bytes, default 500MB
   accept?: string;
+  /** Compact mode: slimmer drop zone for when assets are already present */
+  compact?: boolean;
 }
 
 function detectFormat(mimeType: string): FileMediaInfo['format'] {
@@ -92,6 +94,7 @@ export default function FileUploader({
   mediaInfo = {},
   maxFileSize = 2 * 1024 * 1024 * 1024,
   accept,
+  compact = false,
 }: FileUploaderProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [analyzing, setAnalyzing] = useState<Set<number>>(new Set());
@@ -144,19 +147,32 @@ export default function FileUploader({
         onDragLeave={() => setIsDragging(false)}
         onDrop={handleDrop}
         onClick={() => inputRef.current?.click()}
-        className="cursor-pointer transition-all duration-200 rounded-xl p-8 text-center"
+        className={`cursor-pointer transition-all duration-200 rounded-xl text-center ${
+          compact ? 'p-3 flex items-center justify-center gap-2.5' : 'p-8'
+        }`}
         style={{
           border: isDragging ? '2px dashed #C8B89A' : '2px dashed rgba(255,255,255,0.12)',
           backgroundColor: isDragging ? 'rgba(200,184,154,0.05)' : 'transparent',
         }}
       >
-        <Upload size={32} className="mx-auto mb-3 text-[#ABABAB]" />
-        <p className="text-[#F5F5F8] text-sm font-medium">
-          {isDragging ? 'Drop files here' : 'Drag files here or click to browse'}
-        </p>
-        <p className="text-[#666] text-xs mt-1">
-          Max {formatSize(maxFileSize)} per file. Format & aspect ratio auto-detected.
-        </p>
+        {compact ? (
+          <>
+            <Upload size={16} className="text-[#ABABAB]" />
+            <p className="text-[#F5F5F8] text-xs font-medium">
+              {isDragging ? 'Drop files here' : 'Add more files — drag or click'}
+            </p>
+          </>
+        ) : (
+          <>
+            <Upload size={32} className="mx-auto mb-3 text-[#ABABAB]" />
+            <p className="text-[#F5F5F8] text-sm font-medium">
+              {isDragging ? 'Drop files here' : 'Drag files here or click to browse'}
+            </p>
+            <p className="text-[#666] text-xs mt-1">
+              Max {formatSize(maxFileSize)} per file. Format & aspect ratio auto-detected.
+            </p>
+          </>
+        )}
         <input
           ref={inputRef}
           type="file"

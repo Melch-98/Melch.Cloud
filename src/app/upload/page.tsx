@@ -89,8 +89,8 @@ export default function UploadPage() {
 
   return (
     <Navbar>
-      <div className="max-w-4xl mx-auto px-6 py-8">
-        <div className="mb-8">
+      <div className="max-w-7xl mx-auto px-6 py-8">
+        <div className="mb-6">
           <h1 className="text-2xl font-bold text-[#F5F5F8] tracking-tight">Upload Creatives</h1>
           <p className="text-sm text-[#ABABAB] mt-2">
             Queue up batches of ad creatives with context for your media buyer.
