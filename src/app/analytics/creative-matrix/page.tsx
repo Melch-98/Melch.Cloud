@@ -279,7 +279,10 @@ export default function CreativeMatrixPage() {
         .order('title'),
       sb
         .from('submission_files')
-        .select('id', { count: 'exact', head: true })
+        // The join must be declared in select for the brand filter to apply —
+        // without `submissions!inner` the filter was silently ignored and the
+        // "of N total files" KPI counted every brand's files.
+        .select('id, submissions!inner(brand_id)', { count: 'exact', head: true })
         .eq('submissions.brand_id', selectedBrandId),
     ]);
 

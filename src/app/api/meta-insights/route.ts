@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { fetchCreativeInsights, fetchAdAccounts } from '@/lib/meta-api';
+import { fetchCreativeInsights, fetchAccountCurrency } from '@/lib/meta-api';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -149,16 +149,28 @@ export async function GET(request: NextRequest) {
     const cached = getCachedInsights(cacheKey);
     if (cached) {
       return NextResponse.json({
-        insights: cached.data,
+        insights: cached.data.insights ?? cached.data,
+        currency: cached.data.currency ?? 'USD',
         cached: true,
         cached_at: new Date(cached.timestamp).toISOString(),
       });
     }
 
-    const insights = await fetchCreativeInsights(metaToken, adAccountId, dateFrom, dateTo, limit, skipMedia);
-    setCachedInsights(cacheKey, insights);
+    // Fetch insights and the account's billing currency in parallel —
+    // some client accounts run in CAD, others USD, so the UI needs the
+    // real currency code instead of hardcoding "$".
+    const [insights, currency] = await Promise.all([
+      fetchCreativeInsights(metaToken, adAccountId, dateFrom, dateTo, limit, skipMedia),
+      fetchAccountCurrency(metaToken, adAccountId),
+    ]);
+    setCachedInsights(cacheKey, { insights, currency });
 
-    return NextResponse.json({ insights });
+    return NextResponse.json({
+      insights,
+      currency,
+      cached: false,
+      cached_at: new Date().toISOString(),
+    });
   } catch (err: unknown) {
     console.error('Meta API error:', err);
     const message = err instanceof Error ? err.message : 'Unknown error';

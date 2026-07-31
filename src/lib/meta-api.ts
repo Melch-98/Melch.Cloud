@@ -40,11 +40,14 @@ export interface MetaAdInsight {
   video_play_50: number;
   video_play_75: number;
   video_play_100: number;
+  video_3s_views: number;
+  thruplays: number;
   // Derived
   aov: number;
   cpc: number;
   clicks: number;
-  hold_rate: number;   // video completions / 3s views (retention after hook)
+  hold_rate: number;        // ThruPlays / 3s views (retention past the hook)
+  completion_rate: number;  // 100% completions / 3s views
 }
 
 export interface MetaAdAccount {
@@ -179,13 +182,48 @@ function safeNum(val: string | number | undefined | null): number {
   return isNaN(n) ? 0 : n;
 }
 
-function extractActionValue(
+// Meta reports conversions under different action types depending on the
+// account's pixel/CAPI setup. Try each candidate in priority order.
+function extractFirstActionValue(
   actions: Array<{ action_type: string; value: string }> | undefined,
-  actionType: string
+  actionTypes: string[]
 ): number {
   if (!actions) return 0;
-  const found = actions.find((a) => a.action_type === actionType);
-  return found ? safeNum(found.value) : 0;
+  for (const t of actionTypes) {
+    const found = actions.find((a) => a.action_type === t);
+    if (found) return safeNum(found.value);
+  }
+  return 0;
+}
+
+const PURCHASE_TYPES = ['purchase', 'omni_purchase', 'offsite_conversion.fb_pixel_purchase'];
+const ATC_TYPES = ['add_to_cart', 'omni_add_to_cart', 'offsite_conversion.fb_pixel_add_to_cart'];
+const IC_TYPES = ['initiate_checkout', 'omni_initiated_checkout', 'offsite_conversion.fb_pixel_initiate_checkout'];
+
+// ─── Fetch Account Currency ─────────────────────────────────────
+// Some client accounts bill in CAD, others USD. Cached per account
+// for the process lifetime (currency changes are effectively never).
+const _currencyCache: Record<string, string> = {};
+
+export async function fetchAccountCurrency(
+  accessToken: string,
+  adAccountId: string
+): Promise<string> {
+  const accountId = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
+  if (_currencyCache[accountId]) return _currencyCache[accountId];
+  try {
+    const res = await fetch(
+      `${META_API_BASE}/${accountId}?fields=currency&access_token=${accessToken}`
+    );
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.currency) {
+        _currencyCache[accountId] = data.currency;
+        return data.currency;
+      }
+    }
+  } catch { /* fall through to USD */ }
+  return 'USD';
 }
 
 function extractVideoMetric(
@@ -699,33 +737,40 @@ export async function fetchCreativeInsights(
     const clicks = safeNum(row.clicks);
 
     // Actions
-    const purchases = extractActionValue(row.actions, 'purchase');
-    const addToCart = extractActionValue(row.actions, 'add_to_cart');
-    const initiateCheckout = extractActionValue(row.actions, 'initiate_checkout');
+    const purchases = extractFirstActionValue(row.actions, PURCHASE_TYPES);
+    const addToCart = extractFirstActionValue(row.actions, ATC_TYPES);
+    const initiateCheckout = extractFirstActionValue(row.actions, IC_TYPES);
 
     // Action values
-    const purchaseValue = extractActionValue(row.action_values, 'purchase');
+    const purchaseValue = extractFirstActionValue(row.action_values, PURCHASE_TYPES);
 
     // Cost per action
-    const costPerPurchase = extractActionValue(row.cost_per_action_type, 'purchase');
-    const costPerAtc = extractActionValue(row.cost_per_action_type, 'add_to_cart');
-    const costPerIc = extractActionValue(row.cost_per_action_type, 'initiate_checkout');
+    const costPerPurchase = extractFirstActionValue(row.cost_per_action_type, PURCHASE_TYPES);
+    const costPerAtc = extractFirstActionValue(row.cost_per_action_type, ATC_TYPES);
+    const costPerIc = extractFirstActionValue(row.cost_per_action_type, IC_TYPES);
 
     // Video metrics — video_play_actions counts 3-second views
     const video3s = extractVideoMetric(row.video_play_actions, 'video_view');
+    const thruplays = extractVideoMetric(row.video_thruplay_watched_actions, 'video_view');
     const videoP25 = extractVideoMetric(row.video_p25_watched_actions, 'video_view');
     const videoP50 = extractVideoMetric(row.video_p50_watched_actions, 'video_view');
     const videoP75 = extractVideoMetric(row.video_p75_watched_actions, 'video_view');
     const videoP100 = extractVideoMetric(row.video_p100_watched_actions, 'video_view');
 
-    // Thumbstop = 3-second views / impressions (use actual 3s metric, fall back to p25)
+    // Hook rate (thumbstop) = 3-second views / impressions (fall back to p25)
     const thumbstopViews = video3s > 0 ? video3s : videoP25;
     const thumbstopRate = impressions > 0 ? (thumbstopViews / impressions) * 100 : 0;
 
     const roas = spend > 0 ? purchaseValue / spend : 0;
     const cpa = purchases > 0 ? spend / purchases : 0;
     const aov = purchases > 0 ? purchaseValue / purchases : 0;
-    const holdRate = thumbstopViews > 0 ? (videoP100 / thumbstopViews) * 100 : 0;
+    // Hold rate = ThruPlays (15s or complete) / 3s views — retention past the
+    // hook. Falls back to 50% watched when ThruPlay is missing. Previously this
+    // used 100% completions, which punished longer videos and made hold rate
+    // useless for comparing hooks across durations.
+    const holdViews = thruplays > 0 ? thruplays : videoP50;
+    const holdRate = thumbstopViews > 0 ? Math.min((holdViews / thumbstopViews) * 100, 100) : 0;
+    const completionRate = thumbstopViews > 0 ? (videoP100 / thumbstopViews) * 100 : 0;
 
     const info = thumbnails[row.ad_id] || { url: '', type: 'UNKNOWN', videoId: null };
     const videoUrl = info.videoId ? (videoSources[info.videoId] || null) : null;
@@ -761,10 +806,13 @@ export async function fetchCreativeInsights(
       video_play_50: videoP50,
       video_play_75: videoP75,
       video_play_100: videoP100,
+      video_3s_views: video3s,
+      thruplays,
       aov,
       cpc: safeNum(row.cpc),
       clicks,
       hold_rate: holdRate,
+      completion_rate: completionRate,
     };
   });
 }
@@ -787,7 +835,7 @@ export async function fetchCopyAnalysis(
     'ad_id', 'ad_name', 'spend', 'impressions', 'reach', 'frequency',
     'clicks', 'ctr', 'inline_link_click_ctr', 'cpm', 'cpc',
     'actions', 'action_values', 'cost_per_action_type',
-    'video_p25_watched_actions',
+    'video_play_actions', 'video_p25_watched_actions',
   ].join(',');
 
   const url =
@@ -818,12 +866,15 @@ export async function fetchCopyAnalysis(
   for (const row of rawInsights) {
     const spend = safeNum(row.spend);
     const impressions = safeNum(row.impressions);
-    const purchases = extractActionValue(row.actions, 'purchase');
-    const purchaseValue = extractActionValue(row.action_values, 'purchase');
-    const addToCart = extractActionValue(row.actions, 'add_to_cart');
-    const initiateCheckout = extractActionValue(row.actions, 'initiate_checkout');
+    const purchases = extractFirstActionValue(row.actions, PURCHASE_TYPES);
+    const purchaseValue = extractFirstActionValue(row.action_values, PURCHASE_TYPES);
+    const addToCart = extractFirstActionValue(row.actions, ATC_TYPES);
+    const initiateCheckout = extractFirstActionValue(row.actions, IC_TYPES);
+    // Match fetchCreativeInsights: prefer true 3s views, fall back to p25
+    const video3s = extractVideoMetric(row.video_play_actions, 'video_view');
     const videoP25 = extractVideoMetric(row.video_p25_watched_actions, 'video_view');
-    const thumbstopRate = impressions > 0 ? (videoP25 / impressions) * 100 : 0;
+    const thumbstopViews = video3s > 0 ? video3s : videoP25;
+    const thumbstopRate = impressions > 0 ? (thumbstopViews / impressions) * 100 : 0;
 
     adMetrics[row.ad_id] = {
       ad_name: row.ad_name || '',

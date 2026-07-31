@@ -1,9 +1,30 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { fetchCopyAnalysis } from '@/lib/meta-api';
+import { fetchCopyAnalysis, fetchAccountCurrency } from '@/lib/meta-api';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
+
+// In-memory cache (15-minute TTL) — mirrors /api/meta-insights.
+// Copy analysis fans out into many Meta calls per request; without a
+// cache every page visit re-hit Meta and burned rate limits. The page
+// already renders `cached`/`cached_at`, which were never sent before.
+const CACHE_TTL_MS = 15 * 60 * 1000;
+const copyCache = new Map<string, { data: any; timestamp: number }>();
+
+function getCached(key: string) {
+  const entry = copyCache.get(key);
+  if (entry && Date.now() - entry.timestamp < CACHE_TTL_MS) return entry;
+  if (entry) copyCache.delete(key);
+  return null;
+}
+function setCached(key: string, data: any) {
+  copyCache.set(key, { data, timestamp: Date.now() });
+  if (copyCache.size > 50) {
+    const oldest = Array.from(copyCache.entries()).sort((a, b) => a[1].timestamp - b[1].timestamp);
+    for (let i = 0; i < 10; i++) copyCache.delete(oldest[i][0]);
+  }
+}
 
 export async function GET(request: NextRequest) {
   const supabase = createClient(
@@ -88,8 +109,29 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const copyInputs = await fetchCopyAnalysis(metaToken, adAccountId, dateFrom, dateTo, limit);
-    return NextResponse.json({ inputs: copyInputs });
+    const cacheKey = `${adAccountId}:${dateFrom}:${dateTo}:${limit}`;
+    const cached = getCached(cacheKey);
+    if (cached) {
+      return NextResponse.json({
+        inputs: cached.data.inputs,
+        currency: cached.data.currency ?? 'USD',
+        cached: true,
+        cached_at: new Date(cached.timestamp).toISOString(),
+      });
+    }
+
+    const [copyInputs, currency] = await Promise.all([
+      fetchCopyAnalysis(metaToken, adAccountId, dateFrom, dateTo, limit),
+      fetchAccountCurrency(metaToken, adAccountId),
+    ]);
+    setCached(cacheKey, { inputs: copyInputs, currency });
+
+    return NextResponse.json({
+      inputs: copyInputs,
+      currency,
+      cached: false,
+      cached_at: new Date().toISOString(),
+    });
   } catch (err: unknown) {
     console.error('Copy analysis error:', err);
     const message = err instanceof Error ? err.message : 'Unknown error';

@@ -32,6 +32,7 @@ import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
 import DataFreshness, { friendlyError } from '@/components/DataFreshness';
 import type { MetaAdInsight } from '@/lib/meta-api';
+import { makeFmt, DEFAULT_FMT, type Fmt } from '@/lib/format';
 
 // ─── Types & Config ─────────────────────────────────────────────
 
@@ -64,16 +65,35 @@ interface RankRow {
   hitRate: number;
 }
 
-const fmt = {
-  currency: (v: number) =>
-    `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-  currencyShort: (v: number) =>
-    v >= 10000 ? `$${(v / 1000).toFixed(1)}k` : `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-  pct: (v: number) => `${(v * 100).toFixed(0)}%`,
-  pctDetail: (v: number) => `${(v * 100).toFixed(2)}%`,
-  num: (v: number) => v.toLocaleString('en-US', { maximumFractionDigits: 0 }),
-  x: (v: number) => v.toFixed(2),
-};
+// NOTE: currency-aware formatters come from makeFmt(currency) inside the
+// component; this page previously hardcoded "$" while some accounts bill CAD.
+
+// Page-local formatter shape (same call-site semantics as the old module-level
+// `fmt`, but built for the account's real currency).
+interface PageFmt {
+  currency: (v: number) => string;
+  currencyShort: (v: number) => string;
+  pct: (v: number) => string;       // 0-1 ratio → "42%"
+  pctDetail: (v: number) => string; // 0-1 ratio → "42.31%"
+  num: (v: number) => string;
+  x: (v: number) => string;
+  symbol: string;
+}
+
+function buildPageFmt(currencyCode: string): PageFmt {
+  const f: Fmt = currencyCode === 'USD' ? DEFAULT_FMT : makeFmt(currencyCode);
+  return {
+    currency: f.currencyFull,
+    currencyShort: f.currencyShort,
+    pct: f.pctRatio,
+    pctDetail: f.pctRatioDetail,
+    num: f.numFull,
+    x: f.x,
+    symbol: f.symbol,
+  };
+}
+
+const DEFAULT_PAGE_FMT = buildPageFmt('USD');
 
 // ─── Date Presets ──────────────────────────────────────────────
 
@@ -96,7 +116,7 @@ function getDatePreset(preset: string): { from: string; to: string; label: strin
 
 // ─── Ad Detail Sidecar ────────────────────────────────────────
 
-function AdDetailPanel({ ad, onClose, roasFloor }: { ad: MetaAdInsight; onClose: () => void; roasFloor: number }) {
+function AdDetailPanel({ ad, onClose, roasFloor, fmt }: { ad: MetaAdInsight; onClose: () => void; roasFloor: number; fmt: PageFmt }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
@@ -159,7 +179,7 @@ function AdDetailPanel({ ad, onClose, roasFloor }: { ad: MetaAdInsight; onClose:
         { label: 'CTR (all)', value: `${ad.ctr.toFixed(2)}%` },
         { label: 'CPM', value: fmt.currency(ad.cpm) },
         { label: 'CPC', value: fmt.currency(ad.cpc) },
-        { label: 'Thumbstop Rate', value: `${ad.thumbstop_rate.toFixed(2)}%` },
+        { label: 'Hook Rate (Thumbstop)', value: `${ad.thumbstop_rate.toFixed(2)}%` },
       ],
     },
     {
@@ -191,7 +211,7 @@ function AdDetailPanel({ ad, onClose, roasFloor }: { ad: MetaAdInsight; onClose:
         { label: '50% watched', value: fmt.num(ad.video_play_50) },
         { label: '75% watched', value: fmt.num(ad.video_play_75) },
         { label: '100% watched', value: fmt.num(ad.video_play_100) },
-        { label: 'Hold Rate', value: `${ad.hold_rate.toFixed(1)}%` },
+        { label: 'Hold Rate (ThruPlay / 3s)', value: `${ad.hold_rate.toFixed(1)}%` },
       ],
     });
   }
@@ -460,6 +480,10 @@ export default function AdPerspectivePage() {
   const [datePreset, setDatePreset] = useState('90d');
   const [cachedAt, setCachedAt] = useState<string | null>(null);
   const [isCached, setIsCached] = useState(false);
+  const [currency, setCurrency] = useState('USD');
+
+  // Currency-aware formatters (accounts bill USD or CAD)
+  const fmt = useMemo(() => (currency === 'USD' ? DEFAULT_PAGE_FMT : buildPageFmt(currency)), [currency]);
 
   // Settings (initialized from brand, user-adjustable)
   const [percentileInterval, setPercentileInterval] = useState(5);
@@ -467,7 +491,6 @@ export default function AdPerspectivePage() {
   const [staticCost, setStaticCost] = useState(50);
   const [videoCost, setVideoCost] = useState(150);
   const [includeProductionCost, setIncludeProductionCost] = useState(false);
-  const [brandSettingsLoaded, setBrandSettingsLoaded] = useState(false);
 
   // Chart
   const [chartMetric, setChartMetric] = useState<'spend' | 'revenue' | 'purchases' | 'roas' | 'cpa'>('spend');
@@ -511,26 +534,29 @@ export default function AdPerspectivePage() {
     init();
   }, [router, supabase]);
 
-  // Load brand settings when account changes
+  // Load brand settings whenever the account changes. (Previously a
+  // `brandSettingsLoaded` latch meant switching brands kept the FIRST
+  // brand's ROAS floor / creative costs for the session.)
   useEffect(() => {
-    if (!selectedAccount || brandSettingsLoaded) return;
+    if (!selectedAccount) return;
     const acct = accounts.find(a => a.id === selectedAccount);
     if (!acct?.brand_id) return;
+    let cancelled = false;
     const loadBrandSettings = async () => {
       const { data: brand } = await supabase
         .from('brands')
         .select('roas_floor, creative_cost_static, creative_cost_video')
         .eq('id', acct.brand_id)
         .single();
-      if (brand) {
+      if (brand && !cancelled) {
         if (brand.roas_floor != null) setRoasFloor(brand.roas_floor);
         if (brand.creative_cost_static != null) setStaticCost(brand.creative_cost_static);
         if (brand.creative_cost_video != null) setVideoCost(brand.creative_cost_video);
-        setBrandSettingsLoaded(true);
       }
     };
     loadBrandSettings();
-  }, [selectedAccount, accounts, supabase, brandSettingsLoaded]);
+    return () => { cancelled = true; };
+  }, [selectedAccount, accounts, supabase]);
 
   // Fetch ads
   const fetchData = useCallback(async () => {
@@ -550,6 +576,7 @@ export default function AdPerspectivePage() {
       const insights = data.insights || [];
       setAds(insights);
       setTruncated(insights.length >= 500);
+      if (data.currency) setCurrency(data.currency);
       setCachedAt(data.cached_at || null);
       setIsCached(!!data.cached);
 
@@ -745,9 +772,10 @@ export default function AdPerspectivePage() {
 
     const rows: PercentileRow[] = [];
     const total = sortedAds.length;
-    const step = percentileInterval / 100;
-
-    for (let pct = 1 - step; pct >= 0; pct -= step) {
+    // Integer iteration — the old float loop (pct -= step) accumulated
+    // drift and could skip the final 100% row.
+    for (let p = percentileInterval; p <= 100; p += percentileInterval) {
+      const pct = 1 - p / 100;
       const threshold = Math.max(0, Math.floor(pct * total));
       const topAds = sortedAds.slice(0, total - threshold);
 
@@ -758,7 +786,7 @@ export default function AdPerspectivePage() {
       const roas = spend > 0 ? revenue / spend : 0;
 
       rows.push({
-        percentile: Math.round((1 - pct) * 100),
+        percentile: p,
         spend,
         spendCount: topAds.length,
         sos: totalSpend > 0 ? spend / totalSpend : 0,
@@ -829,7 +857,7 @@ export default function AdPerspectivePage() {
     }
 
     return results;
-  }, [sortedAds, totalSpend, totalRevenue, totalPurchases, winners]);
+  }, [sortedAds, totalSpend, totalRevenue, totalPurchases, winners, fmt]);
 
   // ─── Ad Distribution Chart Data ─────────────────────────────
   const chartData = useMemo(() => {
@@ -854,10 +882,22 @@ export default function AdPerspectivePage() {
   const chartMax = useMemo(() => chartData.length > 0 ? Math.max(...chartData.map(d => d.value)) : 0, [chartData]);
 
   // ─── Fatigue Watch ──────────────────────────────────────────
-  const fatiguedAds = useMemo(() =>
-    sortedAds.filter(a => a.frequency > 3).sort((a, b) => b.frequency - a.frequency),
-    [sortedAds]
-  );
+  // Two signals (per Pilothouse fatigue framework + Denney storytelling KPIs):
+  //  1. absolute frequency > 3 on meaningful spend
+  //  2. frequency > 2.5x the spend-weighted account average (relative
+  //     overexposure — catches fatigue in accounts with low overall freq)
+  const accountAvgFrequency = useMemo(() => {
+    const impr = sortedAds.reduce((s, a) => s + a.impressions, 0);
+    const reach = sortedAds.reduce((s, a) => s + a.reach, 0);
+    return reach > 0 ? impr / reach : 0;
+  }, [sortedAds]);
+
+  const fatiguedAds = useMemo(() => {
+    const relThreshold = accountAvgFrequency > 0 ? accountAvgFrequency * 2.5 : Infinity;
+    return sortedAds
+      .filter(a => a.spend > 0 && (a.frequency > 3 || a.frequency > relThreshold))
+      .sort((a, b) => b.frequency - a.frequency);
+  }, [sortedAds, accountAvgFrequency]);
 
   // ─── Outlier Table (top & bottom performers) ────────────────
   const outlierAds = useMemo(() => {
@@ -1152,7 +1192,7 @@ export default function AdPerspectivePage() {
                       <div className="flex items-center justify-between">
                         <label className="text-xs" style={{ color: '#888' }}>Static Cost</label>
                         <div className="flex items-center gap-1">
-                          <span className="text-xs" style={{ color: '#666' }}>$</span>
+                          <span className="text-xs" style={{ color: '#666' }}>{fmt.symbol}</span>
                           <input
                             type="number"
                             value={staticCost}
@@ -1165,7 +1205,7 @@ export default function AdPerspectivePage() {
                       <div className="flex items-center justify-between">
                         <label className="text-xs" style={{ color: '#888' }}>Video Cost</label>
                         <div className="flex items-center gap-1">
-                          <span className="text-xs" style={{ color: '#666' }}>$</span>
+                          <span className="text-xs" style={{ color: '#666' }}>{fmt.symbol}</span>
                           <input
                             type="number"
                             value={videoCost}
@@ -1363,7 +1403,7 @@ export default function AdPerspectivePage() {
                             <g key={pct}>
                               <line x1="45" y1={y} x2="390" y2={y} stroke="rgba(255,255,255,0.05)" strokeWidth="0.5" />
                               <text x="40" y={y + 3} textAnchor="end" fill="#666" fontSize="8" fontFamily="monospace">
-                                {chartMetric === 'roas' ? val.toFixed(1) : chartMetric === 'purchases' ? Math.round(val).toString() : `$${val >= 1000 ? `${(val/1000).toFixed(0)}k` : val.toFixed(0)}`}
+                                {chartMetric === 'roas' ? val.toFixed(1) : chartMetric === 'purchases' ? Math.round(val).toString() : `${fmt.symbol}${val >= 1000 ? `${(val/1000).toFixed(0)}k` : val.toFixed(0)}`}
                               </text>
                             </g>
                           );
@@ -1381,7 +1421,7 @@ export default function AdPerspectivePage() {
                               fill={d.isWinner ? '#C8B89A' : '#4a9ead'}
                               opacity={0.8}
                             >
-                              <title>{d.name}: {chartMetric === 'roas' ? d.value.toFixed(2) : chartMetric === 'purchases' ? Math.round(d.value) : `$${d.value.toFixed(2)}`}</title>
+                              <title>{d.name}: {chartMetric === 'roas' ? d.value.toFixed(2) : chartMetric === 'purchases' ? Math.round(d.value) : `${fmt.symbol}${d.value.toFixed(2)}`}</title>
                             </circle>
                           );
                         })}
@@ -1423,7 +1463,7 @@ export default function AdPerspectivePage() {
                       <AlertCircle size={14} /> Fatigue Watch
                     </h3>
                     <span className="text-[10px]" style={{ color: '#888' }}>
-                      {fatiguedAds.length} ad{fatiguedAds.length !== 1 ? 's' : ''} with frequency &gt; 3
+                      {fatiguedAds.length} ad{fatiguedAds.length !== 1 ? 's' : ''} over frequency 3 or 2.5x account avg ({accountAvgFrequency.toFixed(1)})
                     </span>
                   </div>
                   <div className="overflow-x-auto">
@@ -1482,7 +1522,8 @@ export default function AdPerspectivePage() {
                           { key: 'aov', label: 'AOV' },
                           { key: 'cpm', label: 'CPM' },
                           { key: 'link_ctr', label: 'Link CTR' },
-                          { key: 'thumbstop_rate', label: 'Hookrate' },
+                          { key: 'thumbstop_rate', label: 'Hook Rate' },
+                          { key: 'hold_rate', label: 'Hold Rate' },
                           { key: 'impressions', label: 'Impressions' },
                         ].map((col) => (
                           <th
@@ -1524,6 +1565,7 @@ export default function AdPerspectivePage() {
                             <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: '#CCC' }}>{fmt.currencyShort(ad.cpm)}</td>
                             <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: '#CCC' }}>{ad.link_ctr.toFixed(2)}%</td>
                             <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: '#CCC' }}>{ad.thumbstop_rate.toFixed(2)}%</td>
+                            <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: '#CCC' }}>{ad.creative_type === 'VIDEO' ? `${ad.hold_rate.toFixed(1)}%` : '—'}</td>
                             <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: '#CCC' }}>{fmt.num(ad.impressions)}</td>
                           </tr>
                         );
@@ -1539,7 +1581,7 @@ export default function AdPerspectivePage() {
 
       {/* Ad Detail Sidecar */}
       {selectedAd && (
-        <AdDetailPanel ad={selectedAd} onClose={() => setSelectedAd(null)} roasFloor={roasFloor} />
+        <AdDetailPanel ad={selectedAd} onClose={() => setSelectedAd(null)} roasFloor={roasFloor} fmt={fmt} />
       )}
     </Navbar>
   );

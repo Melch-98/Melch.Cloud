@@ -33,6 +33,7 @@ import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
 import type { MetaAdInsight, MetaAdAccount } from '@/lib/meta-api';
 import DataFreshness, { friendlyError } from '@/components/DataFreshness';
+import { makeFmt, DEFAULT_FMT, type Fmt } from '@/lib/format';
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -42,46 +43,39 @@ type SortDir = 'asc' | 'desc';
 interface MetricPill {
   key: keyof MetaAdInsight;
   label: string;
-  format: (v: number) => string;
+  format: 'currencyFull' | 'pct' | 'x' | 'numFull';
   category: 'financial' | 'engagement' | 'conversion' | 'delivery';
 }
 
 // ─── Metric Definitions ────────────────────────────────────────
 
-const fmt = {
-  currency: (v: number) =>
-    v >= 1000 ? `$${(v / 1000).toFixed(1)}k` : `$${v.toFixed(2)}`,
-  currencyFull: (v: number) => `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-  pct: (v: number) => `${v.toFixed(2)}%`,
-  x: (v: number) => v.toFixed(2),
-  num: (v: number) => v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(Math.round(v)),
-  numFull: (v: number) => v.toLocaleString('en-US', { maximumFractionDigits: 0 }),
-};
-
 const ALL_METRICS: MetricPill[] = [
-  { key: 'spend', label: 'Spend', format: fmt.currencyFull, category: 'financial' },
-  { key: 'purchase_value', label: 'Purchase Value', format: fmt.currencyFull, category: 'financial' },
-  { key: 'roas', label: 'ROAS', format: fmt.x, category: 'financial' },
-  { key: 'cpa', label: 'CPA', format: fmt.currencyFull, category: 'financial' },
-  { key: 'aov', label: 'AOV', format: fmt.currencyFull, category: 'financial' },
-  { key: 'link_ctr', label: 'Link CTR', format: fmt.pct, category: 'engagement' },
-  { key: 'ctr', label: 'CTR (all)', format: fmt.pct, category: 'engagement' },
-  { key: 'cpm', label: 'CPM', format: fmt.currencyFull, category: 'engagement' },
-  { key: 'cpc', label: 'CPC', format: fmt.currencyFull, category: 'engagement' },
-  { key: 'thumbstop_rate', label: 'Thumbstop', format: fmt.pct, category: 'engagement' },
-  { key: 'purchases', label: 'Purchases', format: fmt.numFull, category: 'conversion' },
-  { key: 'add_to_cart', label: 'ATC', format: fmt.numFull, category: 'conversion' },
-  { key: 'initiate_checkout', label: 'IC', format: fmt.numFull, category: 'conversion' },
-  { key: 'cost_per_purchase', label: 'Cost/Purchase', format: fmt.currencyFull, category: 'conversion' },
-  { key: 'cost_per_atc', label: 'Cost/ATC', format: fmt.currencyFull, category: 'conversion' },
-  { key: 'impressions', label: 'Impressions', format: fmt.numFull, category: 'delivery' },
-  { key: 'reach', label: 'Reach', format: fmt.numFull, category: 'delivery' },
-  { key: 'frequency', label: 'Frequency', format: fmt.x, category: 'delivery' },
-  { key: 'clicks', label: 'Clicks', format: fmt.numFull, category: 'delivery' },
+  { key: 'spend', label: 'Spend', format: 'currencyFull', category: 'financial' },
+  { key: 'purchase_value', label: 'Purchase Value', format: 'currencyFull', category: 'financial' },
+  { key: 'roas', label: 'ROAS', format: 'x', category: 'financial' },
+  { key: 'cpa', label: 'CPA', format: 'currencyFull', category: 'financial' },
+  { key: 'aov', label: 'AOV', format: 'currencyFull', category: 'financial' },
+  { key: 'link_ctr', label: 'Link CTR', format: 'pct', category: 'engagement' },
+  { key: 'ctr', label: 'CTR (all)', format: 'pct', category: 'engagement' },
+  { key: 'cpm', label: 'CPM', format: 'currencyFull', category: 'engagement' },
+  { key: 'cpc', label: 'CPC', format: 'currencyFull', category: 'engagement' },
+  { key: 'thumbstop_rate', label: 'Hook Rate', format: 'pct', category: 'engagement' },
+  { key: 'hold_rate', label: 'Hold Rate', format: 'pct', category: 'engagement' },
+  { key: 'purchases', label: 'Purchases', format: 'numFull', category: 'conversion' },
+  { key: 'add_to_cart', label: 'ATC', format: 'numFull', category: 'conversion' },
+  { key: 'initiate_checkout', label: 'IC', format: 'numFull', category: 'conversion' },
+  { key: 'cost_per_purchase', label: 'Cost/Purchase', format: 'currencyFull', category: 'conversion' },
+  { key: 'cost_per_atc', label: 'Cost/ATC', format: 'currencyFull', category: 'conversion' },
+  { key: 'impressions', label: 'Impressions', format: 'numFull', category: 'delivery' },
+  { key: 'reach', label: 'Reach', format: 'numFull', category: 'delivery' },
+  { key: 'frequency', label: 'Frequency', format: 'x', category: 'delivery' },
+  { key: 'clicks', label: 'Clicks', format: 'numFull', category: 'delivery' },
 ];
 
-// Default visible metrics on cards
-const DEFAULT_CARD_METRICS: (keyof MetaAdInsight)[] = ['spend', 'purchase_value', 'roas', 'link_ctr'];
+// Default visible metrics on cards — spend/ROAS/CPA for scale decisions,
+// hook rate for creative diagnostics (per creative-strategy KB: lead with
+// primary KPIs, explain with storytelling KPIs)
+const DEFAULT_CARD_METRICS: (keyof MetaAdInsight)[] = ['spend', 'roas', 'cpa', 'thumbstop_rate', 'link_ctr'];
 
 // ─── Date Presets ──────────────────────────────────────────────
 
@@ -149,9 +143,13 @@ function TypeBadge({ type, size = 'sm' }: { type: string; size?: 'sm' | 'lg' }) 
 function CreativeDetailPanel({
   ad,
   onClose,
+  fmt,
+  roasFloor,
 }: {
   ad: MetaAdInsight;
   onClose: () => void;
+  fmt: Fmt;
+  roasFloor: number;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -161,6 +159,13 @@ function CreativeDetailPanel({
   const [currentTime, setCurrentTime] = useState(0);
 
   const isVideo = ad.creative_type === 'VIDEO' && ad.video_url;
+
+  // Close on Escape
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [onClose]);
 
   const togglePlay = () => {
     const v = videoRef.current;
@@ -215,7 +220,7 @@ function CreativeDetailPanel({
       metrics: [
         { label: 'Spend', value: fmt.currencyFull(ad.spend) },
         { label: 'Revenue', value: fmt.currencyFull(ad.purchase_value) },
-        { label: 'ROAS', value: fmt.x(ad.roas), highlight: ad.roas >= 3 },
+        { label: 'ROAS', value: fmt.x(ad.roas), highlight: ad.roas >= roasFloor },
         { label: 'CPA', value: fmt.currencyFull(ad.cpa) },
         { label: 'AOV', value: fmt.currencyFull(ad.aov) },
       ],
@@ -227,7 +232,7 @@ function CreativeDetailPanel({
         { label: 'CTR (all)', value: fmt.pct(ad.ctr) },
         { label: 'CPM', value: fmt.currencyFull(ad.cpm) },
         { label: 'CPC', value: fmt.currencyFull(ad.cpc) },
-        { label: 'Thumbstop', value: fmt.pct(ad.thumbstop_rate) },
+        { label: 'Hook Rate', value: fmt.pct(ad.thumbstop_rate) },
       ],
     },
     {
@@ -253,14 +258,18 @@ function CreativeDetailPanel({
 
   // Add video retention group for video ads
   if (ad.creative_type === 'VIDEO') {
-    const total = ad.impressions || 1;
+    const hook = ad.video_3s_views > 0 ? ad.video_3s_views : ad.video_play_25;
+    const retPct = (n: number) => (hook > 0 ? ` (${((n / hook) * 100).toFixed(0)}%)` : '');
     metricGroups.push({
-      title: 'Video Retention',
+      title: 'Video Retention Funnel',
       metrics: [
-        { label: '25% watched', value: fmt.numFull(ad.video_play_25) },
-        { label: '50% watched', value: fmt.numFull(ad.video_play_50) },
-        { label: '75% watched', value: fmt.numFull(ad.video_play_75) },
-        { label: '100% watched', value: fmt.numFull(ad.video_play_100) },
+        { label: 'Hook Rate (3s / impr.)', value: fmt.pct(ad.thumbstop_rate), highlight: ad.thumbstop_rate >= 30 },
+        { label: 'Hold Rate (ThruPlay / 3s)', value: fmt.pct(ad.hold_rate), highlight: ad.hold_rate >= 25 },
+        { label: '3s views', value: fmt.numFull(hook) },
+        { label: '25% watched', value: `${fmt.numFull(ad.video_play_25)}${retPct(ad.video_play_25)}` },
+        { label: '50% watched', value: `${fmt.numFull(ad.video_play_50)}${retPct(ad.video_play_50)}` },
+        { label: '75% watched', value: `${fmt.numFull(ad.video_play_75)}${retPct(ad.video_play_75)}` },
+        { label: '100% watched', value: `${fmt.numFull(ad.video_play_100)}${retPct(ad.video_play_100)}` },
       ],
     });
   }
@@ -269,7 +278,7 @@ function CreativeDetailPanel({
   const heroMetrics = [
     { label: 'Spend', value: fmt.currencyFull(ad.spend), color: '#C8B89A' },
     { label: 'Revenue', value: fmt.currencyFull(ad.purchase_value), color: '#e8dcc8' },
-    { label: 'ROAS', value: `${fmt.x(ad.roas)}x`, color: ad.roas >= 3 ? '#10B981' : ad.roas >= 1.5 ? '#C8B89A' : '#ef4444' },
+    { label: 'ROAS', value: `${fmt.x(ad.roas)}x`, color: ad.roas >= roasFloor ? '#10B981' : ad.roas >= 1 ? '#C8B89A' : '#ef4444' },
   ];
 
   return (
@@ -603,6 +612,7 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
   const [scopedAccountId, setScopedAccountId] = useState<string | null>(null); // strategist's brand ad account
   const [brandName, setBrandName] = useState<string | null>(null);
+  const [roasFloor, setRoasFloor] = useState(3); // brand-level winner threshold, default 3x
 
   // Data state
   const [accounts, setAccounts] = useState<MetaAdAccount[]>([]);
@@ -610,6 +620,10 @@ export default function AnalyticsPage() {
   const [fetchingAccounts, setFetchingAccounts] = useState(false);
   const [fetchingInsights, setFetchingInsights] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [currency, setCurrency] = useState<string>('USD');
+
+  // Currency-aware formatters — accounts bill in USD or CAD
+  const fmt = useMemo<Fmt>(() => (currency === 'USD' ? DEFAULT_FMT : makeFmt(currency)), [currency]);
 
   // Filter state
   const [selectedAccount, setSelectedAccount] = useState<string>('');
@@ -661,12 +675,13 @@ export default function AnalyticsPage() {
       if (profile.role === 'strategist' && profile.brand_id) {
         const { data: brand } = await supabase
           .from('brands')
-          .select('name, meta_ad_account_id')
+          .select('name, meta_ad_account_id, roas_floor')
           .eq('id', profile.brand_id)
           .single();
 
         if (brand) {
           setBrandName(brand.name);
+          if (brand.roas_floor != null) setRoasFloor(brand.roas_floor);
           if (brand.meta_ad_account_id) {
             setScopedAccountId(brand.meta_ad_account_id);
             setSelectedAccount(brand.meta_ad_account_id);
@@ -679,6 +694,25 @@ export default function AnalyticsPage() {
 
     init();
   }, [supabase, router]);
+
+  // Load brand-level ROAS floor when an account is selected (admin/founder path).
+  // Keeps "winner" thresholds consistent with Ad Perspective instead of a
+  // hardcoded 3x that ignores each brand's actual profitability line.
+  useEffect(() => {
+    if (!selectedAccount || scopedAccountId) return;
+    const acct = accounts.find((a) => a.id === selectedAccount) as (MetaAdAccount & { brand_id?: string }) | undefined;
+    if (!acct?.brand_id) return;
+    let cancelled = false;
+    (async () => {
+      const { data: brand } = await supabase
+        .from('brands')
+        .select('roas_floor')
+        .eq('id', acct.brand_id)
+        .single();
+      if (!cancelled && brand?.roas_floor != null) setRoasFloor(brand.roas_floor);
+    })();
+    return () => { cancelled = true; };
+  }, [selectedAccount, accounts, scopedAccountId, supabase]);
 
   // ─── Fetch Ad Accounts ─────────────────────────────────────
 
@@ -709,17 +743,23 @@ export default function AnalyticsPage() {
       }
 
       setAccounts(data.accounts || []);
-      if (data.accounts?.length > 0 && !selectedAccount) {
-        const savedBrand = localStorage.getItem('melch_selected_brand');
-        const match = savedBrand && data.accounts.find((a: any) => a.brand_id === savedBrand);
-        setSelectedAccount(match ? match.id : data.accounts[0].id);
+      if (data.accounts?.length > 0) {
+        // Functional update avoids depending on selectedAccount, which
+        // previously re-created this callback and re-fetched the account
+        // list on every account switch.
+        setSelectedAccount((prev) => {
+          if (prev) return prev;
+          const savedBrand = localStorage.getItem('melch_selected_brand');
+          const match = savedBrand && data.accounts.find((a: any) => a.brand_id === savedBrand);
+          return match ? match.id : data.accounts[0].id;
+        });
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setFetchingAccounts(false);
     }
-  }, [authToken, selectedAccount, scopedAccountId]);
+  }, [authToken, scopedAccountId]);
 
   useEffect(() => {
     if (!loading && authToken) {
@@ -749,6 +789,7 @@ export default function AnalyticsPage() {
       }
 
       setInsights(data.insights || []);
+      if (data.currency) setCurrency(data.currency);
       setCachedAt(data.cached_at || null);
       setIsCached(!!data.cached);
     } catch (err: unknown) {
@@ -831,6 +872,7 @@ export default function AnalyticsPage() {
       clicks: 0,
       link_ctr_weighted: 0,
     };
+    let winners = 0;
     filteredInsights.forEach((i) => {
       t.spend += i.spend;
       t.purchase_value += i.purchase_value;
@@ -838,13 +880,16 @@ export default function AnalyticsPage() {
       t.impressions += i.impressions;
       t.clicks += i.clicks;
       t.link_ctr_weighted += i.link_ctr * i.impressions;
+      if (i.roas >= roasFloor && i.spend > 0) winners++;
     });
     return {
       ...t,
       roas: t.spend > 0 ? t.purchase_value / t.spend : 0,
       link_ctr: t.impressions > 0 ? t.link_ctr_weighted / t.impressions : 0,
+      cpa: t.purchases > 0 ? t.spend / t.purchases : 0,
+      winners,
     };
-  }, [filteredInsights]);
+  }, [filteredInsights, roasFloor]);
 
   const dateRange = getDatePreset(datePreset);
   const selectedAccountObj = accounts.find((a) => a.id === selectedAccount);
@@ -1169,7 +1214,7 @@ export default function AnalyticsPage() {
         {/* ─── Summary Row ─────────────────────────────────── */}
         {insights.length > 0 && (
           <div
-            className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6 p-4 rounded-xl"
+            className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-6 p-4 rounded-xl"
             style={{
               backgroundColor: 'rgba(200,184,154,0.04)',
               border: '1px solid rgba(200,184,154,0.1)',
@@ -1179,8 +1224,10 @@ export default function AnalyticsPage() {
               { label: 'Total Spend', value: fmt.currencyFull(totals.spend) },
               { label: 'Revenue', value: fmt.currencyFull(totals.purchase_value) },
               { label: 'ROAS', value: fmt.x(totals.roas) },
+              { label: 'CPA', value: totals.purchases > 0 ? fmt.currencyFull(totals.cpa) : '—' },
               { label: 'Purchases', value: fmt.numFull(totals.purchases) },
               { label: 'Link CTR', value: fmt.pct(totals.link_ctr) },
+              { label: `Winners (≥${roasFloor}x)`, value: `${totals.winners} / ${filteredInsights.length}` },
             ].map((s) => (
               <div key={s.label} className="text-center">
                 <p className="text-[10px] font-bold uppercase tracking-widest mb-1" style={{ color: '#666' }}>
@@ -1248,7 +1295,8 @@ export default function AnalyticsPage() {
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5 mb-8">
             {filteredInsights.map((ad) => {
               const roasVal = ad.roas;
-              const isWinner = roasVal >= 3;
+              const isWinner = roasVal >= roasFloor && ad.spend > 0;
+              const isFatigued = ad.frequency > 3;
               return (
               <div
                 key={ad.ad_id}
@@ -1283,7 +1331,7 @@ export default function AnalyticsPage() {
                         className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
                         muted
                         playsInline
-                        preload="auto"
+                        preload="metadata"
                       />
                       {/* Gradient overlay at bottom */}
                       <div className="absolute inset-x-0 bottom-0 h-24" style={{ background: 'linear-gradient(transparent, rgba(0,0,0,0.7))' }} />
@@ -1300,6 +1348,7 @@ export default function AnalyticsPage() {
                       <img
                         src={ad.thumbnail_url}
                         alt={ad.ad_name}
+                        loading="lazy"
                         className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
                       />
                       <div className="absolute inset-x-0 bottom-0 h-24" style={{ background: 'linear-gradient(transparent, rgba(0,0,0,0.7))' }} />
@@ -1313,9 +1362,9 @@ export default function AnalyticsPage() {
                   <div className="absolute top-3 left-3">
                     <TypeBadge type={ad.creative_type} />
                   </div>
-                  {/* ROAS pill overlay */}
-                  {isWinner && (
-                    <div className="absolute top-3 right-3">
+                  {/* ROAS / fatigue pill overlay */}
+                  <div className="absolute top-3 right-3 flex flex-col items-end gap-1.5">
+                    {isWinner && (
                       <span
                         className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wider"
                         style={{ backgroundColor: 'rgba(16,185,129,0.85)', color: '#fff', backdropFilter: 'blur(8px)' }}
@@ -1323,8 +1372,17 @@ export default function AnalyticsPage() {
                         <TrendingUp size={9} />
                         {roasVal.toFixed(1)}x
                       </span>
-                    </div>
-                  )}
+                    )}
+                    {isFatigued && (
+                      <span
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wider"
+                        style={{ backgroundColor: 'rgba(234,179,8,0.85)', color: '#0A0A0A', backdropFilter: 'blur(8px)' }}
+                        title={`Frequency ${ad.frequency.toFixed(1)} — creative fatigue risk`}
+                      >
+                        Freq {ad.frequency.toFixed(1)}
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 {/* Info */}
@@ -1343,7 +1401,7 @@ export default function AnalyticsPage() {
                       const m = ALL_METRICS.find((mm) => mm.key === key);
                       if (!m) return null;
                       const val = ad[key] as number;
-                      const isHighRoas = key === 'roas' && val >= 3;
+                      const isHighRoas = key === 'roas' && val >= roasFloor;
                       const isSpend = key === 'spend';
                       const isRevenue = key === 'purchase_value';
                       return (
@@ -1358,7 +1416,7 @@ export default function AnalyticsPage() {
                               letterSpacing: '-0.01em',
                             }}
                           >
-                            {m.format(val)}
+                            {fmt[m.format](val)}
                           </span>
                         </div>
                       );
@@ -1449,7 +1507,7 @@ export default function AnalyticsPage() {
                                   muted
                                   loop
                                   playsInline
-                                  preload="auto"
+                                  preload="metadata"
                                 />
                                 <div className="play-overlay absolute inset-0 flex items-center justify-center bg-black/20 transition-opacity duration-200">
                                   <div className="w-0 h-0 ml-0.5 border-t-[4px] border-t-transparent border-l-[6px] border-l-white border-b-[4px] border-b-transparent" />
@@ -1460,6 +1518,7 @@ export default function AnalyticsPage() {
                               <img
                                 src={ad.thumbnail_url}
                                 alt=""
+                                loading="lazy"
                                 className="w-full h-full object-cover"
                               />
                             ) : (
@@ -1482,7 +1541,7 @@ export default function AnalyticsPage() {
                       {/* Metric cells */}
                       {ALL_METRICS.map((m) => {
                         const val = ad[m.key] as number;
-                        const isHighRoas = m.key === 'roas' && val >= 3;
+                        const isHighRoas = m.key === 'roas' && val >= roasFloor;
                         return (
                           <td key={m.key} className="px-3 py-3 text-right">
                             <span
@@ -1494,7 +1553,7 @@ export default function AnalyticsPage() {
                                 borderRadius: isHighRoas ? '4px' : '0',
                               }}
                             >
-                              {m.format(val)}
+                              {fmt[m.format](val)}
                             </span>
                           </td>
                         );
@@ -1521,6 +1580,8 @@ export default function AnalyticsPage() {
         <CreativeDetailPanel
           ad={selectedAd}
           onClose={() => setSelectedAd(null)}
+          fmt={fmt}
+          roasFloor={roasFloor}
         />
       )}
 

@@ -29,6 +29,7 @@ import Navbar from '@/components/Navbar';
 import DataFreshness, { friendlyError } from '@/components/DataFreshness';
 import { createClient } from '@/lib/supabase';
 import type { CopyInput } from '@/lib/meta-api';
+import { makeFmt, DEFAULT_FMT, type Fmt } from '@/lib/format';
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -39,39 +40,29 @@ type CopyType = 'all' | 'headline' | 'body' | 'description' | 'cta';
 interface MetricDef {
   key: keyof CopyInput;
   label: string;
-  format: (v: number) => string;
+  format: 'currencyFull' | 'pct' | 'x' | 'numFull';
 }
 
 // ─── Formatters ────────────────────────────────────────────────
 
-const fmt = {
-  currency: (v: number) =>
-    v >= 1000 ? `$${(v / 1000).toFixed(1)}k` : `$${v.toFixed(2)}`,
-  currencyFull: (v: number) =>
-    `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-  pct: (v: number) => `${v.toFixed(2)}%`,
-  x: (v: number) => v.toFixed(2),
-  num: (v: number) =>
-    v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(Math.round(v)),
-  numFull: (v: number) =>
-    v.toLocaleString('en-US', { maximumFractionDigits: 0 }),
-};
+// Currency-aware formatters are built per-account inside the component
+// (some accounts bill CAD). Metric defs reference formatter names.
 
 const METRICS: MetricDef[] = [
-  { key: 'spend', label: 'Spend', format: fmt.currencyFull },
-  { key: 'purchase_value', label: 'Revenue', format: fmt.currencyFull },
-  { key: 'roas', label: 'ROAS', format: fmt.x },
-  { key: 'cpa', label: 'CPA', format: fmt.currencyFull },
-  { key: 'purchases', label: 'Purchases', format: fmt.numFull },
-  { key: 'link_ctr', label: 'Link CTR', format: fmt.pct },
-  { key: 'ctr', label: 'CTR', format: fmt.pct },
-  { key: 'cpm', label: 'CPM', format: fmt.currencyFull },
-  { key: 'cpc', label: 'CPC', format: fmt.currencyFull },
-  { key: 'thumbstop_rate', label: 'Thumbstop', format: fmt.pct },
-  { key: 'impressions', label: 'Impressions', format: fmt.numFull },
-  { key: 'clicks', label: 'Clicks', format: fmt.numFull },
-  { key: 'add_to_cart', label: 'ATC', format: fmt.numFull },
-  { key: 'reach', label: 'Reach', format: fmt.numFull },
+  { key: 'spend', label: 'Spend', format: 'currencyFull' },
+  { key: 'purchase_value', label: 'Revenue', format: 'currencyFull' },
+  { key: 'roas', label: 'ROAS', format: 'x' },
+  { key: 'cpa', label: 'CPA', format: 'currencyFull' },
+  { key: 'purchases', label: 'Purchases', format: 'numFull' },
+  { key: 'link_ctr', label: 'Link CTR', format: 'pct' },
+  { key: 'ctr', label: 'CTR', format: 'pct' },
+  { key: 'cpm', label: 'CPM', format: 'currencyFull' },
+  { key: 'cpc', label: 'CPC', format: 'currencyFull' },
+  { key: 'thumbstop_rate', label: 'Hook Rate', format: 'pct' },
+  { key: 'impressions', label: 'Impressions', format: 'numFull' },
+  { key: 'clicks', label: 'Clicks', format: 'numFull' },
+  { key: 'add_to_cart', label: 'ATC', format: 'numFull' },
+  { key: 'reach', label: 'Reach', format: 'numFull' },
 ];
 
 const DEFAULT_VISIBLE_METRICS: (keyof CopyInput)[] = [
@@ -146,6 +137,10 @@ export default function CopyAnalysisPage() {
   const [showFilters, setShowFilters] = useState(false);
   const [cachedAt, setCachedAt] = useState<string | null>(null);
   const [isCached, setIsCached] = useState(false);
+  const [currency, setCurrency] = useState('USD');
+
+  // Currency-aware formatters (accounts bill USD or CAD)
+  const fmt = useMemo<Fmt>(() => (currency === 'USD' ? DEFAULT_FMT : makeFmt(currency)), [currency]);
 
   // Auth check + fetch accounts
   useEffect(() => {
@@ -197,6 +192,7 @@ export default function CopyAnalysisPage() {
 
       const data = await res.json();
       setInputs(data.inputs || []);
+      if (data.currency) setCurrency(data.currency);
       setCachedAt(data.cached_at || null);
       setIsCached(!!data.cached);
     } catch (e: any) {
@@ -263,6 +259,23 @@ export default function CopyAnalysisPage() {
     const ctas = inputs.filter((i) => i.type === 'cta').length;
     const shared = inputs.filter((i) => i.ad_count > 1).length;
     return { total, headlines, bodies, descriptions, ctas, shared };
+  }, [inputs]);
+
+  // Winner detection: a copy input is a "winner" when it beats the
+  // spend-weighted account ROAS on meaningful spend (>= 5% of total or
+  // $100+). Previously only the top sorted row got flagged, which was
+  // sort-order dependent and meaningless.
+  const winnerKeys = useMemo(() => {
+    const totalSpend = inputs.reduce((s, i) => s + i.spend, 0);
+    const totalRevenue = inputs.reduce((s, i) => s + i.purchase_value, 0);
+    const accountRoas = totalSpend > 0 ? totalRevenue / totalSpend : 0;
+    if (accountRoas <= 0) return new Set<string>();
+    const minSpendSig = Math.max(100, totalSpend * 0.05);
+    return new Set(
+      inputs
+        .filter((i) => i.spend >= minSpendSig && i.roas > accountRoas)
+        .map((i) => `${i.type}::${i.text}`)
+    );
   }, [inputs]);
 
   const handleSort = (field: SortField) => {
@@ -724,8 +737,8 @@ export default function CopyAnalysisPage() {
                   const isExpanded = expandedRow === `${input.type}::${input.text}`;
                   const rowKey = `${input.type}::${input.text}`;
 
-                  // Determine if this is a "winner" (top ROAS in its type)
-                  const isWinner = idx === 0 && input.roas > 1;
+                  // "Winner" = beats account ROAS on meaningful spend
+                  const isWinner = winnerKeys.has(rowKey);
 
                   return (
                     <div key={rowKey}>
@@ -816,7 +829,7 @@ export default function CopyAnalysisPage() {
                           return (
                             <div key={key} className="text-right">
                               <span className="text-sm font-medium tabular-nums" style={{ color: valColor }}>
-                                {metric.format(val)}
+                                {fmt[metric.format](val)}
                               </span>
                             </div>
                           );
@@ -875,7 +888,7 @@ export default function CopyAnalysisPage() {
                                       {m.label}
                                     </div>
                                     <div className="text-sm font-bold tabular-nums" style={{ color: valColor }}>
-                                      {m.format(val)}
+                                      {fmt[m.format](val)}
                                     </div>
                                   </div>
                                 );
