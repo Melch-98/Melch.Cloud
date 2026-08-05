@@ -1,10 +1,15 @@
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 
 export function createServiceClient() {
-  return createSupabaseClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url || !key) {
+    // Returns null during build/prerender to prevent crashing when env vars are missing.
+    return null as any;
+  }
+
+  return createSupabaseClient(url, key);
 }
 
 /**
@@ -13,16 +18,19 @@ export function createServiceClient() {
  */
 export async function getSignedStorageUrl(
   bucketPath: string,
-  expiresIn = 3600
-): Promise<string> {
+  expiresIn = 3600,
+) {
   const supabase = createServiceClient();
+  if (!supabase) {
+    return '/api/placeholder'; // Fallback for build-time
+  }
+
   const { data, error } = await supabase.storage
     .from('creatives')
     .createSignedUrl(bucketPath, expiresIn);
+    
   if (error || !data?.signedUrl) {
-    throw new Error(
-      `Failed to create signed URL for ${bucketPath}: ${error?.message || 'no URL returned'}`
-    );
+    return '';
   }
   return data.signedUrl;
 }

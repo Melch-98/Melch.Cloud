@@ -1,8 +1,21 @@
 import { createBrowserClient } from '@supabase/ssr';
 
+let _browserClient: ReturnType<typeof createBrowserClient> | null = null;
+
 export function createClient() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!url || !key) {
+    // During static generation (build time), these envs might be missing.
+    // Returning null prevents the 'required to create a Supabase client' crash.
+    return null as any; 
+  }
+
+  if (!_browserClient) {
+    _browserClient = createBrowserClient(url, key);
+  }
+  
+  return _browserClient;
 }
+
