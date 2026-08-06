@@ -137,13 +137,13 @@ export default function Navbar({ children }: { children?: React.ReactNode }) {
       label: 'Upload',
       href: '/upload',
       icon: Upload,
-      roles: ['strategist'],
+      roles: ['strategist', 'founder'],
     },
     {
       label: 'Pipeline',
       href: '/submissions',
       icon: GitBranch,
-      roles: ['strategist'],
+      roles: ['strategist', 'founder'],
     },
     {
       label: 'Creative Queue',
