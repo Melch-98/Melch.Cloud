@@ -26,7 +26,6 @@ interface BfcmPacingResponse {
     dayLabel: string;
     hourlySpend: HourlyPoint[];
     totalSpendSoFar: number;
-    projectedTotal: number;
   };
   l7Baseline: {
     hourlyAvg: HourlyPoint[];
@@ -258,13 +257,9 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // ── Projection ──
-    const currentHour = today.getHours();
-    const l7HourlyUpToNow = l7HourlyAvg.slice(0, currentHour + 1).reduce((s, p) => s + p.spend, 0);
-    let projectedTotal = l7DailyAvg;
-    if (l7HourlyUpToNow > 0) {
-      projectedTotal = (totalSpendSoFar / l7HourlyUpToNow) * l7DailyAvg;
-    }
+    // ── Projection (computed client-side for correct timezone) ──
+    // Server only provides raw data; the page computes pacing using
+    // the user's local time which matches the advertiser's timezone.
 
     // ── Last year BFCM data ──
     const lyStart = fmtDate(lastYearBfcmWindow.start);
@@ -359,7 +354,6 @@ export async function GET(request: NextRequest) {
         dayLabel: getDayLabel(today, bfcmWindow.thanksgiving),
         hourlySpend: todayHourly,
         totalSpendSoFar,
-        projectedTotal: Math.round(projectedTotal * 100) / 100,
       },
       l7Baseline: {
         hourlyAvg: l7HourlyAvg.map(p => ({ hour: p.hour, spend: Math.round(p.spend * 100) / 100 })),

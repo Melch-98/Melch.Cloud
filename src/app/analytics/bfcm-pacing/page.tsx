@@ -54,7 +54,6 @@ interface BfcmPacingData {
     dayLabel: string;
     hourlySpend: HourlyPoint[];
     totalSpendSoFar: number;
-    projectedTotal: number;
   };
   l7Baseline: {
     hourlyAvg: HourlyPoint[];
@@ -580,6 +579,11 @@ export default function BfcmPacingPage() {
     ? ((data.today.totalSpendSoFar - l7WithThisHour) / l7WithThisHour) * 100
     : 0;
 
+  // Projection: computed client-side so current hour = user's local time
+  const projectedTotal = data && l7WithThisHour > 0
+    ? (data.today.totalSpendSoFar / l7WithThisHour) * data.l7Baseline.dailyAvg
+    : data?.l7Baseline.dailyAvg || 0;
+
   const vsLastYearPct = data && data.lastYearBfcm.sameDay.totalSpend > 0
     ? ((data.today.totalSpendSoFar - data.lastYearBfcm.sameDay.totalSpend) / data.lastYearBfcm.sameDay.totalSpend) * 100
     : 0;
@@ -765,7 +769,7 @@ export default function BfcmPacingPage() {
               />
               <KpiCard
                 label="Projected Today"
-                value={fmtMoney(data.today.projectedTotal, data.currency)}
+                value={fmtMoney(projectedTotal, data.currency)}
                 sub={`L7 daily avg ${fmtMoney(data.l7Baseline.dailyAvg, data.currency)}`}
                 accent="gold"
               />
