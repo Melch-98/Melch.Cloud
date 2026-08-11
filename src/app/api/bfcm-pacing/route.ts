@@ -228,7 +228,7 @@ export async function GET(request: NextRequest) {
         if (json?.data) {
           for (const row of json.data) {
             const hourlyStr = row.hourly_stats_aggregated_by_advertiser_time_zone || '';
-            const hourMatch = hourlyStr.match(/^(\\d{1,2}):/);
+            const hourMatch = hourlyStr.match(/^(\d{1,2}):/);
             if (hourMatch) {
               const hour = parseInt(hourMatch[1], 10);
               const spend = parseFloat(row.spend || '0');
