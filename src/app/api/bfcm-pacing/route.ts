@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { fetchAccountCurrency } from '@/lib/meta-api';
+import { fetchAccountCurrency, fetchAccountTimezone } from '@/lib/meta-api';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -20,6 +20,7 @@ interface DailyPoint {
 
 interface BfcmPacingResponse {
   currency: string;
+  timezone: string;
   bfcmWindow: { start: string; end: string };
   today: {
     date: string;
@@ -30,6 +31,7 @@ interface BfcmPacingResponse {
   l7Baseline: {
     hourlyAvg: HourlyPoint[];
     dailyAvg: number;
+    dailyHourly: { date: string; hourlySpend: HourlyPoint[]; dayTotal: number }[];
   };
   lastYearBfcm: {
     sameDay: { dayLabel: string; date: string; totalSpend: number; hourlySpend: HourlyPoint[] };
@@ -167,8 +169,9 @@ export async function GET(request: NextRequest) {
   const META_BASE = 'https://graph.facebook.com/v21.0';
 
   try {
-    // ── Fetch currency ──
+    // ── Fetch currency & timezone ──
     const currency = await fetchAccountCurrency(metaToken, adAccountId);
+    const timezone = await fetchAccountTimezone(metaToken, adAccountId);
 
     // ── Calculate BFCM windows ──
     const bfcmWindow = getBfcmWindow(year);
@@ -204,56 +207,59 @@ export async function GET(request: NextRequest) {
       }));
     }
 
-    // ── L7 baseline (last 7 days hourly average) ──
-    const l7Start = new Date(today);
-    l7Start.setDate(l7Start.getDate() - 7);
-    const l7Since = fmtDate(l7Start);
-    const l7Until = fmtDate(new Date(today.getTime() - 86400000)); // day before today
+    // ── L7 baseline: one API call per day (last 7 days) ──
+    // Meta aggregates hourly breakdowns across multi-day ranges into
+    // 24 buckets (one per hour) with totals across ALL days, not per-day.
+    // Querying each day individually fixes the "by this hour" calculation.
+    const l7Days: string[] = [];
+    for (let i = 1; i <= 7; i++) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      l7Days.push(fmtDate(d));
+    }
 
-    const l7Url = `${META_BASE}/${adAccountId}/insights?level=account&time_range=${encodeURIComponent(JSON.stringify({ since: l7Since, until: l7Until }))}&breakdowns=hourly_stats_aggregated_by_advertiser_time_zone&fields=spend&limit=500&access_token=${metaToken}`;
+    const l7Promises = l7Days.map(async (day): Promise<{ date: string; hourlySpend: HourlyPoint[]; dayTotal: number }> => {
+      const url = `${META_BASE}/${adAccountId}/insights?level=account&time_range=${encodeURIComponent(JSON.stringify({ since: day, until: day }))}&breakdowns=hourly_stats_aggregated_by_advertiser_time_zone&fields=spend&limit=500&access_token=${metaToken}`;
+      try {
+        const res = await fetch(url);
+        const json = await res.json();
+        const hourlySpend: HourlyPoint[] = Array.from({ length: 24 }, (_, h) => ({ hour: h, spend: 0 }));
+        let dayTotal = 0;
+        if (json?.data) {
+          for (const row of json.data) {
+            const hourlyStr = row.hourly_stats_aggregated_by_advertiser_time_zone || '';
+            const hourMatch = hourlyStr.match(/^(\\d{1,2}):/);
+            if (hourMatch) {
+              const hour = parseInt(hourMatch[1], 10);
+              const spend = parseFloat(row.spend || '0');
+              if (hour >= 0 && hour < 24) {
+                hourlySpend[hour].spend += spend;
+                dayTotal += spend;
+              }
+            }
+          }
+        }
+        return { date: day, hourlySpend, dayTotal };
+      } catch {
+        return { date: day, hourlySpend: Array.from({ length: 24 }, (_, h) => ({ hour: h, spend: 0 })), dayTotal: 0 };
+      }
+    });
 
-    const l7Res = await fetch(l7Url);
-    const l7Data = await l7Res.json();
+    const l7DayResults = await Promise.all(l7Promises);
+    // Sort chronologically
+    l7DayResults.sort((a, b) => a.date.localeCompare(b.date));
 
     let l7DailyAvg = 0;
-    let l7HourlyAvg: HourlyPoint[] = Array.from({ length: 24 }, (_, i) => ({ hour: i, spend: 0 }));
+    const l7HourlyAvg: HourlyPoint[] = Array.from({ length: 24 }, (_, i) => ({ hour: i, spend: 0 }));
 
-    if (l7Data?.data) {
-      // Collect per-day per-hour spend
-      const dayHourMap = new Map<string, Map<number, number>>();
-      for (const row of l7Data.data) {
-        const date = row.date_start;
-        const hourlyStr = row.hourly_stats_aggregated_by_advertiser_time_zone || '';
-        const hourMatch = hourlyStr.match(/^(\d{1,2}):/);
-        if (hourMatch) {
-          const hour = parseInt(hourMatch[1], 10);
-          const spend = parseFloat(row.spend || '0');
-          if (!dayHourMap.has(date)) dayHourMap.set(date, new Map());
-          dayHourMap.get(date)!.set(hour, (dayHourMap.get(date)!.get(hour) || 0) + spend);
-        }
-      }
+    const validDays = l7DayResults.filter(d => d.dayTotal > 0);
+    const dayCount = validDays.length;
 
-      const dayCount = dayHourMap.size;
-      let dailyTotalSum = 0;
-
-      if (dayCount > 0) {
-        dayHourMap.forEach((hours) => {
-          let daySum = 0;
-          for (let h = 0; h < 24; h++) {
-            daySum += hours.get(h) || 0;
-          }
-          dailyTotalSum += daySum;
-        });
-        l7DailyAvg = dailyTotalSum / dayCount;
-
-        // Average each hour across days
-        for (let h = 0; h < 24; h++) {
-          let hourSum = 0;
-          dayHourMap.forEach((hours) => {
-            hourSum += hours.get(h) || 0;
-          });
-          l7HourlyAvg[h] = { hour: h, spend: hourSum / dayCount };
-        }
+    if (dayCount > 0) {
+      l7DailyAvg = validDays.reduce((s, d) => s + d.dayTotal, 0) / dayCount;
+      for (let h = 0; h < 24; h++) {
+        const hourSum = validDays.reduce((s, d) => s + d.hourlySpend[h].spend, 0);
+        l7HourlyAvg[h] = { hour: h, spend: hourSum / dayCount };
       }
     }
 
@@ -348,6 +354,7 @@ export async function GET(request: NextRequest) {
 
     const response: BfcmPacingResponse = {
       currency,
+      timezone,
       bfcmWindow: { start: tyStart, end: tyEnd },
       today: {
         date: todayStr,
@@ -358,6 +365,11 @@ export async function GET(request: NextRequest) {
       l7Baseline: {
         hourlyAvg: l7HourlyAvg.map(p => ({ hour: p.hour, spend: Math.round(p.spend * 100) / 100 })),
         dailyAvg: Math.round(l7DailyAvg * 100) / 100,
+        dailyHourly: l7DayResults.map(d => ({
+          date: d.date,
+          hourlySpend: d.hourlySpend.map(p => ({ hour: p.hour, spend: Math.round(p.spend * 100) / 100 })),
+          dayTotal: Math.round(d.dayTotal * 100) / 100,
+        })),
       },
       lastYearBfcm: {
         sameDay: lastYearSameDay,

@@ -48,6 +48,7 @@ interface DailyPoint {
 
 interface BfcmPacingData {
   currency: string;
+  timezone: string;
   bfcmWindow: { start: string; end: string };
   today: {
     date: string;
@@ -58,6 +59,7 @@ interface BfcmPacingData {
   l7Baseline: {
     hourlyAvg: HourlyPoint[];
     dailyAvg: number;
+    dailyHourly: { date: string; hourlySpend: HourlyPoint[]; dayTotal: number }[];
   };
   lastYearBfcm: {
     sameDay: { dayLabel: string; date: string; totalSpend: number; hourlySpend: HourlyPoint[] };
@@ -136,14 +138,14 @@ function HourlyCurveChart({
   l7Baseline,
   lastYearSameDay,
   currency,
+  currentHour,
 }: {
   today: BfcmPacingData['today'];
   l7Baseline: BfcmPacingData['l7Baseline'];
   lastYearSameDay: BfcmPacingData['lastYearBfcm']['sameDay'];
   currency: string;
+  currentHour: number;
 }) {
-  const currentHour = new Date().getHours();
-
   // Build cumulative data for all three series
   let todayCum = 0;
   let l7Cum = 0;
@@ -288,7 +290,99 @@ function BfcmWindowChart({
 }) {
   const sym = currencySymbols[currency] || currency + ' ';
 
-  // Build aligned data
+  // When outside BFCM window (thisYear is empty), show countdown
+  if (thisYear.length === 0) {
+    // Parse the BFCM window from the first date in lastYear or compute from year
+    const bfcmStart = lastYear.length > 0
+      ? (() => {
+          // lastYear dates are from previous year — compute this year's window
+          const year = new Date().getFullYear();
+          // BFCM: Mon before Thanksgiving through Cyber Monday
+          let thursdayCount = 0;
+          let thanksgiving: Date | null = null;
+          for (let d = 1; d <= 30; d++) {
+            const date = new Date(year, 10, d);
+            if (date.getDay() === 4) {
+              thursdayCount++;
+              if (thursdayCount === 4) { thanksgiving = date; break; }
+            }
+          }
+          const mon = new Date(thanksgiving!);
+          mon.setDate(mon.getDate() - 3);
+          const cm = new Date(thanksgiving!);
+          cm.setDate(cm.getDate() + 4);
+          return { start: mon, end: cm };
+        })()
+      : { start: new Date(), end: new Date() };
+
+    const daysAway = Math.max(0, Math.ceil((bfcmStart.start.getTime() - Date.now()) / 86400000));
+    const fmt = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+    return (
+      <div className="rounded-xl p-6" style={{ backgroundColor: '#111111' }}>
+        <h3 className="text-sm font-semibold mb-4" style={{ color: '#F5F5F8' }}>
+          BFCM Window — Daily Breakdown
+        </h3>
+        <div
+          className="flex flex-col items-center justify-center py-12 text-center"
+          style={{ minHeight: 250 }}
+        >
+          <div className="text-lg font-semibold mb-2" style={{ color: '#C8B89A' }}>
+            BFCM {bfcmStart.start.getFullYear()}: {fmt(bfcmStart.start)} – {fmt(bfcmStart.end)}
+          </div>
+          <div className="text-sm" style={{ color: '#666' }}>
+            {daysAway} {daysAway === 1 ? 'day' : 'days'} until the window opens
+          </div>
+          {lastYear.length > 0 && (
+            <div className="mt-4 text-xs" style={{ color: '#555' }}>
+              Last year&apos;s data shown for reference
+            </div>
+          )}
+        </div>
+        {/* Show last year bars for context */}
+        {lastYear.length > 0 && (
+          <>
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart
+                data={lastYear.map(ly => ({
+                  dayLabel: ly.dayLabel,
+                  shortLabel: ly.dayLabel === 'Thanksgiving' ? 'Thu 🦃'
+                    : ly.dayLabel === 'Black Friday' ? 'Fri BF'
+                    : ly.dayLabel === 'Cyber Monday' ? 'Mon CM'
+                    : ly.dayLabel.slice(0, 3),
+                  lastYear: ly.spend,
+                }))}
+                margin={{ top: 5, right: 20, left: 10, bottom: 5 }}
+              >
+                <CartesianGrid stroke="rgba(255,255,255,0.04)" strokeDasharray="3 3" />
+                <XAxis dataKey="shortLabel" stroke="#555" tick={{ fontSize: 11, fill: '#555' }} tickLine={false} />
+                <YAxis stroke="#555" tick={{ fontSize: 11, fill: '#555' }} tickLine={false}
+                  tickFormatter={(v: number) => `${sym}${v >= 1000 ? (v / 1000).toFixed(0) + 'K' : v.toFixed(0)}`}
+                />
+                <Tooltip
+                  contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#F5F5F8' }}
+                  formatter={(value: any, name: any) => [`${sym}${Number(value).toLocaleString()}`, String(name)]}
+                />
+                <Bar dataKey="lastYear" fill="#444444" name="Last Year" maxBarSize={32} />
+              </BarChart>
+            </ResponsiveContainer>
+            <div className="flex flex-wrap gap-6 mt-4 pt-4 text-xs"
+              style={{ borderTop: '1px solid rgba(255,255,255,0.06)', color: '#888' }}
+            >
+              <span>
+                Last year window total:{' '}
+                <span style={{ color: '#F5F5F8', fontWeight: 600 }}>
+                  {fmtMoney(lastYear.reduce((s, d) => s + d.spend, 0), currency)}
+                </span>
+              </span>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  // Normal chart rendering when inside BFCM window
   const data = thisYear.map((ty, i) => ({
     dayLabel: ty.dayLabel,
     shortLabel: ty.dayLabel === 'Thanksgiving' ? 'Thu 🦃'
@@ -569,9 +663,27 @@ export default function BfcmPacingPage() {
 
   // ─── Derived metrics ───────────────────────────────────────
 
+  // Get current hour in ad account's timezone (NOT user's local time)
+  const getAdAccountHour = (): number => {
+    if (!data?.timezone) return new Date().getHours();
+    try {
+      const now = new Date();
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        hour: 'numeric',
+        hour12: false,
+        timeZone: data.timezone,
+      });
+      return parseInt(formatter.format(now), 10);
+    } catch {
+      return new Date().getHours();
+    }
+  };
+
+  const currentHour = getAdAccountHour();
+
   const l7WithThisHour = data
     ? data.l7Baseline.hourlyAvg
-        .slice(0, new Date().getHours() + 1)
+        .slice(0, currentHour + 1)
         .reduce((s, p) => s + p.spend, 0)
     : 0;
 
@@ -579,10 +691,12 @@ export default function BfcmPacingPage() {
     ? ((data.today.totalSpendSoFar - l7WithThisHour) / l7WithThisHour) * 100
     : 0;
 
-  // Projection: computed client-side so current hour = user's local time
+  // Projection: computed client-side so current hour = ad account timezone
   const projectedTotal = data && l7WithThisHour > 0
     ? (data.today.totalSpendSoFar / l7WithThisHour) * data.l7Baseline.dailyAvg
-    : data?.l7Baseline.dailyAvg || 0;
+    : data
+      ? data.today.totalSpendSoFar * (24 / (currentHour + 1))
+      : 0;
 
   const vsLastYearPct = data && data.lastYearBfcm.sameDay.totalSpend > 0
     ? ((data.today.totalSpendSoFar - data.lastYearBfcm.sameDay.totalSpend) / data.lastYearBfcm.sameDay.totalSpend) * 100
@@ -809,6 +923,7 @@ export default function BfcmPacingPage() {
                 l7Baseline={data.l7Baseline}
                 lastYearSameDay={data.lastYearBfcm.sameDay}
                 currency={data.currency}
+                currentHour={currentHour}
               />
             </div>
 

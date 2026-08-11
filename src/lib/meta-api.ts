@@ -226,6 +226,32 @@ export async function fetchAccountCurrency(
   return 'USD';
 }
 
+// ─── Fetch Account Timezone ──────────────────────────────────────
+// Ad accounts have a configured timezone (e.g. "America/Chicago").
+// Cached for process lifetime — timezone changes are effectively never.
+const _timezoneCache: Record<string, string> = {};
+
+export async function fetchAccountTimezone(
+  accessToken: string,
+  adAccountId: string
+): Promise<string> {
+  const accountId = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
+  if (_timezoneCache[accountId]) return _timezoneCache[accountId];
+  try {
+    const res = await fetch(
+      `${META_API_BASE}/${accountId}?fields=timezone_name&access_token=${accessToken}`
+    );
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.timezone_name) {
+        _timezoneCache[accountId] = data.timezone_name;
+        return data.timezone_name;
+      }
+    }
+  } catch { /* fall through to UTC */ }
+  return 'UTC';
+}
+
 function extractVideoMetric(
   videoActions: Array<{ action_type: string; value: string }> | undefined,
   actionType: string
