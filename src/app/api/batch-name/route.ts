@@ -6,7 +6,6 @@ export const dynamic = 'force-dynamic';
 const BRAND_CODES: Record<string, string> = {
   'tallow-twins': 'TLW',
   'fond-regenerative': 'FND',
-  'nimi-skincare': 'NIM',
   'seven-weeks-coffee-co': 'SWC',
   'organic-jaguar': 'OJG',
 };
