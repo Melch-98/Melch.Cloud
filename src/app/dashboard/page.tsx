@@ -142,9 +142,10 @@ export default function DashboardPage() {
           batch_status,
           drive_folder_url,
           drive_sync_status,
-          brands:brand_id (name)
+          brands:brand_id (name, archived_at)
         `)
         .eq('batch_status', 'new')
+        .is('brands.archived_at', null)
         .order('created_at', { ascending: false })
         .limit(20);
 
