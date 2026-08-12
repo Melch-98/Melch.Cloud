@@ -643,12 +643,13 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [batches, setBatches] = useState<BatchSubmission[]>([]);
-  const [brands, setBrands] = useState<{ id: string; name: string }[]>([]);
+  const [brands, setBrands] = useState<{ id: string; name: string; slug: string }[]>([]);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [syncingAll, setSyncingAll] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [brandFilter, setBrandFilter] = useState<string>('all');
+  const [archivingSlug, setArchivingSlug] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -677,7 +678,7 @@ export default function AdminPage() {
       // Fetch all brands
       const { data: allBrands } = await supabase
         .from('brands')
-        .select('id, name')
+        .select('id, name, slug')
         .is('archived_at', null)
         .order('name');
       setBrands(allBrands || []);
@@ -734,6 +735,33 @@ export default function AdminPage() {
     if (!session?.access_token) return {};
     return { Authorization: `Bearer ${session.access_token}` };
   }, [supabase]);
+
+  const handleArchiveBrand = useCallback(
+    async (brandSlug: string) => {
+      if (!window.confirm(`Archive brand "${brandSlug}"? It will be hidden from all selectors.`)) return;
+      setArchivingSlug(brandSlug);
+      setError(null);
+      try {
+        const authHeaders = await getAuthHeaders();
+        const response = await fetch('/api/admin/brand-setup', {
+          method: 'POST',
+          headers: { ...authHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'archive', brandSlug }),
+        });
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.error || 'Archive failed');
+        }
+        setBrands((prev) => prev.filter((b) => b.slug !== brandSlug));
+        setBrandFilter('all');
+      } catch (err: any) {
+        setError(err.message || 'Failed to archive brand');
+      } finally {
+        setArchivingSlug(null);
+      }
+    },
+    [getAuthHeaders]
+  );
 
   const handleDownload = useCallback(
     async (submissionId: string) => {
@@ -997,6 +1025,37 @@ export default function AdminPage() {
                 </button>
               );
             })}
+          </div>
+        )}
+
+        {/* Manage brands */}
+        {brands.length > 0 && (
+          <div className="mb-8 p-4 rounded-xl" style={{ backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+            <div className="text-xs uppercase tracking-wider mb-3" style={{ color: '#666' }}>
+              Manage Brands
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {brands.map((brand) => (
+                <div
+                  key={brand.id}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg"
+                  style={{ backgroundColor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}
+                >
+                  <span className="text-xs font-medium" style={{ color: '#ABABAB' }}>{brand.name}</span>
+                  <button
+                    onClick={() => handleArchiveBrand(brand.slug)}
+                    disabled={archivingSlug === brand.slug}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold transition-all"
+                    style={{ color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' }}
+                    onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.backgroundColor = 'rgba(239,68,68,0.1)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                  >
+                    <Archive size={12} />
+                    {archivingSlug === brand.slug ? 'Archiving…' : 'Archive'}
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
