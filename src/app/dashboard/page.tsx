@@ -147,25 +147,26 @@ export default function DashboardPage() {
           brands:brand_id (name, archived_at)
         `)
         .eq('batch_status', 'new')
-        .is('brands.archived_at', null)
         .order('created_at', { ascending: false })
         .limit(20);
 
       if (!cancelled && !error && data) {
-        const mapped: NewBatch[] = (data as any[]).map((r) => ({
-          id: r.id,
-          batch_name: r.batch_name,
-          brand_id: r.brand_id,
-          brand_name: r.brands?.name || 'Unknown',
-          creative_type: r.creative_type || '',
-          is_carousel: !!r.is_carousel,
-          is_flexible: !!r.is_flexible,
-          is_whitelist: !!r.is_whitelist,
-          file_count: r.file_count || 0,
-          created_at: r.created_at,
-          drive_folder_url: r.drive_folder_url || null,
-          drive_sync_status: r.drive_sync_status || null,
-        }));
+        const mapped: NewBatch[] = (data as any[])
+          .filter((r) => !r.brands?.archived_at)
+          .map((r) => ({
+            id: r.id,
+            batch_name: r.batch_name,
+            brand_id: r.brand_id,
+            brand_name: r.brands?.name || 'Unknown',
+            creative_type: r.creative_type || '',
+            is_carousel: !!r.is_carousel,
+            is_flexible: !!r.is_flexible,
+            is_whitelist: !!r.is_whitelist,
+            file_count: r.file_count || 0,
+            created_at: r.created_at,
+            drive_folder_url: r.drive_folder_url || null,
+            drive_sync_status: r.drive_sync_status || null,
+          }));
         setNewBatches(mapped);
       }
     };
