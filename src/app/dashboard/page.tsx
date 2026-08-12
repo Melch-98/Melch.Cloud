@@ -7,6 +7,8 @@ import { Loader, TrendingUp, TrendingDown, Inbox, ArrowRight, Package, Shuffle, 
 import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
 
+export const dynamic = 'force-dynamic';
+
 interface TickerRow {
   brand_id: string;
   brand_name: string;

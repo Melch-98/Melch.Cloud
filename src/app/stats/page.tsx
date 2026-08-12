@@ -144,7 +144,7 @@ export default function StatsPage() {
 
       const [brandsRes, subsRes] = await Promise.all([
         supabase.from('brands').select('id, name').is('archived_at', null).order('name'),
-        supabase.from('submissions').select('id, batch_name, brand_id, creative_type, batch_status, created_at, launched_at, file_count, is_carousel, is_flexible, is_whitelist, brands:brand_id (name)').order('created_at', { ascending: false }),
+        supabase.from('submissions').select('id, batch_name, brand_id, creative_type, batch_status, created_at, launched_at, file_count, is_carousel, is_flexible, is_whitelist, brands:brand_id (name, archived_at)').is('brands.archived_at', null).order('created_at', { ascending: false }),
       ]);
 
       setBrands(brandsRes.data || []);
