@@ -457,7 +457,8 @@ export default function CalendarPage() {
       // Fetch submissions
       let batchQuery = supabase
         .from('submissions')
-        .select('id, batch_name, brand_id, batch_status, created_at, launched_at, brands:brand_id(name)')
+        .select('id, batch_name, brand_id, batch_status, created_at, launched_at, brands:brand_id(name, archived_at)')
+        .is('brands.archived_at', null)
         .gte('created_at', `${year}-01-01`)
         .lt('created_at', `${year + 1}-01-01`)
         .order('created_at', { ascending: true });

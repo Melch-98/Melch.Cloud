@@ -699,6 +699,7 @@ export default function AdminPage() {
             dropbox_path
           )
         `)
+        .is('brands.archived_at', null)
         .order('created_at', { ascending: false });
 
       console.log('Submissions query result:', { count: submissions?.length, subError });
