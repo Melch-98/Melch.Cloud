@@ -130,5 +130,29 @@ export async function POST(request: NextRequest) {
     results.push({ action: 'clear_other_spend', rowsUpdated: updated?.length || 0 });
   }
 
+  if (action === 'archive') {
+    const { brandSlug } = body;
+    if (!brandSlug) return NextResponse.json({ error: 'brandSlug required' }, { status: 400 });
+    const { data, error } = await supabase
+      .from('brands')
+      .update({ archived_at: new Date().toISOString() })
+      .eq('slug', brandSlug)
+      .select('id, name, slug, archived_at');
+    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    results.push({ action: 'archive', archived: data });
+  }
+
+  if (action === 'unarchive') {
+    const { brandSlug } = body;
+    if (!brandSlug) return NextResponse.json({ error: 'brandSlug required' }, { status: 400 });
+    const { data, error } = await supabase
+      .from('brands')
+      .update({ archived_at: null })
+      .eq('slug', brandSlug)
+      .select('id, name, slug, archived_at');
+    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    results.push({ action: 'unarchive', restored: data });
+  }
+
   return NextResponse.json({ ok: true, results });
 }
