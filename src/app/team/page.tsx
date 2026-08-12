@@ -268,6 +268,7 @@ function TeamCard({
   onAddMember,
   onRemoveMember,
   onUpdateBrand,
+  onArchiveBrand,
   saving,
 }: {
   brand: Brand;
@@ -278,6 +279,7 @@ function TeamCard({
   onAddMember: (userId: string, brandId: string) => void;
   onRemoveMember: (userId: string) => void;
   onUpdateBrand: (brandId: string, field: string, value: string) => void;
+  onArchiveBrand: (brand: Brand) => void;
   saving: boolean;
 }) {
   const [expanded, setExpanded] = useState(true);
@@ -416,6 +418,21 @@ function TeamCard({
           style={{ color: '#555' }}
         >
           <Settings2 size={14} />
+        </button>
+
+        {/* Archive brand */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            if (window.confirm(`Archive "${brand.name}"? It will be hidden from all selectors.`)) {
+              onArchiveBrand(brand);
+            }
+          }}
+          className="p-1.5 rounded-lg transition-all hover:bg-white/[0.05]"
+          style={{ color: '#ef4444' }}
+          title="Archive brand"
+        >
+          <Trash2 size={14} />
         </button>
 
         {/* Add member */}
@@ -1687,6 +1704,37 @@ export default function TeamPage() {
     [supabase]
   );
 
+  const handleArchiveBrand = useCallback(
+    async (brand: Brand) => {
+      setSaving(true);
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) { setError('Not authenticated'); setSaving(false); return; }
+
+        const res = await fetch('/api/admin/brand-setup', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ action: 'archive', brandSlug: brand.slug }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error || 'Failed to archive brand');
+        } else {
+          setBrands((prev) => prev.filter((b) => b.id !== brand.id));
+          toast('Brand archived');
+        }
+      } catch {
+        setError('Failed to archive brand');
+      }
+      setSaving(false);
+    },
+    [supabase]
+  );
+
   const handleCreateTeam = useCallback(
     async (name: string, website: string, metaAdAccountId?: string, googleAdsCustomerId?: string) => {
       setSaving(true);
@@ -1876,6 +1924,7 @@ export default function TeamPage() {
               onAddMember={handleAddMember}
               onRemoveMember={handleRemoveMember}
               onUpdateBrand={handleUpdateBrand}
+              onArchiveBrand={handleArchiveBrand}
               saving={saving}
             />
           ))}
