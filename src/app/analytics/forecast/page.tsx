@@ -32,6 +32,7 @@ import {
   hillRev,
   findOptimalSpend,
   computeEffMargin,
+  optimalSpendBand,
 } from '@/lib/hill-model';
 
 // ─── Types ──────────────────────────────────────────────────────
@@ -63,6 +64,8 @@ interface ModelForecast {
   goalKey: string;
   goalLabel: string;
   optDailySpend: number;
+  bandLow: number;
+  bandHigh: number;
   r2: number;
   months: ModelMonth[];
   annualSpend: number;
@@ -403,6 +406,13 @@ export default function ForecastPage() {
 
     return GOALS.map(g => {
       const optDaily = findOptimalSpend(fit.V, fit.K, fit.h, g.key, params, effMargin, Math.max(...points.map(p => p.spend)));
+      const ltvForGoal = g.key === 'max3m' ? params.l3
+        : g.key === 'max6m' ? params.l6
+        : g.key === 'max12m' ? params.l12
+        : 1;
+      const band = g.key === 'targetRoas'
+        ? { low: optDaily, high: optDaily, bandPct: 0 }
+        : optimalSpendBand(fit.V, fit.K, fit.h, optDaily, effMargin, ltvForGoal);
 
       const months: ModelMonth[] = MONTHS.map((label, mi) => {
         const days = getDaysInMonth(forecastYear, mi);
@@ -432,6 +442,8 @@ export default function ForecastPage() {
         goalKey: g.key,
         goalLabel: g.label,
         optDailySpend: optDaily,
+        bandLow: band.low,
+        bandHigh: band.high,
         r2: fit.r2,
         months,
         annualSpend,
@@ -1202,7 +1214,7 @@ export default function ForecastPage() {
               {activeModel && (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, padding: 16 }}>
                   {[
-                    { label: 'Optimal Daily Spend', value: fmt(activeModel.optDailySpend) },
+                    { label: 'Optimal Daily Spend', value: activeModel.bandHigh > activeModel.bandLow ? `${fmt(activeModel.bandLow)}–${fmt(activeModel.bandHigh)}` : fmt(activeModel.optDailySpend) },
                     { label: 'Annual Spend', value: fmt(activeModel.annualSpend) },
                     { label: 'Annual NC Revenue', value: fmt(activeModel.annualNcRev) },
                     { label: 'Blended aMER', value: fmtNum(activeModel.blendedAmer) },

@@ -220,3 +220,43 @@ export function computeEffMargin(
   const fulfillmentRate = aov > 0 ? fulfillmentPerOrder / aov : 0;
   return grossMargin - merchantFeePct / 100 - fulfillmentRate;
 }
+
+// ─── Confidence band on optimal spend ───────────────────────────
+
+export interface SpendBand {
+  low: number;   // lowest spend that keeps ≥ 90% of peak CM
+  high: number;  // highest spend that keeps ≥ 90% of peak CM
+  bandPct: number; // half-width as % of the optimal spend
+}
+
+// The optimum is a flat region, not a knife-edge. This returns the spend range
+// where CM stays within 90% of its peak — a sharp peak gives a tight band, a
+// flat plateau gives a wide one. The recommendation is displayed as this range
+// so it doesn't read as falsely precise.
+export function optimalSpendBand(
+  V: number, K: number, h: number,
+  optSpend: number, effMargin: number, ltvMult: number
+): SpendBand {
+  const cmAt = (s: number) => hillRev(s, V, K, h) * effMargin * ltvMult - s;
+  const optCM = cmAt(optSpend);
+  if (optCM <= 0 || optSpend <= 0) return { low: optSpend, high: optSpend, bandPct: 0 };
+  const threshold = optCM * 0.90;
+
+  // Scan down from the peak to the lowest spend still at ≥ threshold.
+  let low = optSpend;
+  for (let i = 0; i <= 500; i++) {
+    const s = optSpend * (1 - i / 500);
+    if (cmAt(s) >= threshold) low = s; else break;
+  }
+
+  // Scan up from the peak to the highest spend still at ≥ threshold.
+  let high = optSpend;
+  const maxS = optSpend * 3;
+  for (let i = 0; i <= 500; i++) {
+    const s = optSpend + (maxS - optSpend) * (i / 500);
+    if (cmAt(s) >= threshold) high = s; else break;
+  }
+
+  const bandPct = ((high - low) / 2 / optSpend) * 100;
+  return { low, high, bandPct };
+}

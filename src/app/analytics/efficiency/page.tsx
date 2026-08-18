@@ -25,6 +25,7 @@ import {
   hillRev,
   hillMargRoas,
   findOptimalSpend,
+  optimalSpendBand,
 } from '@/lib/hill-model';
 
 // ─── Types ──────────────────────────────────────────────────────
@@ -203,6 +204,17 @@ export default function EfficiencyPage() {
     const curMROAS = params.curSpend > 0 ? hillMargRoas(params.curSpend, V, K, h) : 0;
     const spendDelta = params.curSpend > 0 ? ((optSpend / params.curSpend) - 1) * 100 : 0;
 
+    // LTV multiplier for the selected goal (used for the band).
+    const ltvForGoal = selectedGoal === 'max3m' ? params.l3
+      : selectedGoal === 'max6m' ? params.l6
+      : selectedGoal === 'max12m' ? params.l12
+      : 1;
+    // The band only applies to CM-maximizing goals. Target ROAS is a ceiling,
+    // not a peak, so a "±X% band" around it is meaningless.
+    const band = selectedGoal === 'targetRoas'
+      ? { low: optSpend, high: optSpend, bandPct: 0 }
+      : optimalSpendBand(V, K, h, optSpend, effMargin, ltvForGoal);
+
     // Curve data for chart
     const maxS = Math.max(...dailyPoints.map(d => d.spend), optSpend) * 1.3;
     const curveData = Array.from({ length: 200 }, (_, i) => {
@@ -231,7 +243,7 @@ export default function EfficiencyPage() {
 
     return {
       fit, optSpend, optRev, curRev, curROAS, optROAS, curCM, optCM,
-      curMROAS, spendDelta, curveData, ladder, maxS,
+      curMROAS, spendDelta, curveData, ladder, maxS, band,
     };
   }, [dailyPoints, params, selectedGoal]);
 
@@ -418,8 +430,12 @@ export default function EfficiencyPage() {
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
               <KpiCard
                 label="Optimal Daily Spend"
-                value={'$' + fmt(analysis.optSpend)}
-                sub={`vs current $${fmt(params.curSpend)}`}
+                value={analysis.band.bandPct > 0
+                  ? `$${fmt(analysis.band.low)}–$${fmt(analysis.band.high)}`
+                  : '$' + fmt(analysis.optSpend)}
+                sub={analysis.band.bandPct > 0
+                  ? `±${fmt(analysis.band.bandPct, 0)}% band · vs current $${fmt(params.curSpend)}`
+                  : `vs current $${fmt(params.curSpend)}`}
                 color="text-[#C8B89A]"
               />
               <KpiCard
@@ -491,6 +507,17 @@ export default function EfficiencyPage() {
                     stroke="#60A5FA" strokeWidth={1.5} strokeDasharray="4,3" />
                   <text x={chartSvg.sx(params.curSpend)} y={chartSvg.PAD.top - 6}
                     textAnchor="middle" fill="#60A5FA" fontSize={9}>Current</text>
+
+                  {/* Confidence band (≥90% of peak CM) */}
+                  {analysis.band.bandPct > 0 && (
+                    <rect
+                      x={chartSvg.sx(analysis.band.low)}
+                      y={chartSvg.PAD.top}
+                      width={chartSvg.sx(analysis.band.high) - chartSvg.sx(analysis.band.low)}
+                      height={chartSvg.H - chartSvg.PAD.top - chartSvg.PAD.bottom}
+                      fill="rgba(52,211,153,0.07)"
+                    />
+                  )}
 
                   {/* Optimal spend line */}
                   <line x1={chartSvg.sx(analysis.optSpend)} x2={chartSvg.sx(analysis.optSpend)}
@@ -612,6 +639,9 @@ export default function EfficiencyPage() {
                 Fitted on <strong className="text-neutral-300">{dailyPoints.length}</strong> daily data points
                 (total ad spend vs new customer revenue).
                 Recency half-life: {params.hl}d.
+                {analysis.band.bandPct > 0 && (
+                  <> Optimal-spend band: ±{fmt(analysis.band.bandPct, 0)}% (spend anywhere in the shaded range and keep ≥90% of peak CM).</>
+                )}
                 The Hill model generalizes Michaelis-Menten by adding shape parameter h — when h=1, it reduces to the standard saturation curve.
                 Higher h means a sharper inflection point.
                 <br />
