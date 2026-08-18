@@ -79,15 +79,6 @@ export async function GET(request: NextRequest) {
     if (settings?.value) metaToken = settings.value;
   }
 
-  let windsorKey = process.env.WINDSOR_API_KEY || '';
-  if (!windsorKey) {
-    const { data: settings } = await supabase
-      .from('app_settings')
-      .select('value')
-      .eq('key', 'windsor_api_key')
-      .single();
-    windsorKey = settings?.value || '';
-  }
   const twApiKey = process.env.TRIPLEWHALE_API_KEY || '';
   const today = new Date().toISOString().split('T')[0];
 
@@ -119,38 +110,60 @@ export async function GET(request: NextRequest) {
     }
   };
 
+  // Google spend via Triple Whale ads_table (channel-reported). Windsor was
+  // cancelled, so this is the replacement for Google in the ticker.
   const fetchGoogle = async (brand: BrandRow): Promise<TickerRow | null> => {
-    if (!brand.google_ads_customer_id || !windsorKey) return null;
-    try {
-      const custId = brand.google_ads_customer_id.replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3');
-      const url = new URL('https://connectors.windsor.ai/google_ads');
-      url.searchParams.set('api_key', windsorKey);
-      url.searchParams.set('date_from', today);
-      url.searchParams.set('date_to', today);
-      url.searchParams.set('fields', 'account_id,date,spend,conversion_value');
-      url.searchParams.set('_renderer', 'json');
-      const res = await fetch(url.toString());
-      if (!res.ok) return null;
-      const data = await res.json();
-      const rows = Array.isArray(data) ? data : data?.data || data?.result || [];
-      let spend = 0;
-      let revenue = 0;
-      for (const r of rows) {
-        if (r.account_id !== custId) continue;
-        spend += r.spend || 0;
-        revenue += r.conversion_value || 0;
+    if (!brand.shopify_store_domain || !twApiKey) return null;
+
+    const twQuery = async (query: string): Promise<any[] | null> => {
+      try {
+        const res = await fetch('https://api.triplewhale.com/api/v2/orcabase/api/sql', {
+          method: 'POST',
+          headers: { 'x-api-key': twApiKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            shopId: brand.shopify_store_domain,
+            query,
+            currency: 'USD',
+            period: { startDate: today, endDate: today },
+          }),
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        return Array.isArray(data) ? data : data.data || [];
+      } catch {
+        return null;
       }
-      return {
-        brand_id: brand.id,
-        brand_name: brand.name,
-        channel: 'google',
-        spend,
-        revenue,
-        roas: spend > 0 ? revenue / spend : 0,
-      };
-    } catch {
-      return null;
+    };
+
+    // Prefer spend + roas (revenue = spend × roas); fall back to spend-only if
+    // the roas column isn't selectable on this account.
+    let rows = await twQuery(
+      "SELECT spend, roas FROM ads_table WHERE event_date = @startDate AND channel = 'google-ads'"
+    );
+    if (rows === null) {
+      rows = await twQuery(
+        "SELECT SUM(spend) AS spend FROM ads_table WHERE event_date = @startDate AND channel = 'google-ads'"
+      );
     }
+    if (!rows || rows.length === 0) return null;
+
+    let spend = 0;
+    let revenue = 0;
+    for (const r of rows) {
+      const s = parseFloat(r.spend || '0');
+      const roas = parseFloat(r.roas || '0');
+      spend += s;
+      revenue += s * roas; // channel-reported conversion value
+    }
+    if (spend === 0) return null;
+    return {
+      brand_id: brand.id,
+      brand_name: brand.name,
+      channel: 'google',
+      spend,
+      revenue,
+      roas: spend > 0 ? revenue / spend : 0,
+    };
   };
 
   // Triple Whale fallback — used when direct Meta/Google API calls fail
