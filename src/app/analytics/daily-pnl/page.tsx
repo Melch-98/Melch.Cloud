@@ -71,8 +71,10 @@ interface CalcFields {
   netRevenue: number;    // grossSales + discounts + refunds - taxes + shipping
   totalSpend: number;    // meta + google + other
   cogs: number;          // netRevenue × (1 - margin%)
-  contribution: number;  // netRevenue - cogs - totalSpend
+  contribution: number;  // netRevenue - cogs - totalSpend (pre-fee ad contribution)
   marginPct: number;     // contribution / netRevenue × 100
+  kbContribution: number; // KB-compliant: netRevenue - cogs - totalSpend - merchantFee - fulfillmentCost
+  kbMarginPct: number;    // kbContribution / netRevenue × 100
   ncAov: number;         // ncNetRevenue / ncOrders
   cac: number;           // totalSpend / ncOrders
   amer: number;          // ncNetRevenue / totalSpend — acquisition MER
@@ -83,7 +85,7 @@ type YearData = { ytd: AggRow; months: { summary: AggRow; weeks: { summary: AggR
 
 // ─── Calculation Engine ─────────────────────────────────────────
 
-function calcFields(row: RawRow | AggRow, grossMarginPct: number): CalcFields {
+function calcFields(row: RawRow | AggRow, grossMarginPct: number, merchantFeePct = 0, fulfillmentPerOrder = 0): CalcFields {
   // Net Revenue = Gross after discounts and refunds, plus shipping and off-Shopify
   // Taxes are NOT subtracted — grossSales is subtotal_price + total_discounts (no tax included),
   // so taxes are a pass-through collected on behalf of the government, not revenue.
@@ -100,12 +102,17 @@ function calcFields(row: RawRow | AggRow, grossMarginPct: number): CalcFields {
   // COGS applies only to Shopify revenue — off-Shopify revenue is input as fully-loaded net
   const cogs = shopifyNetRevenue * (1 - grossMarginPct / 100);
   const contribution = netRevenue - cogs - totalSpend;
+  const totalOrders = row.ncOrders + row.rcOrders;
+  const merchantFee = netRevenue * (merchantFeePct / 100);
+  const fulfillmentCost = totalOrders * fulfillmentPerOrder;
+  const kbContribution = contribution - merchantFee - fulfillmentCost;
   const marginPct = netRevenue > 0 ? (contribution / netRevenue) * 100 : 0;
+  const kbMarginPct = netRevenue > 0 ? (kbContribution / netRevenue) * 100 : 0;
   const ncAov = row.ncOrders > 0 ? ncNetRevenue / row.ncOrders : 0;
   const cac = row.ncOrders > 0 ? totalSpend / row.ncOrders : 0;
   const amer = totalSpend > 0 ? ncNetRevenue / totalSpend : 0;
   const mer = totalSpend > 0 ? netRevenue / totalSpend : 0;
-  return { ncNetRevenue, rcNetRevenue, netRevenue, totalSpend, cogs, contribution, marginPct, ncAov, cac, amer, mer };
+  return { ncNetRevenue, rcNetRevenue, netRevenue, totalSpend, cogs, contribution, marginPct, kbContribution, kbMarginPct, ncAov, cac, amer, mer };
 }
 
 // ─── Data Transformation ───────────────────────────────────────
@@ -550,6 +557,8 @@ export default function DailyPnlPage() {
   const [isLocked, setIsLocked] = useState(false);
   const [offShopifyAmount, setOffShopifyAmount] = useState('0');
   const [isOffShopifyLocked, setIsOffShopifyLocked] = useState(false);
+  const [merchantFeePct, setMerchantFeePct] = useState('2.9');
+  const [fulfillmentPerOrder, setFulfillmentPerOrder] = useState('0');
   const [settingsSaved, setSettingsSaved] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
 
@@ -695,6 +704,8 @@ export default function DailyPnlPage() {
           if (s.otherSpendLocked !== undefined) setIsLocked(s.otherSpendLocked);
           if (s.offShopify !== undefined) setOffShopifyAmount(String(s.offShopify));
           if (s.offShopifyLocked !== undefined) setIsOffShopifyLocked(s.offShopifyLocked);
+          if (s.merchantFeePct !== undefined) setMerchantFeePct(String(s.merchantFeePct));
+          if (s.fulfillmentPerOrder !== undefined) setFulfillmentPerOrder(String(s.fulfillmentPerOrder));
           // grossMargin no longer read from per-month settings — always uses brand-level setting
           setSettingsSaved(true);
         } else {
@@ -736,6 +747,8 @@ export default function DailyPnlPage() {
             otherSpendLocked: isLocked,
             offShopify: offShopifyAmount,
             offShopifyLocked: isOffShopifyLocked,
+            merchantFeePct: parseFloat(merchantFeePct) || 2.9,
+            fulfillmentPerOrder: parseFloat(fulfillmentPerOrder) || 0,
           },
         }),
       });
@@ -746,7 +759,7 @@ export default function DailyPnlPage() {
     } finally {
       setSavingSettings(false);
     }
-  }, [authToken, selectedBrandId, monthKey, otherSpendAmount, isLocked, offShopifyAmount, isOffShopifyLocked]);
+  }, [authToken, selectedBrandId, monthKey, otherSpendAmount, isLocked, offShopifyAmount, isOffShopifyLocked, merchantFeePct, fulfillmentPerOrder]);
 
   // Sync handler — triggers Shopify order pull
   const handleSync = async () => {
@@ -1286,6 +1299,43 @@ export default function DailyPnlPage() {
                       {isOffShopifyLocked ? 'On' : 'Off'}
                     </span>
                   </button>
+                </div>
+
+                {/* Divider */}
+                <div className="w-px h-5 mx-1 hidden md:block" style={{ background: 'rgba(255,255,255,0.06)' }} />
+
+                {/* Merchant Fee % */}
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg" style={{ background: 'rgba(255,255,255,0.02)' }}>
+                  <span className="text-[10px] font-bold uppercase tracking-wider whitespace-nowrap" style={{ color: '#555' }}>Merchant %</span>
+                  <div className="flex items-center rounded-md" style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(200,184,154,0.12)' }}>
+                    <input
+                      type="text"
+                      value={merchantFeePct}
+                      onChange={(e) => setMerchantFeePct(e.target.value)}
+                      className="w-[45px] px-1 py-1 bg-transparent border-none text-sm font-bold text-center outline-none"
+                      style={{ color: '#C8B89A' }}
+                      placeholder="2.9"
+                    />
+                  </div>
+                  <span className="text-[10px]" style={{ color: '#444' }}>%</span>
+                </div>
+
+                <div className="w-px h-5 mx-1 hidden md:block" style={{ background: 'rgba(255,255,255,0.06)' }} />
+
+                {/* Fulfillment $/order */}
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg" style={{ background: 'rgba(255,255,255,0.02)' }}>
+                  <span className="text-[10px] font-bold uppercase tracking-wider whitespace-nowrap" style={{ color: '#555' }}>Fulfill/ord</span>
+                  <div className="flex items-center rounded-md" style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(200,184,154,0.12)' }}>
+                    <span className="text-sm font-bold pl-2" style={{ color: '#C8B89A' }}>$</span>
+                    <input
+                      type="text"
+                      value={fulfillmentPerOrder}
+                      onChange={(e) => setFulfillmentPerOrder(e.target.value)}
+                      className="w-[40px] px-1 py-1 bg-transparent border-none text-sm font-bold text-right outline-none"
+                      style={{ color: '#C8B89A' }}
+                      placeholder="0"
+                    />
+                  </div>
                 </div>
 
                 {/* Divider */}
