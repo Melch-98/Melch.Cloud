@@ -402,7 +402,7 @@ export default function ForecastPage() {
     const seasonMean = seasonVals.reduce((a, b) => a + b, 0) / seasonVals.length;
 
     return GOALS.map(g => {
-      const optDaily = findOptimalSpend(fit.V, fit.K, fit.h, g.key, params, effMargin);
+      const optDaily = findOptimalSpend(fit.V, fit.K, fit.h, g.key, params, effMargin, Math.max(...points.map(p => p.spend)));
 
       const months: ModelMonth[] = MONTHS.map((label, mi) => {
         const days = getDaysInMonth(forecastYear, mi);

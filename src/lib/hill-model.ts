@@ -128,10 +128,19 @@ export function fitHillCurve(dailyPoints: DailyPoint[], halfLifeDays: number): H
   }
   const r2 = ssTot === 0 ? 0 : 1 - ssRes / ssTot;
 
-  return { V: bestV, K: bestK, h: bestH, r2 };
+  // Buckets aggregate ~7 days of spend/revenue, so V and K come out in WEEKLY
+  // units. Rescale to daily so downstream code that treats the curve as
+  // "daily spend → daily revenue" gets correct magnitudes. The Hill curve is
+  // scale-equivariant (hillRev(s/7, V/7, K/7, h) = hillRev(s, V, K, h)/7), so
+  // V/7 and K/7 fit the daily points exactly and R² is unchanged.
+  return { V: bestV / 7, K: bestK / 7, h: bestH, r2 };
 }
 
 // ─── Optimal Spend Finder ───────────────────────────────────────
+
+// Search is capped at this multiple of the observed max daily spend so a weak
+// fit can never recommend spending far beyond what the data supports.
+export const MAX_SPEND_EXTRAPOLATION_MULT = 3;
 
 export const GOALS: GoalDef[] = [
   { key: 'maxCM', label: 'Max CM Today', desc: 'Maximize contribution margin today',
@@ -156,9 +165,15 @@ export interface Params {
 
 export function findOptimalSpend(
   V: number, K: number, h: number,
-  goal: string, params: Params, effMargin: number
+  goal: string, params: Params, effMargin: number,
+  maxObservedSpend?: number
 ): number {
-  const maxSearch = V * 2;
+  // Clamp the search ceiling so the recommendation can't extrapolate far
+  // beyond the observed spend range (defaults to V·2 when no bound is given).
+  const cap = maxObservedSpend && maxObservedSpend > 0
+    ? maxObservedSpend * MAX_SPEND_EXTRAPOLATION_MULT
+    : V * 2;
+  const maxSearch = Math.min(V * 2, cap);
   const steps = 500;
 
   function cmAt(s: number, ltvMult: number) {

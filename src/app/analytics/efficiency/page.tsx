@@ -193,7 +193,7 @@ export default function EfficiencyPage() {
     const fulfillmentRate = aov > 0 ? params.fulfillmentPerOrder / aov : 0;
     const effMargin = grossMargin - params.merchantFeePct / 100 - fulfillmentRate;
 
-    const optSpend = findOptimalSpend(V, K, h, selectedGoal, params, effMargin);
+    const optSpend = findOptimalSpend(V, K, h, selectedGoal, params, effMargin, Math.max(...dailyPoints.map(d => d.spend)));
     const optRev = hillRev(optSpend, V, K, h);
     const curRev = hillRev(params.curSpend, V, K, h);
     const curROAS = params.curSpend > 0 ? curRev / params.curSpend : 0;
