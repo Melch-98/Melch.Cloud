@@ -847,6 +847,8 @@ export default function DailyPnlPage() {
   const dailyOffShopify = parsedOffShopify / daysInMonth;
 
   const cogsMultiplier = 1 - grossMargin / 100;
+  const merchantFeePctNum = parseFloat(merchantFeePct) || 2.9;
+  const fulfillmentPerOrderNum = parseFloat(fulfillmentPerOrder) || 0;
 
   const selectedBrand = brands.find((b) => b.id === selectedBrandId);
 
@@ -903,7 +905,7 @@ export default function DailyPnlPage() {
     'mtd',
     totalDaysInData
   );
-  const mtdCalc = calcFields(mtdRow, grossMargin);
+  const mtdCalc = calcFields(mtdRow, grossMargin, merchantFeePctNum, fulfillmentPerOrderNum);
 
   interface DisplayRow extends AggRow {
     id: string;
@@ -984,7 +986,7 @@ export default function DailyPnlPage() {
       'NC AOV', 'CAC', 'AMER', 'MER',
     ];
     const csvCalcRow = (r: DisplayRow) => {
-      const c = calcFields(r, grossMargin);
+      const c = calcFields(r, grossMargin, merchantFeePctNum, fulfillmentPerOrderNum);
       return [
         r.dayLabel,
         r.ncOrders, r.ncRevenue.toFixed(2), r.rcOrders, r.rcRevenue.toFixed(2),
@@ -1871,7 +1873,7 @@ export default function DailyPnlPage() {
                     </td>
                     {/* ── Raw input cells ── */}
                     {(() => {
-                      const c = calcFields(row, grossMargin);
+                      const c = calcFields(row, grossMargin, merchantFeePctNum, fulfillmentPerOrderNum);
                       const cs = cellStyle(rt);
                       const calcCs = { ...cs, color: rt === 'ytd' ? '#C8B89A' : '#5DADE2' };
                       const td = "px-3.5 py-2.5 text-right whitespace-nowrap tabular-nums";
