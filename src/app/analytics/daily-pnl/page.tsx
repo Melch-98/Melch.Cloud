@@ -92,11 +92,12 @@ function calcFields(row: RawRow | AggRow, grossMarginPct: number, merchantFeePct
   const shopifyNetRevenue = row.grossSales + row.discounts + row.refunds + row.shipping;
   const netRevenue = shopifyNetRevenue + row.offShopifyRevenue;
 
-  // Proportionally allocate adjustments to NC and RC based on gross revenue share
-  const ncShare = row.grossSales > 0 ? row.ncRevenue / row.grossSales : 0;
-  const rcShare = row.grossSales > 0 ? row.rcRevenue / row.grossSales : 0;
-  const ncNetRevenue = row.ncRevenue + (row.discounts * ncShare) + (row.refunds * ncShare) + (row.shipping * ncShare);
-  const rcNetRevenue = row.rcRevenue + (row.discounts * rcShare) + (row.refunds * rcShare) + (row.shipping * rcShare);
+  // TW's new_customer_revenue / order_revenue are ALREADY net of discounts
+  // (and include shipping + tax per-order). Do NOT re-apply discount/refund/shipping
+  // allocation on top — that double-counts the discount. See MTE Aug 2026:
+  // Shopify NC gross 45,033 − 15,378 disc = 29,655 net; TW nc_revenue = 29,727.
+  const ncNetRevenue = row.ncRevenue;
+  const rcNetRevenue = row.rcRevenue;
 
   const totalSpend = row.metaSpend + row.googleSpend + row.otherSpend;
   // COGS applies only to Shopify revenue — off-Shopify revenue is input as fully-loaded net
