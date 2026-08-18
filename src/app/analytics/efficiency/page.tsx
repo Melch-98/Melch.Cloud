@@ -69,8 +69,28 @@ function hillMargRoas(s: number, V: number, K: number, h: number): number {
 
 const MIN_DATA_POINTS = 14;
 
-function fitHillCurve(points: DailyPoint[], halfLifeDays: number): HillFit {
-  if (points.length < MIN_DATA_POINTS) return { V: 1, K: 1, h: 1, r2: 0 };
+function fitHillCurve(dailyPoints: DailyPoint[], halfLifeDays: number): HillFit {
+  if (dailyPoints.length < MIN_DATA_POINTS) return { V: 1, K: 1, h: 1, r2: 0 };
+
+  // Aggregate daily points into weekly buckets. Meta re-optimizes within a
+  // single day, so daily spend-vs-revenue is dominated by intra-day noise;
+  // weekly buckets recover the underlying saturation curve (audit 2.3).
+  const buckets = new Map<number, { spend: number; rev: number; daysBack: number }>();
+  for (const p of dailyPoints) {
+    const wk = Math.floor(p.daysBack / 7);
+    const b = buckets.get(wk);
+    if (b) {
+      b.spend += p.spend;
+      b.rev += p.rev;
+      b.daysBack = Math.min(b.daysBack, p.daysBack);
+    } else {
+      buckets.set(wk, { spend: p.spend, rev: p.rev, daysBack: p.daysBack });
+    }
+  }
+  const points: DailyPoint[] = Array.from(buckets.values())
+    .sort((a, b) => a.daysBack - b.daysBack)
+    .map(b => ({ date: '', spend: b.spend, rev: b.rev, ncRev: b.rev, daysBack: b.daysBack }));
+  if (points.length < 6) return { V: 1, K: 1, h: 1, r2: 0 };
 
   const maxS = Math.max(...points.map(p => p.spend));
   const maxR = Math.max(...points.map(p => p.rev));
@@ -508,8 +528,8 @@ export default function EfficiencyPage() {
           <div className="flex items-center gap-3 bg-red-500/10 border border-red-500/20 rounded-xl p-4 mb-6">
             <AlertTriangle size={18} className="text-red-400 shrink-0" />
             <div className="text-sm text-red-400">
-              <strong>Low model fit (R² = {fmt(analysis!.fit.r2, 3)})</strong> — the Hill curve is a poor fit for this data.
-              Optimal spend recommendations may be unreliable. Consider using a longer date range or checking for data quality issues.
+              <strong>Low model fit (R² = {fmt(analysis!.fit.r2, 3)})</strong> — the Hill curve can't reliably predict revenue from this spend data.
+              This usually means revenue is driven by channels outside the plotted spend (organic, email, or other ad platforms), so a spend→revenue curve doesn't hold. Recommendations are hidden.
             </div>
           </div>
         )}
@@ -561,7 +581,8 @@ export default function EfficiencyPage() {
 
         {analysis && (
           <>
-            {/* KPI Cards */}
+            {/* KPI Cards — recommendation hidden when the fit is unreliable */}
+            {!poorFit && (
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
               <KpiCard
                 label="Optimal Daily Spend"
@@ -592,6 +613,7 @@ export default function EfficiencyPage() {
                 color={analysis.spendDelta > 0 ? 'text-emerald-400' : 'text-red-400'}
               />
             </div>
+            )}
 
             {/* ─── Efficiency Curve Chart ──────────────────────────── */}
             {chartSvg && (
@@ -700,7 +722,8 @@ export default function EfficiencyPage() {
               </div>
             </div>
 
-            {/* Spend Ladder Table */}
+            {/* Spend Ladder Table — hidden when the fit is unreliable */}
+            {!poorFit && (
             <div className="bg-[#111] border border-[#1a1a1a] rounded-xl overflow-x-auto mb-6">
               <div className="px-4 pt-4 pb-1 text-sm font-semibold text-white">
                 Spend Ladder — Incremental Analysis
@@ -748,6 +771,7 @@ export default function EfficiencyPage() {
                 </tbody>
               </table>
             </div>
+            )}
 
             {/* Data Points Info */}
             <div className="flex items-start gap-2 bg-[#111] border border-[#1a1a1a] rounded-xl p-4">
