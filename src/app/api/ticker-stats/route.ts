@@ -79,7 +79,15 @@ export async function GET(request: NextRequest) {
     if (settings?.value) metaToken = settings.value;
   }
 
-  const windsorKey = process.env.WINDSOR_API_KEY || '';
+  let windsorKey = process.env.WINDSOR_API_KEY || '';
+  if (!windsorKey) {
+    const { data: settings } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'windsor_api_key')
+      .single();
+    windsorKey = settings?.value || '';
+  }
   const twApiKey = process.env.TRIPLEWHALE_API_KEY || '';
   const today = new Date().toISOString().split('T')[0];
 

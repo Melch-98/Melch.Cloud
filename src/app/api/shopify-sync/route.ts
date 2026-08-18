@@ -500,7 +500,15 @@ export async function POST(request: NextRequest) {
     const fetchGoogle = async (): Promise<Map<string, number>> => {
       const dailyGoogle = new Map<string, number>();
       if (!brand.google_ads_customer_id || !brand.google_ads_customer_id.trim()) return dailyGoogle;
-      const windsorKey = process.env.WINDSOR_API_KEY || '';
+      let windsorKey = process.env.WINDSOR_API_KEY || '';
+      if (!windsorKey) {
+        const { data: settings } = await supabase
+          .from('app_settings')
+          .select('value')
+          .eq('key', 'windsor_api_key')
+          .single();
+        windsorKey = settings?.value || '';
+      }
       if (!windsorKey) return dailyGoogle;
       try {
         const custId = brand.google_ads_customer_id.replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3');
