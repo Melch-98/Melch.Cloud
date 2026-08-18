@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { getCampaignMetrics, resolvePipeboardToken } from '@/lib/pipeboard-google';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -80,6 +81,14 @@ export async function GET(request: NextRequest) {
   }
 
   const twApiKey = process.env.TRIPLEWHALE_API_KEY || '';
+  const pipeboardToken = await resolvePipeboardToken(process.env.PIPEBOARD_API_TOKEN, async (key) => {
+    const { data: settings } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', key)
+      .single();
+    return settings?.value || null;
+  });
   const today = new Date().toISOString().split('T')[0];
 
   const fetchMeta = async (brand: BrandRow): Promise<TickerRow | null> => {
@@ -110,60 +119,32 @@ export async function GET(request: NextRequest) {
     }
   };
 
-  // Google spend via Triple Whale ads_table (channel-reported). Windsor was
-  // cancelled, so this is the replacement for Google in the ticker.
+  // Google spend via Pipeboard Google MCP (direct Google Ads API by customer_id).
+  // Windsor was cancelled; Pipeboard is the correct replacement and covers every
+  // brand including Mintier (which has no shopify_store_domain).
   const fetchGoogle = async (brand: BrandRow): Promise<TickerRow | null> => {
-    if (!brand.shopify_store_domain || !twApiKey) return null;
-
-    const twQuery = async (query: string): Promise<any[] | null> => {
-      try {
-        const res = await fetch('https://api.triplewhale.com/api/v2/orcabase/api/sql', {
-          method: 'POST',
-          headers: { 'x-api-key': twApiKey, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            shopId: brand.shopify_store_domain,
-            query,
-            currency: 'USD',
-            period: { startDate: today, endDate: today },
-          }),
-        });
-        if (!res.ok) return null;
-        const data = await res.json();
-        return Array.isArray(data) ? data : data.data || [];
-      } catch {
-        return null;
+    if (!brand.google_ads_customer_id || !pipeboardToken) return null;
+    try {
+      const m = await getCampaignMetrics(pipeboardToken, brand.google_ads_customer_id, 'TODAY');
+      const campaigns = m?.campaigns || [];
+      let spend = 0;
+      let revenue = 0;
+      for (const c of campaigns) {
+        spend += Number(c.cost || 0);
+        revenue += Number(c.conversions_value || 0);
       }
-    };
-
-    // Prefer spend + roas (revenue = spend × roas); fall back to spend-only if
-    // the roas column isn't selectable on this account.
-    let rows = await twQuery(
-      "SELECT spend, roas FROM ads_table WHERE event_date = @startDate AND channel = 'google-ads'"
-    );
-    if (rows === null) {
-      rows = await twQuery(
-        "SELECT SUM(spend) AS spend FROM ads_table WHERE event_date = @startDate AND channel = 'google-ads'"
-      );
+      if (spend === 0) return null;
+      return {
+        brand_id: brand.id,
+        brand_name: brand.name,
+        channel: 'google',
+        spend,
+        revenue,
+        roas: spend > 0 ? revenue / spend : 0,
+      };
+    } catch {
+      return null;
     }
-    if (!rows || rows.length === 0) return null;
-
-    let spend = 0;
-    let revenue = 0;
-    for (const r of rows) {
-      const s = parseFloat(r.spend || '0');
-      const roas = parseFloat(r.roas || '0');
-      spend += s;
-      revenue += s * roas; // channel-reported conversion value
-    }
-    if (spend === 0) return null;
-    return {
-      brand_id: brand.id,
-      brand_name: brand.name,
-      channel: 'google',
-      spend,
-      revenue,
-      roas: spend > 0 ? revenue / spend : 0,
-    };
   };
 
   // Triple Whale fallback — used when direct Meta/Google API calls fail

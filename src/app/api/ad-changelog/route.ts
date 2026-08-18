@@ -122,16 +122,6 @@ export async function POST(request: NextRequest) {
     metaToken = settings?.value || '';
   }
 
-  let windsorKey = process.env.WINDSOR_API_KEY || '';
-  if (!windsorKey) {
-    const { data: settings } = await sb
-      .from('app_settings')
-      .select('value')
-      .eq('key', 'windsor_api_key')
-      .single();
-    windsorKey = settings?.value || '';
-  }
-
   // ── Fetch current state from platforms ──
   const currentState: EntityState[] = [];
   const errors: string[] = [];
@@ -185,42 +175,55 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Google campaigns via Windsor
-  if (brand.google_ads_customer_id && windsorKey) {
+  // Google campaigns via Pipeboard Google MCP
+  if (brand.google_ads_customer_id) {
     try {
-      const custId = brand.google_ads_customer_id.replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3');
-      const url = new URL('https://connectors.windsor.ai/google_ads');
-      url.searchParams.set('api_key', windsorKey);
-      url.searchParams.set('date_preset', 'last_7d');
-      url.searchParams.set('accounts', custId);
-      url.searchParams.set('fields', 'campaign,campaign_id,campaign_status,campaign_type,spend');
-      url.searchParams.set('_renderer', 'json');
-
-      const res = await fetch(url.toString());
-      const data = await res.json();
-      const rows = Array.isArray(data) ? data : data?.data || [];
-
-      // Deduplicate by campaign_id (Windsor returns per-day rows)
-      const seen = new Map<string, { name: string; status: string }>();
-      for (const row of rows) {
-        const id = row.campaign_id?.toString();
-        if (id && !seen.has(id)) {
-          seen.set(id, {
-            name: row.campaign || '',
-            status: row.campaign_status || '',
-          });
-        }
+      let pipeboardToken = process.env.PIPEBOARD_API_TOKEN || '';
+      if (!pipeboardToken) {
+        const { data: settings } = await sb
+          .from('app_settings')
+          .select('value')
+          .eq('key', 'pipeboard_api_token')
+          .single();
+        pipeboardToken = settings?.value || '';
       }
 
-      for (const [id, info] of seen) {
-        currentState.push({
-          platform: 'google',
-          entity_type: 'campaign',
-          entity_id: id,
-          entity_name: info.name,
-          status: info.status,
-          daily_budget: 0, // Windsor doesn't return budget; will detect status changes
-          lifetime_budget: 0,
+      if (pipeboardToken) {
+        const custId = brand.google_ads_customer_id.replace(/\D/g, '');
+        const res = await fetch(`https://google-ads.mcp.pipeboard.co/?token=${encodeURIComponent(pipeboardToken)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0', id: 1, method: 'tools/call',
+            params: { name: 'get_google_ads_campaigns', arguments: { customer_id: custId } },
+          }),
+        });
+        const j = await res.json();
+        const text = j?.result?.content?.[0]?.text;
+        const parsed = text ? JSON.parse(text) : null;
+        const campaignsList = Array.isArray(parsed) ? parsed : parsed?.campaigns || [];
+
+        const seen = new Map<string, { name: string; status: string }>();
+        campaignsList.forEach((c: any) => {
+          const id = c?.campaign_id?.toString() || c?.id?.toString();
+          if (id && !seen.has(id)) {
+            seen.set(id, {
+              name: c?.campaign_name || c?.name || '',
+              status: c?.campaign_status || c?.status || '',
+            });
+          }
+        });
+
+        seen.forEach((info: { name: string; status: string }, id: string) => {
+          currentState.push({
+            platform: 'google',
+            entity_type: 'campaign',
+            entity_id: id,
+            entity_name: info.name,
+            status: info.status,
+            daily_budget: 0, // Pipeboard doesn't return budget; will detect status changes
+            lifetime_budget: 0,
+          });
         });
       }
     } catch (e: unknown) {

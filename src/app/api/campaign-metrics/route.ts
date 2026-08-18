@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { getCampaignMetrics, getCampaigns } from '@/lib/pipeboard-google';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -236,71 +237,63 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // ── Fetch Google Ads campaign metrics via Windsor.ai ──
+  // ── Fetch Google Ads campaign metrics via Pipeboard Google MCP ──
   if (brand.google_ads_customer_id && brand.google_ads_customer_id.trim()) {
     try {
-      // Get Windsor API key from env or app_settings
-      let windsorKey = process.env.WINDSOR_API_KEY || '';
-      if (!windsorKey) {
+      // Get Pipeboard token from env or app_settings
+      let pipeboardToken = process.env.PIPEBOARD_API_TOKEN || '';
+      if (!pipeboardToken) {
         const { data: settings } = await supabase
           .from('app_settings')
           .select('value')
-          .eq('key', 'windsor_api_key')
+          .eq('key', 'pipeboard_api_token')
           .single();
-        windsorKey = settings?.value || '';
+        pipeboardToken = settings?.value || '';
       }
 
-      if (windsorKey) {
-        // Format the Google Ads customer ID for Windsor (dashes: 699-695-6911)
-        const custId = brand.google_ads_customer_id.replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3');
+      if (pipeboardToken) {
+        const custId = brand.google_ads_customer_id.replace(/\D/g, '');
+        const rng = dateRangeToMeta(dateRange);
+        const since = typeof rng === 'string' ? new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0] : rng.since;
+        const until = typeof rng === 'string' ? new Date().toISOString().split('T')[0] : rng.until;
+        const query = `SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value, segments.date FROM campaign WHERE segments.date BETWEEN "${since}" AND "${until}" ORDER BY campaign.id, segments.date`;
 
-        // Windsor date range mapping
-        const windsorRange = dateRange; // Windsor uses same format: last_7d, last_30d, etc.
+        const res = await fetch(`https://google-ads.mcp.pipeboard.co/?token=${encodeURIComponent(pipeboardToken)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0', id: 1, method: 'tools/call',
+            params: { name: 'execute_google_ads_gaql_query', arguments: { customer_id: custId, query } },
+          }),
+        });
+        if (!res.ok) {
+          errors.push(`Google: Pipeboard HTTP ${res.status}`);
+        } else {
+          const j = await res.json();
+          const text = j?.result?.content?.[0]?.text;
+          const parsed = text ? JSON.parse(text) : null;
+          const rows = Array.isArray(parsed) ? parsed : parsed?.results || [];
 
-        const windsorUrl = new URL('https://connectors.windsor.ai/google_ads');
-        windsorUrl.searchParams.set('api_key', windsorKey);
-        windsorUrl.searchParams.set('date_preset', windsorRange);
-        windsorUrl.searchParams.set('accounts', custId);
-        windsorUrl.searchParams.set('fields', [
-          'campaign', 'campaign_id', 'campaign_status', 'campaign_type',
-          'account_id', 'date', 'spend', 'impressions', 'clicks', 'ctr', 'cpc',
-          'conversions', 'conversions_value',
-        ].join(','));
-        windsorUrl.searchParams.set('_renderer', 'json');
-
-        const windsorRes = await fetch(windsorUrl.toString());
-        const windsorData = await windsorRes.json();
-
-        // Windsor returns { data: [...] } or flat array
-        const allRows = Array.isArray(windsorData) ? windsorData
-          : windsorData?.data ? windsorData.data
-          : windsorData?.result ? windsorData.result
-          : [];
-
-        // Windsor ignores the accounts param — filter client-side by account_id
-        const rows = allRows.filter((row: any) => row.account_id === custId);
-
-        if (rows.length > 0) {
-          // Group by campaign_id
-          const byCampaign = new Map<string, typeof rows>();
-          for (const row of rows) {
-            if ((row.spend || 0) <= 0) continue; // skip zero-spend days
-            const id = row.campaign_id;
+          // Group per-day rows by campaign_id (same shape as the old Windsor path)
+          const byCampaign = new Map<string, any[]>();
+          rows.forEach((row: any) => {
+            const id = row?.campaign?.resourceName?.split('/campaigns/')[1] || row?.campaign?.id;
+            if (!id) return;
             if (!byCampaign.has(id)) byCampaign.set(id, []);
             byCampaign.get(id)!.push(row);
-          }
+          });
 
-          for (const [campaignId, cRows] of byCampaign) {
+          byCampaign.forEach((cRows: any[], campaignId: string) => {
             let totalSpend = 0, totalImpressions = 0, totalClicks = 0;
             let totalConversions = 0, totalConvValue = 0;
             const daily: CampaignMetric['daily'] = [];
 
-            for (const row of cRows) {
-              const spend = row.spend || 0;
-              const impressions = row.impressions || 0;
-              const clicks = row.clicks || 0;
-              const conversions = row.conversions || 0;
-              const convValue = row.conversions_value || 0;
+            cRows.forEach((row: any) => {
+              const spend = Number(row?.metrics?.costMicros || 0) / 1_000_000;
+              const impressions = Number(row?.metrics?.impressions || 0);
+              const clicks = Number(row?.metrics?.clicks || 0);
+              const conversions = Number(row?.metrics?.conversions || 0);
+              const convValue = Number(row?.metrics?.conversionsValue || 0);
 
               totalSpend += spend;
               totalImpressions += impressions;
@@ -308,26 +301,22 @@ export async function GET(request: NextRequest) {
               totalConversions += conversions;
               totalConvValue += convValue;
 
-              daily.push({
-                date: row.date,
-                spend, impressions, clicks,
-                purchases: conversions,
-                purchaseValue: convValue,
-              });
-            }
+              const date = row?.segments?.date;
+              if (date) {
+                daily.push({ date, spend, impressions, clicks, purchases: conversions, purchaseValue: convValue });
+              }
+            });
 
             daily.sort((a, b) => a.date.localeCompare(b.date));
-
-            // Skip campaigns with no spend
-            if (totalSpend <= 0) continue;
+            if (totalSpend <= 0) return;
 
             campaigns.push({
               platform: 'google',
               campaignId,
-              campaignName: cRows[0].campaign || campaignId,
-              campaignType: cRows[0].campaign_type || 'SEARCH',
-              status: cRows[0].campaign_status || 'ENABLED',
-              frequency: 0, // Google Ads does not expose frequency via Windsor
+              campaignName: cRows[0]?.campaign?.name || campaignId,
+              campaignType: cRows[0]?.campaign?.advertisingChannelType || 'SEARCH',
+              status: cRows[0]?.campaign?.status || 'ENABLED',
+              frequency: 0, // Google Ads does not expose frequency
               spend: totalSpend,
               impressions: totalImpressions,
               clicks: totalClicks,
@@ -341,10 +330,10 @@ export async function GET(request: NextRequest) {
               reach: 0, // Google Ads doesn't have reach
               daily,
             });
-          }
+          });
         }
       } else {
-        errors.push('Google: Windsor API key not configured');
+        errors.push('Google: Pipeboard API token not configured');
       }
     } catch (e: any) {
       errors.push(`Google: ${e.message}`);

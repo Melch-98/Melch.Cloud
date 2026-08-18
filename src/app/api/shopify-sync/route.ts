@@ -500,32 +500,44 @@ export async function POST(request: NextRequest) {
     const fetchGoogle = async (): Promise<Map<string, number>> => {
       const dailyGoogle = new Map<string, number>();
       if (!brand.google_ads_customer_id || !brand.google_ads_customer_id.trim()) return dailyGoogle;
-      let windsorKey = process.env.WINDSOR_API_KEY || '';
-      if (!windsorKey) {
+      let pipeboardToken = process.env.PIPEBOARD_API_TOKEN || '';
+      if (!pipeboardToken) {
         const { data: settings } = await supabase
           .from('app_settings')
           .select('value')
-          .eq('key', 'windsor_api_key')
+          .eq('key', 'pipeboard_api_token')
           .single();
-        windsorKey = settings?.value || '';
+        pipeboardToken = settings?.value || '';
       }
-      if (!windsorKey) return dailyGoogle;
+      if (!pipeboardToken) return dailyGoogle;
       try {
-        const custId = brand.google_ads_customer_id.replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3');
-        const windsorUrl = new URL('https://connectors.windsor.ai/google_ads');
-        windsorUrl.searchParams.set('api_key', windsorKey);
-        windsorUrl.searchParams.set('date_from', sinceDate.split('T')[0]);
-        windsorUrl.searchParams.set('date_to', untilDate.split('T')[0]);
-        windsorUrl.searchParams.set('fields', 'account_id,date,spend');
-        windsorUrl.searchParams.set('_renderer', 'json');
-        const wRes = await fetch(windsorUrl.toString());
-        const wData = await wRes.json();
-        const wRows = Array.isArray(wData) ? wData
-          : wData?.data ? wData.data
-          : wData?.result ? wData.result : [];
-        for (const r of wRows) {
-          if (r.account_id !== custId) continue;
-          dailyGoogle.set(r.date, (dailyGoogle.get(r.date) || 0) + (r.spend || 0));
+        const custId = brand.google_ads_customer_id.replace(/\D/g, '');
+        const from = sinceDate.split('T')[0];
+        const to = untilDate.split('T')[0];
+        const query = `SELECT segments.date, metrics.cost_micros FROM campaign WHERE segments.date BETWEEN "${from}" AND "${to}" ORDER BY segments.date`;
+        const res = await fetch(`https://google-ads.mcp.pipeboard.co/?token=${encodeURIComponent(pipeboardToken)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'tools/call',
+            params: { name: 'execute_google_ads_gaql_query', arguments: { customer_id: custId, query } },
+          }),
+        });
+        if (!res.ok) return dailyGoogle;
+        const j = await res.json();
+        const text = j?.result?.content?.[0]?.text;
+        if (!text) return dailyGoogle;
+        const parsed = JSON.parse(text);
+        const results = Array.isArray(parsed) ? parsed : parsed?.results || [];
+        for (const r of results) {
+          const date = r?.segments?.date;
+          const costMicros = Number(r?.metrics?.costMicros || 0);
+          if (date && costMicros > 0) {
+            const spend = costMicros / 1_000_000;
+            dailyGoogle.set(date, (dailyGoogle.get(date) || 0) + spend);
+          }
         }
       } catch (e: any) {
         adSpendErrors.push(`Google: ${e.message}`);
