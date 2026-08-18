@@ -23,6 +23,16 @@ import {
   Tooltip, Legend, ResponsiveContainer, ComposedChart, Area,
   ReferenceLine,
 } from 'recharts';
+import {
+  DailyPoint,
+  GOALS,
+  Params,
+  MIN_DATA_POINTS,
+  fitHillCurve,
+  hillRev,
+  findOptimalSpend,
+  computeEffMargin,
+} from '@/lib/hill-model';
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -31,6 +41,34 @@ interface Brand {
   name: string;
   slug: string;
   gross_margin_pct: number;
+  target_roas: number | null;
+  nc_share_pct: number | null;
+  ltv_3m_mult: number | null;
+  ltv_6m_mult: number | null;
+  ltv_12m_mult: number | null;
+}
+
+interface ModelMonth {
+  month: string;       // YYYY-MM
+  label: string;       // "Jan", "Feb", etc.
+  daysInMonth: number;
+  dailySpend: number;
+  spend: number;       // monthly spend
+  ncRev: number;       // monthly NC revenue from Hill curve
+  roas: number;
+  cm: number;          // monthly CM
+}
+
+interface ModelForecast {
+  goalKey: string;
+  goalLabel: string;
+  optDailySpend: number;
+  r2: number;
+  months: ModelMonth[];
+  annualSpend: number;
+  annualNcRev: number;
+  annualCM: number;
+  blendedAmer: number;
 }
 
 interface DailyRow {
@@ -165,6 +203,7 @@ export default function ForecastPage() {
   });
   const [expandedMonth, setExpandedMonth] = useState<string | null>(null);
   const [showCharts, setShowCharts] = useState(true);
+  const [selectedModel, setSelectedModel] = useState('maxCM');
 
   // Forecast year — start from current year
   const now = new Date();
@@ -199,7 +238,7 @@ export default function ForecastPage() {
 
       const { data: brandList } = await supabase
         .from('brands')
-        .select('id, name, slug, gross_margin_pct')
+        .select('id, name, slug, gross_margin_pct, target_roas, nc_share_pct, ltv_3m_mult, ltv_6m_mult, ltv_12m_mult')
         .is('archived_at', null);
 
       if (brandList) setBrands(brandList);
@@ -306,6 +345,104 @@ export default function ForecastPage() {
     });
     return map;
   }, [dailyData]);
+
+  // ─── Efficiency-model annual forecasts (one per goal) ──────────
+  // Pulls the Hill saturation model from the Marginal Efficiency Curve page:
+  // fit blended spend → nc_revenue, then for each goal find optimal daily
+  // spend and project a full 12-month P&L using monthly seasonality weights.
+  const modelForecasts = useMemo<ModelForecast[]>(() => {
+    if (dailyData.length < MIN_DATA_POINTS) return [];
+
+    const now = new Date();
+    const points: DailyPoint[] = dailyData
+      .map(r => {
+        const d = new Date(r.date + 'T00:00:00');
+        const spend = r.meta_spend + r.google_spend + r.other_spend;
+        const rev = r.nc_revenue;
+        const orders = r.nc_orders;
+        const daysBack = Math.floor((now.getTime() - d.getTime()) / 86400000);
+        return { date: r.date, spend, rev, ncRev: rev, orders, daysBack };
+      })
+      .filter(p => p.spend > 0 && p.rev > 0);
+
+    if (points.length < MIN_DATA_POINTS) return [];
+
+    const brand = brands.find(b => b.id === selectedBrand);
+    const hl = 60; // recency half-life, matches efficiency page default
+    const fit = fitHillCurve(points, hl);
+    if (fit.r2 === 0) return [];
+
+    // Effective margin (matches P&L kbContribution): gross margin − merchant
+    // fee % − fulfillment $/order ÷ AOV.
+    const totRev = points.reduce((s, p) => s + p.rev, 0);
+    const totOrders = points.reduce((s, p) => s + p.orders, 0);
+    const aov = totOrders > 0 ? totRev / totOrders : 0;
+    const grossMarginPct = brand?.gross_margin_pct ?? 62;
+    const effMargin = computeEffMargin(grossMarginPct, 2.9, 0, aov);
+
+    const params: Params = {
+      vc: 100 - grossMarginPct,
+      nc: brand?.nc_share_pct ?? 60,
+      l3: brand?.ltv_3m_mult ?? 1.4,
+      l6: brand?.ltv_6m_mult ?? 1.8,
+      l12: brand?.ltv_12m_mult ?? 2.5,
+      hl,
+      tr: brand?.target_roas ?? 1.5,
+      curSpend: points.length >= 7
+        ? Math.round(points.slice(-7).reduce((s, p) => s + p.spend, 0) / 7)
+        : Math.round(points.reduce((s, p) => s + p.spend, 0) / points.length),
+      merchantFeePct: 2.9,
+      fulfillmentPerOrder: 0,
+      dateRange: 'all',
+    };
+
+    // Normalize seasonality weights to mean 1 so the annual total stays at
+    // "daily optimal × 365" regardless of the weight scale.
+    const seasonVals = MONTHS.map(m => DEFAULT_SEASONALITY[m] ?? 5);
+    const seasonMean = seasonVals.reduce((a, b) => a + b, 0) / seasonVals.length;
+
+    return GOALS.map(g => {
+      const optDaily = findOptimalSpend(fit.V, fit.K, fit.h, g.key, params, effMargin);
+
+      const months: ModelMonth[] = MONTHS.map((label, mi) => {
+        const days = getDaysInMonth(forecastYear, mi);
+        const seasonalFactor = (DEFAULT_SEASONALITY[label] ?? 5) / seasonMean;
+        const dailySpend = optDaily * seasonalFactor;
+        const dailyRev = hillRev(dailySpend, fit.V, fit.K, fit.h);
+        const spend = dailySpend * days;
+        const ncRev = dailyRev * days;
+        const cm = ncRev * effMargin - spend;
+        return {
+          month: `${forecastYear}-${String(mi + 1).padStart(2, '0')}`,
+          label,
+          daysInMonth: days,
+          dailySpend,
+          spend,
+          ncRev,
+          roas: spend > 0 ? ncRev / spend : 0,
+          cm,
+        };
+      });
+
+      const annualSpend = months.reduce((s, m) => s + m.spend, 0);
+      const annualNcRev = months.reduce((s, m) => s + m.ncRev, 0);
+      const annualCM = months.reduce((s, m) => s + m.cm, 0);
+
+      return {
+        goalKey: g.key,
+        goalLabel: g.label,
+        optDailySpend: optDaily,
+        r2: fit.r2,
+        months,
+        annualSpend,
+        annualNcRev,
+        annualCM,
+        blendedAmer: annualSpend > 0 ? annualNcRev / annualSpend : 0,
+      };
+    });
+  }, [dailyData, brands, selectedBrand, forecastYear]);
+
+  const activeModel = modelForecasts.find(m => m.goalKey === selectedModel) || modelForecasts[0];
 
   // ─── Initialize month inputs when data loads ──────────────────
   useEffect(() => {
@@ -1006,6 +1143,126 @@ export default function ForecastPage() {
               </tbody>
             </table>
           </div>
+        </div>
+
+        {/* ─── Efficiency Model — Annual Forecast ─────────────────── */}
+        <div style={{ background: card, border: `1px solid ${border}`, borderRadius: 10, overflow: 'hidden', marginBottom: 24 }}>
+          <div style={{ padding: '14px 16px', borderBottom: `1px solid ${border}` }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#fff' }}>
+                Efficiency Model Forecast — Annual P&amp;L by Goal
+              </span>
+              <span style={{ fontSize: 11, color: muted }}>
+                Hill saturation model (spend → NC revenue), projected 12 months with seasonality
+              </span>
+            </div>
+          </div>
+
+          {modelForecasts.length === 0 ? (
+            <div style={{ padding: 24, fontSize: 12, color: muted, lineHeight: 1.6 }}>
+              Not enough data to fit the efficiency model — need at least {MIN_DATA_POINTS} days of
+              blended spend + NC revenue for this brand. Add more daily P&amp;L history or pick another brand.
+            </div>
+          ) : (
+            <>
+              {/* Goal selector */}
+              <div style={{ padding: '12px 16px 0', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {modelForecasts.map(m => (
+                  <button
+                    key={m.goalKey}
+                    onClick={() => setSelectedModel(m.goalKey)}
+                    style={{
+                      padding: '7px 14px',
+                      borderRadius: 6,
+                      fontSize: 12,
+                      fontWeight: selectedModel === m.goalKey ? 700 : 500,
+                      cursor: 'pointer',
+                      background: selectedModel === m.goalKey ? gold : 'transparent',
+                      color: selectedModel === m.goalKey ? '#0A0A0A' : muted,
+                      border: selectedModel === m.goalKey ? `1px solid ${gold}` : `1px solid ${border}`,
+                    }}
+                  >
+                    {m.goalLabel}
+                  </button>
+                ))}
+              </div>
+
+              {/* Fit banner */}
+              {activeModel && (
+                <div style={{ padding: '10px 16px 0', fontSize: 11, color: activeModel.r2 < 0.5 ? red : activeModel.r2 < 0.7 ? '#f59e0b' : muted }}>
+                  {activeModel.r2 < 0.5
+                    ? `Low model fit (R² = ${activeModel.r2.toFixed(3)}) — treat as directional. Revenue may be driven by non-ad channels.`
+                    : activeModel.r2 < 0.7
+                    ? `Moderate fit (R² = ${activeModel.r2.toFixed(3)}) — directional guidance.`
+                    : `Good fit (R² = ${activeModel.r2.toFixed(3)}).`}
+                </div>
+              )}
+
+              {/* Model KPI cards */}
+              {activeModel && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, padding: 16 }}>
+                  {[
+                    { label: 'Optimal Daily Spend', value: fmt(activeModel.optDailySpend) },
+                    { label: 'Annual Spend', value: fmt(activeModel.annualSpend) },
+                    { label: 'Annual NC Revenue', value: fmt(activeModel.annualNcRev) },
+                    { label: 'Blended aMER', value: fmtNum(activeModel.blendedAmer) },
+                    { label: 'Annual CM', value: fmt(activeModel.annualCM), color: activeModel.annualCM > 0 ? green : red },
+                  ].map((kpi, i) => (
+                    <div key={i} style={{ background: '#0d0d0d', border: `1px solid ${border}`, borderRadius: 10, padding: '14px 16px' }}>
+                      <div style={{ fontSize: 10, color: muted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>{kpi.label}</div>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: kpi.color || '#fff' }}>{kpi.value}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Monthly P&L table */}
+              {activeModel && (
+                <div style={{ overflowX: 'auto', padding: '0 16px 16px' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                    <thead>
+                      <tr style={{ borderBottom: `1px solid ${border}` }}>
+                        {['Month', 'Daily Spend', 'Monthly Spend', 'NC Revenue', 'ROAS', 'CM'].map(h => (
+                          <th key={h} style={{ padding: '8px 8px', textAlign: 'right', color: muted, fontWeight: 600, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5 }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {activeModel.months.map(m => (
+                        <tr key={m.month} style={{ borderBottom: `1px solid rgba(34,34,34,0.5)` }}>
+                          <td style={{ padding: '8px 8px', textAlign: 'right', fontWeight: 600, color: '#fff' }}>{m.label}</td>
+                          <td style={{ padding: '8px 8px', textAlign: 'right', color: muted }}>{fmt(m.dailySpend)}</td>
+                          <td style={{ padding: '8px 8px', textAlign: 'right', color: '#fff' }}>{fmt(m.spend)}</td>
+                          <td style={{ padding: '8px 8px', textAlign: 'right', color: '#fff' }}>{fmt(m.ncRev)}</td>
+                          <td style={{ padding: '8px 8px', textAlign: 'right', color: m.roas >= 1 ? '#fff' : red }}>{fmtNum(m.roas)}×</td>
+                          <td style={{ padding: '8px 8px', textAlign: 'right', fontWeight: 600, color: m.cm >= 0 ? green : red }}>{fmt(m.cm)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{ background: 'rgba(200,184,154,0.06)', borderTop: `2px solid ${gold}` }}>
+                        <td style={{ padding: '10px 8px', fontWeight: 700, color: gold }}>TOTAL</td>
+                        <td style={{ padding: '10px 8px', textAlign: 'right', color: muted }}>—</td>
+                        <td style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 700, color: '#fff' }}>{fmt(activeModel.annualSpend)}</td>
+                        <td style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 700, color: '#fff' }}>{fmt(activeModel.annualNcRev)}</td>
+                        <td style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 700, color: '#fff' }}>{fmtNum(activeModel.blendedAmer)}×</td>
+                        <td style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 700, color: activeModel.annualCM >= 0 ? green : red, fontSize: 14 }}>{fmt(activeModel.annualCM)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+
+              {/* Info note */}
+              <div style={{ padding: '0 16px 16px', fontSize: 11, color: muted, lineHeight: 1.5 }}>
+                <strong style={{ color: gold }}>How it works:</strong> Each goal finds the optimal daily ad spend from the
+                Hill saturation curve, then projects a full-year P&amp;L using your monthly seasonality weights.
+                CM = NC Revenue × effective margin (gross margin − 2.9% merchant fee) − spend.
+                Max CM models use your brand's LTV multipliers; Target ROAS caps spend where blended ROAS hits your target.
+                This is new-customer (NC) revenue only — returning revenue is handled in the scenario forecast above.
+              </div>
+            </>
+          )}
         </div>
 
         {/* Seasonality & DOW reference */}
