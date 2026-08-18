@@ -35,6 +35,7 @@ interface DailyPoint {
   spend: number;
   rev: number;
   ncRev: number;
+  orders: number;
   daysBack: number;
 }
 
@@ -75,21 +76,22 @@ function fitHillCurve(dailyPoints: DailyPoint[], halfLifeDays: number): HillFit 
   // Aggregate daily points into weekly buckets. Meta re-optimizes within a
   // single day, so daily spend-vs-revenue is dominated by intra-day noise;
   // weekly buckets recover the underlying saturation curve (audit 2.3).
-  const buckets = new Map<number, { spend: number; rev: number; daysBack: number }>();
+  const buckets = new Map<number, { spend: number; rev: number; orders: number; daysBack: number }>();
   for (const p of dailyPoints) {
     const wk = Math.floor(p.daysBack / 7);
     const b = buckets.get(wk);
     if (b) {
       b.spend += p.spend;
       b.rev += p.rev;
+      b.orders += p.orders;
       b.daysBack = Math.min(b.daysBack, p.daysBack);
     } else {
-      buckets.set(wk, { spend: p.spend, rev: p.rev, daysBack: p.daysBack });
+      buckets.set(wk, { spend: p.spend, rev: p.rev, orders: p.orders, daysBack: p.daysBack });
     }
   }
   const points: DailyPoint[] = Array.from(buckets.values())
     .sort((a, b) => a.daysBack - b.daysBack)
-    .map(b => ({ date: '', spend: b.spend, rev: b.rev, ncRev: b.rev, daysBack: b.daysBack }));
+    .map(b => ({ date: '', spend: b.spend, rev: b.rev, ncRev: b.rev, orders: b.orders, daysBack: b.daysBack }));
   if (points.length < 6) return { V: 1, K: 1, h: 1, r2: 0 };
 
   const maxS = Math.max(...points.map(p => p.spend));
@@ -171,7 +173,8 @@ const GOALS: GoalDef[] = [
 interface Params {
   vc: number; nc: number; l3: number; l6: number; l12: number;
   hl: number; tr: number; curSpend: number;
-  spendMode: 'total' | 'meta';
+  merchantFeePct: number;   // % of revenue (merchant/processing fees)
+  fulfillmentPerOrder: number; // $/order fulfillment cost
   dateRange: '30d' | '90d' | '180d' | '365d' | 'all';
 }
 
@@ -185,21 +188,22 @@ function brandDefaults(brand?: Brand): Params {
     hl: 60,
     tr: brand?.target_roas ?? 1.5,
     curSpend: 1200,
-    spendMode: 'total',
+    merchantFeePct: 2.9,
+    fulfillmentPerOrder: 0,
     dateRange: '90d',
   };
 }
 
 function findOptimalSpend(
   V: number, K: number, h: number,
-  goal: string, params: Params
+  goal: string, params: Params, effMargin: number
 ): number {
-  const margin = 1 - params.vc / 100;
   const maxSearch = V * 2;
   const steps = 500;
 
   function cmAt(s: number, ltvMult: number) {
-    return hillRev(s, V, K, h) * margin * ltvMult - s;
+    const rev = hillRev(s, V, K, h);
+    return rev * effMargin * ltvMult - s;
   }
 
   function bruteMax(fn: (s: number) => number) {
@@ -308,7 +312,7 @@ export default function EfficiencyPage() {
 
       let query = supabase
         .from('daily_pnl')
-        .select('date, nc_revenue, rc_revenue, gross_sales, meta_spend, google_spend, other_spend')
+        .select('date, nc_revenue, nc_orders, rc_revenue, gross_sales, meta_spend, google_spend, other_spend')
         .eq('brand_id', selectedBrand)
         .order('date', { ascending: true });
 
@@ -322,13 +326,14 @@ export default function EfficiencyPage() {
           const metaSpend = Number(row.meta_spend || 0);
           const googleSpend = Number(row.google_spend || 0);
           const otherSpend = Number(row.other_spend || 0);
-          const spend = params.spendMode === 'total'
-            ? metaSpend + googleSpend + otherSpend
-            : metaSpend;
+          // Blended ad spend — always meta + google + other, regardless of which
+          // channels a brand runs.
+          const spend = metaSpend + googleSpend + otherSpend;
           const rev = Number(row.nc_revenue || 0);
           const ncRev = Number(row.nc_revenue || 0);
+          const orders = Number(row.nc_orders || 0);
           const daysBack = Math.floor((now.getTime() - d.getTime()) / 86400000);
-          return { date: row.date, spend, rev, ncRev, daysBack };
+          return { date: row.date, spend, rev, ncRev, orders, daysBack };
         }).filter(p => p.spend > 0 && p.rev > 0);
 
         setDailyPoints(points);
@@ -343,7 +348,7 @@ export default function EfficiencyPage() {
       setLoading(false);
     }
     fetchData();
-  }, [selectedBrand, params.dateRange, params.spendMode]);
+  }, [selectedBrand, params.dateRange]);
 
   // Compute everything
   const analysis = useMemo(() => {
@@ -351,15 +356,24 @@ export default function EfficiencyPage() {
 
     const fit = fitHillCurve(dailyPoints, params.hl);
     const { V, K, h, r2 } = fit;
-    const margin = 1 - params.vc / 100;
+    const grossMargin = 1 - params.vc / 100;
 
-    const optSpend = findOptimalSpend(V, K, h, selectedGoal, params);
+    // Effective margin matching the P&L's kbContribution: subtract merchant fee
+    // (% of revenue) and fulfillment ($/order ÷ AOV). AOV = nc_revenue / nc_orders
+    // across the fitted points, so fulfillment folds into a revenue-percentage.
+    const totRev = dailyPoints.reduce((s, p) => s + p.rev, 0);
+    const totOrders = dailyPoints.reduce((s, p) => s + p.orders, 0);
+    const aov = totOrders > 0 ? totRev / totOrders : 0;
+    const fulfillmentRate = aov > 0 ? params.fulfillmentPerOrder / aov : 0;
+    const effMargin = grossMargin - params.merchantFeePct / 100 - fulfillmentRate;
+
+    const optSpend = findOptimalSpend(V, K, h, selectedGoal, params, effMargin);
     const optRev = hillRev(optSpend, V, K, h);
     const curRev = hillRev(params.curSpend, V, K, h);
     const curROAS = params.curSpend > 0 ? curRev / params.curSpend : 0;
     const optROAS = optSpend > 0 ? optRev / optSpend : 0;
-    const curCM = curRev * margin - params.curSpend;
-    const optCM = optRev * margin - optSpend;
+    const curCM = curRev * effMargin - params.curSpend;
+    const optCM = optRev * effMargin - optSpend;
     const curMROAS = params.curSpend > 0 ? hillMargRoas(params.curSpend, V, K, h) : 0;
     const spendDelta = params.curSpend > 0 ? ((optSpend / params.curSpend) - 1) * 100 : 0;
 
@@ -380,10 +394,10 @@ export default function EfficiencyPage() {
       const rev = hillRev(s, V, K, h);
       const roas = s > 0 ? rev / s : 0;
       const mr = hillMargRoas(s, V, K, h);
-      const cm = rev * margin - s;
+      const cm = rev * effMargin - s;
       const cmPct = rev > 0 ? cm / rev * 100 : 0;
-      const cm3m = rev * margin * params.l3 - s;
-      const cm12m = rev * margin * params.l12 - s;
+      const cm3m = rev * effMargin * params.l3 - s;
+      const cm12m = rev * effMargin * params.l12 - s;
       const isOpt = Math.abs(s - optSpend) < stepSize * 0.5;
       const isCur = Math.abs(s - params.curSpend) < stepSize * 0.5;
       return { spend: s, rev, roas, mr, cm, cmPct, cm3m, cm12m, isOpt, isCur };
@@ -471,16 +485,6 @@ export default function EfficiencyPage() {
               ))}
             </select>
 
-            {/* Spend mode toggle */}
-            <select
-              value={params.spendMode}
-              onChange={e => updateParam('spendMode', e.target.value)}
-              className="bg-[#1a1a1a] border border-neutral-700 text-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#C8B89A]"
-            >
-              <option value="total">Total Ad Spend</option>
-              <option value="meta">Meta Only</option>
-            </select>
-
             {/* Date range */}
             <select
               value={params.dateRange}
@@ -519,6 +523,8 @@ export default function EfficiencyPage() {
               <ParamInput label="LTV 3m ×" value={params.l3} onChange={v => updateParam('l3', v)} step={0.05} />
               <ParamInput label="LTV 6m ×" value={params.l6} onChange={v => updateParam('l6', v)} step={0.05} />
               <ParamInput label="LTV 12m ×" value={params.l12} onChange={v => updateParam('l12', v)} step={0.05} />
+              <ParamInput label="Merchant Fee %" value={params.merchantFeePct} onChange={v => updateParam('merchantFeePct', v)} step={0.1} />
+              <ParamInput label="Fulfillment $/order" value={params.fulfillmentPerOrder} onChange={v => updateParam('fulfillmentPerOrder', v)} step={0.5} />
             </div>
           </div>
         )}
@@ -693,7 +699,7 @@ export default function EfficiencyPage() {
 
                   {/* Axis labels */}
                   <text x={chartSvg.W / 2} y={chartSvg.H - 4} textAnchor="middle" fill="#666" fontSize={10}>
-                    Daily {params.spendMode === 'total' ? 'Ad' : 'Meta'} Spend
+                    Daily Ad Spend
                   </text>
                 </svg>
               </div>
@@ -778,7 +784,7 @@ export default function EfficiencyPage() {
               <Info size={16} className="text-[#C8B89A] mt-0.5 shrink-0" />
               <div className="text-xs text-neutral-400">
                 Fitted on <strong className="text-neutral-300">{dailyPoints.length}</strong> daily data points
-                ({params.spendMode === 'total' ? 'total ad spend' : 'Meta spend only'} vs new customer revenue).
+                (total ad spend vs new customer revenue).
                 Recency half-life: {params.hl}d.
                 The Hill model generalizes Michaelis-Menten by adding shape parameter h — when h=1, it reduces to the standard saturation curve.
                 Higher h means a sharper inflection point.
