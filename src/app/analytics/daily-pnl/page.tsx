@@ -10,10 +10,8 @@ import {
   ChevronRight,
   Check,
   Lock,
-  Info,
   Download,
   RefreshCw,
-  Columns3,
   Search,
   X,
   TrendingUp,
@@ -61,6 +59,16 @@ type DisplayMode = 'Absolute' | 'Margin %';
 
 interface AggRow extends RawRow {
   rowType: RowType;
+}
+
+interface DisplayRow extends AggRow {
+  id: string;
+  monthIdx?: number;
+  weekIdx?: number;
+  isExpandable?: boolean;
+  isExpanded?: boolean;
+  hasChildren?: boolean;
+  depth: number;
 }
 
 // CALCULATED — derived at render time from raw inputs + gross margin setting
@@ -501,22 +509,155 @@ function MetricCard({ label, value, sub, accent, negative, sections }: {
   );
 }
 
-// ─── Margin Bar ─────────────────────────────────────────────────
+// ─── Row Card (KB Hierarchy of Metrics) ────────────────────────
+// Renders one P&L row as a TripleWhale/Statlas-style card following
+// the KB's 3-tier pyramid:
+//   Tier 1 — Contribution Margin (hero)
+//   Tier 2 — business metrics: revenue, spend, MER, AOV, orders, NC CAC
+//   Tier 3 — channel metrics: Meta / Google / Other spend + ROAS
+// Clicking the card opens the full calculation breakdown.
 
-function MarginBar({ pct }: { pct: number }) {
-  const color = pct >= 25 ? '#10B981' : pct >= 15 ? '#C8B89A' : '#ef4444';
+function RowCard({ row, c, grossMargin, onToggle, childCount }: {
+  row: DisplayRow;
+  c: CalcFields;
+  grossMargin: number;
+  onToggle?: () => void;
+  childCount?: string;
+}) {
+  const rt = row.rowType;
+  const [open, setOpen] = useState(false);
+  const clickable = !!row.isExpandable;
+  const ChevIcon = row.isExpanded ? ChevronDown : ChevronRight;
+
+  const bg = rt === 'ytd' ? 'rgba(200,184,154,0.08)'
+    : rt === 'month' ? 'rgba(200,184,154,0.06)'
+    : rt === 'week' ? 'rgba(200,184,154,0.04)'
+    : 'rgba(255,255,255,0.01)';
+  const border = (rt === 'ytd' || rt === 'month') ? '2px solid rgba(200,184,154,0.12)' : '1px solid rgba(255,255,255,0.04)';
+  const labelColor = rt === 'ytd' ? '#C8B89A' : rt === 'month' ? '#C8B89A' : rt === 'week' ? '#C8B89A' : '#999';
+  const labelWeight = rt === 'day' ? 500 : 800;
+  const labelSize = rt === 'ytd' ? '13px' : '12px';
+  const calcColor = rt === 'ytd' ? '#C8B89A' : '#5DADE2';
+
+  // Tier 2 business metrics
+  const tier2 = [
+    { label: 'Net Revenue', value: fmtCurrency(c.netRevenue), accent: '#C8B89A' },
+    { label: 'Total Spend', value: fmtCurrency(c.totalSpend), accent: undefined },
+    { label: 'MER', value: `${fmtDec(c.mer)}x`, accent: undefined },
+    { label: 'NC AOV', value: `$${c.ncAov.toFixed(2)}`, accent: undefined },
+    { label: 'NC CAC', value: `$${c.cac.toFixed(2)}`, accent: undefined },
+    { label: 'Orders', value: fmtNum(row.ncOrders + row.rcOrders), accent: undefined },
+  ];
+
   return (
-    <div className="flex items-center gap-1.5">
-      <span style={{ color, fontSize: '12px', fontWeight: 600 }}>{fmtPct(pct)}</span>
+    <div
+      className="rounded-lg overflow-hidden transition-all"
+      style={{ backgroundColor: bg, border }}
+    >
+      {/* Header row */}
       <div
-        className="flex-1 h-1 rounded-full overflow-hidden"
-        style={{ background: 'rgba(255,255,255,0.04)', minWidth: '32px' }}
+        className="flex items-center gap-2 px-3.5 py-2.5"
+        style={{ cursor: clickable ? 'pointer' : undefined }}
+        onClick={clickable ? onToggle : undefined}
       >
-        <div
-          className="h-full rounded-full"
-          style={{ width: `${Math.min(pct * 2, 100)}%`, background: color }}
-        />
+        {clickable && (
+          <ChevIcon size={13} className="flex-shrink-0" style={{ color: '#C8B89A', opacity: 0.7 }} />
+        )}
+        {!clickable && rt !== 'ytd' && <span className="w-3 inline-block flex-shrink-0" />}
+        <span
+          className="font-bold whitespace-nowrap select-none"
+          style={{ color: labelColor, fontWeight: labelWeight, fontSize: labelSize }}
+        >
+          {row.dayLabel}
+        </span>
+        {row.isExpandable && !row.isExpanded && row.hasChildren && childCount && (
+          <span
+            className="text-[9px] font-bold px-1.5 py-0.5 rounded"
+            style={{ background: 'rgba(255,255,255,0.04)', color: '#555' }}
+          >
+            {childCount}
+          </span>
+        )}
+        <div className="flex-1" />
+        {/* Tier 1 hero — Contribution Margin (always visible) */}
+        <div className="flex items-center gap-3 flex-shrink-0">
+          <div className="text-right">
+            <div className="text-[8px] font-bold uppercase tracking-widest" style={{ color: '#555' }}>
+              CM
+            </div>
+            <div className="text-sm font-extrabold tabular-nums leading-tight" style={{ color: c.contribution >= 0 ? '#10B981' : '#ef4444' }}>
+              {fmtCurrency(c.contribution)}
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="text-[8px] font-bold uppercase tracking-widest" style={{ color: '#555' }}>
+              Margin
+            </div>
+            <div className="text-sm font-extrabold tabular-nums leading-tight" style={{ color: c.marginPct >= 15 ? '#10B981' : '#ef4444' }}>
+              {fmtPct(c.marginPct)}
+            </div>
+          </div>
+          {/* Details toggle */}
+          <button
+            className="w-5 h-5 rounded flex items-center justify-center flex-shrink-0"
+            style={{ background: 'rgba(255,255,255,0.03)', border: 'none', cursor: 'pointer' }}
+            onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+          >
+            {open ? <ChevronDown size={12} style={{ color: '#777' }} /> : <ChevronRight size={12} style={{ color: '#777' }} />}
+          </button>
+        </div>
       </div>
+
+      {/* Tier 2 — business metrics */}
+      <div className="grid grid-cols-3 md:grid-cols-6 gap-px px-3.5 pb-3" style={{ background: 'rgba(255,255,255,0.02)' }}>
+        {tier2.map((m) => (
+          <div key={m.label} className="px-2 py-1.5 rounded" style={{ background: 'rgba(0,0,0,0.15)' }}>
+            <div className="text-[8px] font-bold uppercase tracking-wider" style={{ color: '#555' }}>{m.label}</div>
+            <div className="text-[12px] font-bold tabular-nums" style={{ color: m.accent || '#F5F5F8' }}>{m.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Tier 3 + full breakdown (open state) */}
+      {open && (
+        <div className="px-3.5 pb-3 pt-2" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+          {/* Tier 3 — channel metrics */}
+          <div className="text-[9px] font-bold uppercase tracking-widest mb-1.5" style={{ color: '#555' }}>
+            Channel
+          </div>
+          <div className="grid grid-cols-3 gap-2 mb-3">
+            {[
+              { label: 'Meta', spend: row.metaSpend, roas: row.metaSpend > 0 ? c.netRevenue / row.metaSpend : 0 },
+              { label: 'Google', spend: row.googleSpend, roas: row.googleSpend > 0 ? c.netRevenue / row.googleSpend : 0 },
+              { label: 'Other', spend: row.otherSpend, roas: 0 },
+            ].map((ch) => (
+              <div key={ch.label} className="rounded p-2" style={{ background: 'rgba(93,173,226,0.04)' }}>
+                <div className="text-[8px] font-bold uppercase tracking-wider" style={{ color: '#555' }}>{ch.label}</div>
+                <div className="text-[12px] font-bold tabular-nums" style={{ color: '#F5F5F8' }}>{fmtCurrency(ch.spend)}</div>
+                {ch.roas > 0 && (
+                  <div className="text-[9px] tabular-nums" style={{ color: calcColor }}>{fmtDec(ch.roas)}x ROAS</div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Raw inputs + remaining calc fields */}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1.5 text-[11px] tabular-nums">
+            <div className="flex justify-between"><span style={{ color: '#555' }}>NC Orders</span><span style={{ color: '#F5F5F8' }}>{fmtNum(row.ncOrders)}</span></div>
+            <div className="flex justify-between"><span style={{ color: '#555' }}>RC Orders</span><span style={{ color: '#F5F5F8' }}>{fmtNum(row.rcOrders)}</span></div>
+            <div className="flex justify-between"><span style={{ color: '#555' }}>Gross Sales</span><span style={{ color: '#F5F5F8' }}>{fmtCurrency(row.grossSales)}</span></div>
+            <div className="flex justify-between"><span style={{ color: '#555' }}>Discounts</span><span style={{ color: row.discounts < 0 ? '#ef4444' : '#F5F5F8' }}>{fmtCurrency(row.discounts)}</span></div>
+            <div className="flex justify-between"><span style={{ color: '#555' }}>Refunds</span><span style={{ color: row.refunds < 0 ? '#ef4444' : '#F5F5F8' }}>{fmtCurrency(row.refunds)}</span></div>
+            <div className="flex justify-between"><span style={{ color: '#555' }}>Shipping</span><span style={{ color: '#F5F5F8' }}>{fmtCurrency(row.shipping)}</span></div>
+            <div className="flex justify-between"><span style={{ color: '#555' }}>Taxes</span><span style={{ color: '#F5F5F8' }}>{fmtCurrency(row.taxes)}</span></div>
+            <div className="flex justify-between"><span style={{ color: '#555' }}>Off-Shopify</span><span style={{ color: '#A855F7' }}>{fmtCurrency(row.offShopifyRevenue)}</span></div>
+            <div className="flex justify-between"><span style={{ color: '#555' }}>COGS ({100 - grossMargin}%)</span><span style={{ color: '#F5F5F8' }}>{fmtCurrency(c.cogs)}</span></div>
+            <div className="flex justify-between"><span style={{ color: '#555' }}>NC Net Rev</span><span style={{ color: calcColor }}>{fmtCurrency(c.ncNetRevenue)}</span></div>
+            <div className="flex justify-between"><span style={{ color: '#555' }}>RC Net Rev</span><span style={{ color: calcColor }}>{fmtCurrency(c.rcNetRevenue)}</span></div>
+            <div className="flex justify-between"><span style={{ color: '#555' }}>AMER</span><span style={{ color: calcColor }}>{fmtDec(c.amer)}x</span></div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -908,16 +1049,6 @@ export default function DailyPnlPage() {
   );
   const mtdCalc = calcFields(mtdRow, grossMargin, merchantFeePctNum, fulfillmentPerOrderNum);
 
-  interface DisplayRow extends AggRow {
-    id: string;
-    monthIdx?: number;
-    weekIdx?: number;
-    isExpandable?: boolean;
-    isExpanded?: boolean;
-    hasChildren?: boolean;
-    depth: number;
-  }
-
   const tableRows: DisplayRow[] = useMemo(() => {
     const rows: DisplayRow[] = [];
 
@@ -1043,40 +1174,6 @@ export default function DailyPnlPage() {
       </div>
     );
   }
-
-  // ═══ Row style helpers ═══
-
-  const rowBg = (type: RowType) => {
-    switch (type) {
-      case 'ytd': return 'rgba(200,184,154,0.08)';
-      case 'month': return 'rgba(200,184,154,0.06)';
-      case 'week': return 'rgba(200,184,154,0.04)';
-      default: return 'transparent';
-    }
-  };
-
-  const rowBorder = (type: RowType) => {
-    if (type === 'ytd' || type === 'month') return '2px solid rgba(200,184,154,0.12)';
-    return '1px solid rgba(255,255,255,0.04)';
-  };
-
-  const dateCellStyle = (type: RowType): React.CSSProperties => {
-    switch (type) {
-      case 'ytd': return { color: '#C8B89A', fontWeight: 800, fontSize: '13px' };
-      case 'month': return { color: '#C8B89A', fontWeight: 800 };
-      case 'week': return { color: '#C8B89A', fontWeight: 700 };
-      default: return { color: '#999', fontWeight: 500, paddingLeft: '28px' };
-    }
-  };
-
-  const cellStyle = (type: RowType): React.CSSProperties => {
-    switch (type) {
-      case 'ytd': return { color: '#C8B89A', fontWeight: 800, fontSize: '13px' };
-      case 'month': return { color: '#F5F5F8', fontWeight: 800 };
-      case 'week': return { color: '#F5F5F8', fontWeight: 700 };
-      default: return {};
-    }
-  };
 
   // ═══ RENDER ═══
 
@@ -1683,273 +1780,32 @@ export default function DailyPnlPage() {
           </div>
         )}
 
-        {/* ─── DATA TABLE ─── */}
-        <div className="flex-1 overflow-auto relative">
-          <table className="w-full border-collapse text-xs" style={{ minWidth: '1600px' }}>
-            <thead>
-              <tr>
-                {/* Frozen Date column — sticky left + top */}
-                <th
-                  className="sticky top-0 left-0 z-20 px-3.5 py-2.5 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
-                  style={{
-                    backgroundColor: '#0e0e0e',
-                    textAlign: 'left',
-                    color: '#555',
-                    borderBottom: '1px solid rgba(255,255,255,0.08)',
-                    borderRight: '1px solid rgba(255,255,255,0.06)',
-                    minWidth: '160px',
-                    boxShadow: '4px 0 8px -2px rgba(0,0,0,0.4)',
-                  }}
-                >
-                  Date
-                </th>
-                {[
-                  { label: 'NC Orders' },
-                  { label: 'NC Revenue', calc: true },
-                  { label: 'RC Orders' },
-                  { label: 'RC Revenue', calc: true },
-                  { label: 'Gross Sales' },
-                  { label: 'Discounts' },
-                  { label: 'Refunds' },
-                  { label: 'Taxes' },
-                  { label: 'Shipping' },
-                  { label: 'Off-Shopify', locked: true },
-                  { label: 'Net Revenue', sorted: true, calc: true },
-                  { label: 'Meta' },
-                  { label: 'Google' },
-                  { label: 'Other', locked: true },
-                  { label: 'Total Spend', calc: true },
-                  { label: 'COGS', calc: true },
-                  { label: 'Contribution', calc: true },
-                  { label: 'Margin %', calc: true },
-                  { label: 'NC AOV', calc: true },
-                  { label: 'CAC', calc: true },
-                  { label: 'AMER', calc: true },
-                  { label: 'MER', calc: true },
-                ].map((col) => (
-                  <th
-                    key={col.label}
-                    className="sticky top-0 z-10 px-3.5 py-2.5 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap cursor-pointer"
-                    style={{
-                      backgroundColor: '#0e0e0e',
-                      textAlign: 'right',
-                      color: col.sorted ? '#C8B89A' : '#555',
-                      borderBottom: '1px solid rgba(255,255,255,0.08)',
-                    }}
-                  >
-                    <span className="inline-flex items-center gap-1">
-                      {col.label}
-                      {col.calc && (
-                        <span
-                          className="text-[8px] font-bold px-1 py-0.5 rounded"
-                          style={{
-                            background: 'rgba(93,173,226,0.08)',
-                            color: '#5DADE2',
-                            letterSpacing: '0.03em',
-                          }}
-                          title={
-                            col.label === 'NC Revenue' ? 'NC Gross × (Net Revenue ÷ Gross Sales)' :
-                            col.label === 'RC Revenue' ? 'RC Gross × (Net Revenue ÷ Gross Sales)' :
-                            col.label === 'Net Revenue' ? 'Gross Sales + Discounts + Refunds − Taxes + Shipping' :
-                            col.label === 'Total Spend' ? 'Meta + Google + Other' :
-                            col.label === 'COGS' ? 'Net Revenue × (1 − Margin%)' :
-                            col.label === 'Contribution' ? 'Net Revenue − COGS − Total Spend' :
-                            col.label === 'Margin %' ? 'Contribution ÷ Net Revenue' :
-                            col.label === 'NC AOV' ? 'NC Revenue ÷ NC Orders' :
-                            col.label === 'CAC' ? 'Total Spend ÷ NC Orders' :
-                            col.label === 'AMER' ? 'NC Revenue ÷ Total Spend' :
-                            col.label === 'MER' ? 'Net Revenue ÷ Total Spend' : ''
-                          }
-                        >
-                          fx
-                        </span>
-                      )}
-                      {col.locked && col.label === 'Other' && isLocked && (
-                        <span
-                          className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded"
-                          style={{
-                            background: 'rgba(16,185,129,0.08)',
-                            color: '#10B981',
-                            letterSpacing: '0.03em',
-                          }}
-                        >
-                          <Lock size={8} /> Locked
-                        </span>
-                      )}
-                      {col.locked && col.label === 'Off-Shopify' && isOffShopifyLocked && (
-                        <span
-                          className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded"
-                          style={{
-                            background: 'rgba(168,85,247,0.08)',
-                            color: '#A855F7',
-                            letterSpacing: '0.03em',
-                          }}
-                        >
-                          <Lock size={8} /> Locked
-                        </span>
-                      )}
-                      {col.sorted && <span className="text-[8px]"> ↓</span>}
-                    </span>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {tableRows.map((row) => {
-                const rt = row.rowType;
-                const frozenBg = rt === 'ytd' ? '#16140f'
-                  : rt === 'month' ? '#14120d'
-                  : rt === 'week' ? '#11100c'
-                  : '#0A0A0A';
-
-                // Click handler for expandable rows
-                const handleRowClick = () => {
-                  if (rt === 'week' && row.isExpandable && row.monthIdx !== undefined && row.weekIdx !== undefined) {
-                    toggleWeek(row.monthIdx, row.weekIdx);
-                  }
-                };
-
-                const isClickable = row.isExpandable;
-                const ChevIcon = row.isExpanded ? ChevronDown : ChevronRight;
-
-                return (
-                  <tr
-                    key={row.id}
-                    className="group transition-colors"
-                    style={{
-                      backgroundColor: rowBg(rt),
-                      borderBottom: rowBorder(rt),
-                      cursor: isClickable ? 'pointer' : undefined,
-                    }}
-                    onClick={isClickable ? handleRowClick : undefined}
-                    onMouseEnter={(e) => {
-                      if (rt === 'day') e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.02)';
-                      if (isClickable) e.currentTarget.style.backgroundColor = rt === 'month'
-                        ? 'rgba(200,184,154,0.09)' : 'rgba(200,184,154,0.06)';
-                    }}
-                    onMouseLeave={(e) => {
-                      if (rt === 'day') e.currentTarget.style.backgroundColor = 'transparent';
-                      if (isClickable) e.currentTarget.style.backgroundColor = rowBg(rt);
-                    }}
-                  >
-                    {/* Frozen Date cell — sticky left */}
-                    <td
-                      className="sticky left-0 z-[5] px-3.5 py-2.5 whitespace-nowrap select-none"
-                      style={{
-                        ...dateCellStyle(rt),
-                        backgroundColor: frozenBg,
-                        borderRight: '1px solid rgba(255,255,255,0.06)',
-                        boxShadow: '4px 0 8px -2px rgba(0,0,0,0.4)',
-                        minWidth: '180px',
-                      }}
-                    >
-                      <span className="inline-flex items-center gap-1.5">
-                        {row.isExpandable && (
-                          <ChevIcon
-                            size={12}
-                            className="flex-shrink-0 transition-transform duration-150"
-                            style={{ color: '#C8B89A', opacity: 0.7 }}
-                          />
-                        )}
-                        {!row.isExpandable && rt !== 'ytd' && rt !== 'day' && (
-                          <span className="w-3 inline-block" />
-                        )}
-                        {row.dayLabel}
-                        {row.isExpandable && !row.isExpanded && row.hasChildren && (
-                          <span
-                            className="text-[9px] font-bold px-1.5 py-0.5 rounded ml-1"
-                            style={{
-                              background: 'rgba(255,255,255,0.04)',
-                              color: '#555',
-                            }}
-                          >
-                            {rt === 'month'
-                              ? `${fullYearData.months[row.monthIdx!]?.weeks.length || 0}w`
-                              : rt === 'week'
-                              ? `${currentMonthData.weeks[row.weekIdx!]?.days.length || 0}d`
-                              : ''}
-                          </span>
-                        )}
-                      </span>
-                    </td>
-                    {/* ── Raw input cells ── */}
-                    {(() => {
-                      const c = calcFields(row, grossMargin, merchantFeePctNum, fulfillmentPerOrderNum);
-                      const cs = cellStyle(rt);
-                      const calcCs = { ...cs, color: rt === 'ytd' ? '#C8B89A' : '#5DADE2' };
-                      const td = "px-3.5 py-2.5 text-right whitespace-nowrap tabular-nums";
-                      return (
-                        <>
-                          <td className={td} style={cs}>{fmtNum(row.ncOrders)}</td>
-                          <td className={td} style={calcCs}>{fmtCurrency(c.ncNetRevenue)}</td>
-                          <td className={td} style={cs}>{fmtNum(row.rcOrders)}</td>
-                          <td className={td} style={calcCs}>{fmtCurrency(c.rcNetRevenue)}</td>
-                          <td className={td} style={cs}>{fmtCurrency(row.grossSales)}</td>
-                          <td className={td} style={{ ...cs, color: row.discounts < 0 ? '#ef4444' : undefined }}>
-                            {row.discounts === 0 ? '$0' : fmtCurrency(row.discounts)}
-                          </td>
-                          <td className={td} style={{ ...cs, color: row.refunds < 0 ? '#ef4444' : undefined }}>
-                            {row.refunds === 0 ? '$0' : fmtCurrency(row.refunds)}
-                          </td>
-                          <td className={td} style={{ ...cs, color: rt === 'day' ? '#555' : undefined }}>
-                            {fmtCurrency(row.taxes)}
-                          </td>
-                          <td className={td} style={{ ...cs, color: rt === 'day' ? '#555' : undefined }}>
-                            {fmtCurrency(row.shipping)}
-                          </td>
-                          {/* ── Off-Shopify Revenue ── */}
-                          <td className={td} style={{
-                            ...cs,
-                            color: isOffShopifyLocked && rt === 'day' ? '#A855F7' : row.offShopifyRevenue > 0 ? '#A855F7' : '#555',
-                            fontStyle: isOffShopifyLocked && rt === 'day' ? 'italic' : 'normal',
-                          }}>
-                            {fmtCurrency(row.offShopifyRevenue)}
-                          </td>
-                          {/* ── Calculated: Net Revenue ── */}
-                          <td className={td} style={{ ...calcCs, fontWeight: rt === 'day' ? 600 : cs.fontWeight }}>
-                            {fmtCurrency(c.netRevenue)}
-                          </td>
-                          {/* ── Ad spend (raw inputs) ── */}
-                          <td className={td} style={{ ...cs, color: rt === 'day' ? '#555' : undefined }}>
-                            {fmtCurrency(row.metaSpend)}
-                          </td>
-                          <td className={td} style={{ ...cs, color: rt === 'day' ? '#555' : undefined }}>
-                            {fmtCurrency(row.googleSpend)}
-                          </td>
-                          <td className={td} style={{
-                            ...cs,
-                            color: isLocked && rt === 'day' ? '#10B981' : undefined,
-                            fontStyle: isLocked && rt === 'day' ? 'italic' : 'normal',
-                          }}>
-                            {fmtCurrency(row.otherSpend)}
-                          </td>
-                          {/* ── Calculated fields ── */}
-                          <td className={td} style={calcCs}>{fmtCurrency(c.totalSpend)}</td>
-                          <td className={td} style={calcCs}>{fmtCurrency(c.cogs)}</td>
-                          <td className={td} style={{ ...calcCs, color: c.contribution >= 0 ? '#10B981' : '#ef4444' }}>
-                            {fmtCurrency(c.contribution)}
-                          </td>
-                          <td className="px-3.5 py-2.5 text-right whitespace-nowrap" style={calcCs}>
-                            {rt === 'day' ? (
-                              <MarginBar pct={c.marginPct} />
-                            ) : (
-                              <span style={{ color: c.marginPct >= 15 ? '#10B981' : '#ef4444' }}>
-                                {fmtPct(c.marginPct)}
-                              </span>
-                            )}
-                          </td>
-                          <td className={td} style={calcCs}>${c.ncAov.toFixed(2)}</td>
-                          <td className={td} style={calcCs}>${c.cac.toFixed(2)}</td>
-                          <td className={td} style={calcCs}>{fmtDec(c.amer)}</td>
-                          <td className={td} style={calcCs}>{fmtDec(c.mer)}</td>
-                        </>
-                      );
-                    })()}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        {/* ─── METRIC HIERARCHY CARDS ─── */}
+        <div className="flex-1 overflow-auto relative px-4 py-3">
+          <div className="flex flex-col gap-2 max-w-5xl mx-auto">
+            {tableRows.map((row) => {
+              const rt = row.rowType;
+              const c = calcFields(row, grossMargin, merchantFeePctNum, fulfillmentPerOrderNum);
+              const handleRowClick = () => {
+                if (rt === 'week' && row.isExpandable && row.monthIdx !== undefined && row.weekIdx !== undefined) {
+                  toggleWeek(row.monthIdx, row.weekIdx);
+                }
+              };
+              const childCount = row.isExpandable && !row.isExpanded && row.hasChildren
+                ? (rt === 'week' ? `${currentMonthData.weeks[row.weekIdx!]?.days.length || 0}d` : '')
+                : undefined;
+              return (
+                <RowCard
+                  key={row.id}
+                  row={row}
+                  c={c}
+                  grossMargin={grossMargin}
+                  onToggle={row.isExpandable ? handleRowClick : undefined}
+                  childCount={childCount}
+                />
+              );
+            })}
+          </div>
         </div>
       </div>
     </Navbar>
