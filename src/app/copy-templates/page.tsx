@@ -56,7 +56,7 @@ const emptyForm = (): Omit<CopyTemplate, 'id' | 'brand_id' | 'created_at' | 'upd
   title: '',
   primary_texts: ['', '', '', '', ''],
   headlines: ['', '', '', '', ''],
-  descriptions: ['', ''],
+  descriptions: ['', '', ''],
   landing_page_url: '',
 });
 
@@ -210,7 +210,7 @@ export default function CopyTemplatesPage() {
       title: t.title,
       primary_texts: [...t.primary_texts, ...Array(5).fill('')].slice(0, 5),
       headlines: [...t.headlines, ...Array(5).fill('')].slice(0, 5),
-      descriptions: [...t.descriptions, ...Array(2).fill('')].slice(0, 2),
+      descriptions: [...t.descriptions, ...Array(3).fill('')].slice(0, 3),
       landing_page_url: t.landing_page_url,
     });
     setShowForm(true);
@@ -437,7 +437,7 @@ export default function CopyTemplatesPage() {
             {/* Descriptions */}
             <div className="mb-5">
               <label className="flex items-center gap-2 text-xs font-medium mb-2 uppercase tracking-wider" style={{ color: GOLD }}>
-                <Type size={13} /> Description Options (2)
+                <Type size={13} /> Description Options (3)
               </label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {form.descriptions.map((text, i) => (

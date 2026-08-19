@@ -1611,18 +1611,30 @@ export default function TeamPage() {
   const handleUpdateRole = useCallback(
     async (userId: string, role: 'admin' | 'strategist' | 'founder') => {
       setSaving(true);
-      const { error: err } = await supabase
-        .from('users_profile')
-        .update({ role })
-        .eq('id', userId);
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) { setError('Not authenticated'); setSaving(false); return; }
 
-      if (err) {
-        setError(err.message);
-      } else {
-        setUsers((prev) =>
-          prev.map((u) => (u.id === userId ? { ...u, role } : u))
-        );
-        toast('Role updated');
+        const res = await fetch('/api/admin/update-user', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ action: 'update_role', userId, role }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error || 'Failed to update role');
+        } else {
+          setUsers((prev) =>
+            prev.map((u) => (u.id === userId ? { ...u, role } : u))
+          );
+          toast('Role updated');
+        }
+      } catch {
+        setError('Failed to update role');
       }
       setSaving(false);
     },
