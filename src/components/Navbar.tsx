@@ -31,6 +31,7 @@ import {
   Target,
   Grid3X3,
   Zap,
+  Globe,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
 
@@ -156,6 +157,7 @@ export default function Navbar({ children }: { children?: React.ReactNode }) {
         { label: 'BFCM Pacing', href: '/analytics/bfcm-pacing', icon: Zap, roles: ['admin', 'strategist', 'founder'] },
         { label: 'Daily P&L', href: '/analytics/daily-pnl', icon: DollarSign, roles: ['admin', 'founder'] },
         { label: 'Campaigns', href: '/analytics/campaigns', icon: Activity, roles: ['admin', 'founder', 'strategist'] },
+        { label: 'Geo Performance', href: '/analytics/geo-performance', icon: Globe, roles: ['admin', 'founder', 'strategist'] },
         { label: 'Efficiency Curve', href: '/analytics/efficiency', icon: TrendingUp, roles: ['admin', 'founder'] },
         { label: 'LTV Cohorts', href: '/analytics/ltv-cohorts', icon: Users, roles: ['admin', 'founder'] },
         { label: 'Forecast', href: '/analytics/forecast', icon: Target, roles: ['admin', 'founder'] },
