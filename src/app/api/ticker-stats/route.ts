@@ -39,7 +39,7 @@ async function getFxRates(): Promise<Record<string, number>> {
   try {
     const res: Response = await fetch('https://open.er-api.com/v6/latest/USD');
     if (res.ok) {
-      const d = (await res.json()) as any;
+      const d = (await res.json()) as { rates?: Record<string, number> };
       if (d?.rates) { FX_CACHE.rates = d.rates; FX_CACHE.ts = Date.now(); return FX_CACHE.rates; }
     }
   } catch { /* fall through to static per-USD rates */ }
