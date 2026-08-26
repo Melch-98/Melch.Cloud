@@ -11,6 +11,7 @@ interface CampaignRow {
   campaign_name: string;
   campaign_type: string;
   status: string;
+  // Meta data only — no Shopify/aMER at campaign level
   spend: number;
   impressions: number;
   clicks: number;
@@ -18,15 +19,13 @@ interface CampaignRow {
   purchases: number;
   purchase_value: number;
   roas: number;
+  aov: number;                  // purchase_value / purchases
+  cpa: number;                  // spend / purchases
   meta_currency: string;
   normalized_spend: number;
   normalized_revenue: number;
   normalized_roas: number;
-  amer: number;
-  inc_roas: number;
   spend_rank: number;
-  amer_rank: number;
-  spend_efficiency: 'over' | 'healthy' | 'under';
   raw_country: string;
 }
 
@@ -45,6 +44,8 @@ interface CountryRow {
   shopify_orders: number;
   shopify_nc_orders: number;
   shopify_connected: boolean;
+  nc_aov: number | null;        // NC revenue ÷ NC orders
+  ncac: number | null;           // Spend ÷ NC orders
   normalized_spend: number;
   normalized_revenue: number;
   normalized_nc_revenue: number;
@@ -444,12 +445,13 @@ export async function GET(request: NextRequest) {
         purchases: agg.purch,
         purchase_value: Math.round(agg.pv * 100) / 100,
         roas: Math.round(roas * 100) / 100,
+        aov: agg.purch > 0 ? Math.round((agg.pv / agg.purch) * 100) / 100 : 0,
+        cpa: agg.purch > 0 ? Math.round((agg.spend / agg.purch) * 100) / 100 : 0,
         meta_currency: metaCurrency,
         normalized_spend: Math.round(nSp * 100) / 100,
         normalized_revenue: Math.round(agg.pv * metaRate * 100) / 100,
         normalized_roas: Math.round(roas * 100) / 100,
-        amer: 0, inc_roas: 0, spend_rank: 0, amer_rank: 0,
-        spend_efficiency: 'healthy',
+        spend_rank: 0,
         raw_country: cc,
       });
     });
@@ -480,6 +482,8 @@ export async function GET(request: NextRequest) {
       shopify_orders: shop?.ord || 0,
       shopify_nc_orders: shop?.ncOrd || 0,
       shopify_connected: shopHasData,
+      nc_aov: shopHasData && (shop?.ncOrd || 0) > 0 ? Math.round((sNCRev / shop!.ncOrd) * 100) / 100 : null,
+      ncac: shopHasData && (shop?.ncOrd || 0) > 0 ? Math.round((mSpend / shop!.ncOrd) * 100) / 100 : null,
       normalized_spend: Math.round(nSpend * 100) / 100,
       normalized_revenue: Math.round(nRev * 100) / 100,
       normalized_nc_revenue: Math.round(nNCRev * 100) / 100,
@@ -505,16 +509,10 @@ export async function GET(request: NextRequest) {
     const e = classify(r.spend_rank, r.amer_rank, r.amer);
     r.spend_efficiency = e.eff; r.cta = e.cta;
 
+    // Assign campaign spend ranks within country
+    const sortedCamps = [...r.campaigns].sort((a, b) => b.spend - a.spend);
     for (const camp of r.campaigns) {
-      camp.amer = camp.normalized_spend > 0 && r.normalized_spend > 0 && shopHasData
-        ? Math.round(((camp.normalized_spend / r.normalized_spend) * r.normalized_nc_revenue / camp.normalized_spend) * 100) / 100
-        : 0;
-      camp.inc_roas = Math.round(camp.normalized_roas * IF_FACTOR * 100) / 100;
-      const spR = [...r.campaigns].sort((a, b) => b.spend - a.spend).findIndex(c => c.campaign_id === camp.campaign_id) + 1;
-      const amR = [...r.campaigns].sort((a, b) => (b.amer ?? 0) - (a.amer ?? 0)).findIndex(c => c.campaign_id === camp.campaign_id) + 1;
-      camp.spend_rank = spR; camp.amer_rank = amR;
-      const d = spR - amR;
-      camp.spend_efficiency = (d >= 2 && (camp.amer < 0.5 || camp.amer === 0)) ? 'over' : (d >= 2) ? 'over' : (d <= -2 && camp.amer >= 1.5) ? 'under' : 'healthy';
+      camp.spend_rank = sortedCamps.findIndex(c => c.campaign_id === camp.campaign_id) + 1;
     }
   }
 
