@@ -160,17 +160,33 @@ function classObj(obj: string): string {
   return 'Demand Capture';
 }
 
-// ─── FX ─────────────────────────────────────────────────────────
+// ─── FX (USD pivot) ─────────────────────────────────────────────
+// rates[cur] = units of `cur` per 1 USD (open.er-api.com/v6/latest/USD).
+// Convert any native currency → base currency:
+//   value_base = value_native × rates[base] / rates[native]
+// (CAD is worth LESS than USD, so a CAD amount divides down — never multiplies.)
 
 const FX_CACHE: { rates: Record<string, number>; ts: number } = { rates: {}, ts: 0 };
-async function getFxRates(base: string): Promise<Record<string, number>> {
+async function getFxRates(): Promise<Record<string, number>> {
   if (Date.now() - FX_CACHE.ts < 3600000 && Object.keys(FX_CACHE.rates).length > 0) return FX_CACHE.rates;
   try {
-    const res = await fetch(`https://open.er-api.com/v6/latest/${base}`);
-    if (res.ok) { const d: any = await res.json(); FX_CACHE.rates = d.rates || {}; FX_CACHE.ts = Date.now(); return FX_CACHE.rates; }
-  } catch {}
-  if (base === 'USD') return { USD: 1, CAD: 0.72, GBP: 1.27, EUR: 1.09, AUD: 0.65, NZD: 0.59 };
-  return { [base]: 1 };
+    const res: Response = await fetch('https://open.er-api.com/v6/latest/USD');
+    if (res.ok) {
+      const d = (await res.json()) as any;
+      if (d?.rates) { FX_CACHE.rates = d.rates; FX_CACHE.ts = Date.now(); return FX_CACHE.rates; }
+    }
+  } catch { /* fall through to static per-USD rates */ }
+  FX_CACHE.rates = { USD: 1, CAD: 1.38, GBP: 0.73, EUR: 0.86, AUD: 1.55, NZD: 1.70 };
+  FX_CACHE.ts = Date.now();
+  return FX_CACHE.rates;
+}
+
+function toBase(v: number, native: string, base: string, rates: Record<string, number>): number {
+  if (!native || native === base) return v;
+  const rNative = rates[native];
+  const rBase = rates[base];
+  if (!rNative || !rBase) return v;
+  return v * rBase / rNative;
 }
 
 // ─── Fetch Meta campaign × country ──────────────────────────────
@@ -377,8 +393,8 @@ export async function GET(request: NextRequest) {
   if (shopR.status === 'rejected') errors.push(`Shopify: ${String(shopR.reason)}`);
   if (!shopHasData) warnings.push('No Shopify order data — aMER unavailable. Shopify sync may be needed.');
 
-  const fxRates = await getFxRates(baseCurrency);
-  const getRate = (cur: string): number => fxRates[cur] || 1;
+  const fxRates = await getFxRates();
+  const toB = (v: number, native: string): number => toBase(v, native, baseCurrency, fxRates);
 
   // ── Aggregate Meta: country → campaign ──
 
@@ -421,7 +437,6 @@ export async function GET(request: NextRequest) {
   shopMap.forEach((_, c) => allCountries.add(c));
 
   const countryRows: CountryRow[] = [];
-  const metaRate = getRate(metaCurrency);
 
   allCountries.forEach((cc) => {
     const cm = ccMap.get(cc) || new Map();
@@ -432,7 +447,6 @@ export async function GET(request: NextRequest) {
 
     cm.forEach((agg) => {
       mSpend += agg.spend; mPurch += agg.purch; mPv += agg.pv;
-      const nSp = agg.spend * metaRate;
       const roas = agg.spend > 0 ? agg.pv / agg.spend : 0;
 
       campaigns.push({
@@ -445,11 +459,11 @@ export async function GET(request: NextRequest) {
         purchases: agg.purch,
         purchase_value: Math.round(agg.pv * 100) / 100,
         roas: Math.round(roas * 100) / 100,
-        aov: agg.purch > 0 ? Math.round((agg.pv / agg.purch) * 100) / 100 : 0,
-        cpa: agg.purch > 0 ? Math.round((agg.spend / agg.purch) * 100) / 100 : 0,
+        aov: agg.purch > 0 ? Math.round(toB(agg.pv / agg.purch, metaCurrency) * 100) / 100 : 0,
+        cpa: agg.purch > 0 ? Math.round(toB(agg.spend / agg.purch, metaCurrency) * 100) / 100 : 0,
         meta_currency: metaCurrency,
-        normalized_spend: Math.round(nSp * 100) / 100,
-        normalized_revenue: Math.round(agg.pv * metaRate * 100) / 100,
+        normalized_spend: Math.round(toB(agg.spend, metaCurrency) * 100) / 100,
+        normalized_revenue: Math.round(toB(agg.pv, metaCurrency) * 100) / 100,
         normalized_roas: Math.round(roas * 100) / 100,
         spend_rank: 0,
         raw_country: cc,
@@ -459,14 +473,13 @@ export async function GET(request: NextRequest) {
     campaigns.sort((a, b) => b.spend - a.spend);
 
     const shopCur = shop?.cur || metaCurrency;
-    const shopRate = getRate(shopCur);
     const sRev = shop?.rev || 0;
     const sNCRev = shop?.ncRev || 0;
 
     const mRoas = mSpend > 0 ? mPv / mSpend : 0;
-    const nSpend = mSpend * metaRate;
-    const nRev = sRev * shopRate;
-    const nNCRev = sNCRev * shopRate;
+    const nSpend = toB(mSpend, metaCurrency);
+    const nRev = toB(sRev, shopCur);
+    const nNCRev = toB(sNCRev, shopCur);
     const amer: number | null = shopHasData && nSpend > 0 ? nNCRev / nSpend : (shopHasData ? 0 : null);
 
     countryRows.push({
@@ -482,8 +495,8 @@ export async function GET(request: NextRequest) {
       shopify_orders: shop?.ord || 0,
       shopify_nc_orders: shop?.ncOrd || 0,
       shopify_connected: shopHasData,
-      nc_aov: shopHasData && (shop?.ncOrd || 0) > 0 ? Math.round((sNCRev / shop!.ncOrd) * 100) / 100 : null,
-      ncac: shopHasData && (shop?.ncOrd || 0) > 0 ? Math.round((mSpend / shop!.ncOrd) * 100) / 100 : null,
+      nc_aov: shopHasData && (shop?.ncOrd || 0) > 0 ? Math.round(toB(sNCRev / shop!.ncOrd, shopCur) * 100) / 100 : null,
+      ncac: shopHasData && (shop?.ncOrd || 0) > 0 ? Math.round(toB(mSpend / shop!.ncOrd, metaCurrency) * 100) / 100 : null,
       normalized_spend: Math.round(nSpend * 100) / 100,
       normalized_revenue: Math.round(nRev * 100) / 100,
       normalized_nc_revenue: Math.round(nNCRev * 100) / 100,

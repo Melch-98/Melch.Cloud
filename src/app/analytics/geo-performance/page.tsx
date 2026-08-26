@@ -80,6 +80,7 @@ const DATE_RANGES = [
   { value: 'last_90d' as DateRange, label: 'Last 90 Days' },
   { value: 'this_month' as DateRange, label: 'This Month' },
 ];
+const BASE_CURRENCIES = ['USD', 'CAD', 'GBP', 'EUR', 'AUD'];
 
 // ─── Formatters ─────────────────────────────────────────────────
 const $sym = (c: string) => ({USD:'$',CAD:'C$',GBP:'£',EUR:'€',AUD:'A$',NZD:'NZ$',CHF:'CHF'}[c]||c);
@@ -173,6 +174,7 @@ export default function GeoPerformancePage(){
               {bo&&<><div className="fixed inset-0 z-10" onClick={()=>setBo(false)}/><div className="absolute top-full left-0 mt-1 w-56 rounded-lg z-20 py-1 max-h-64 overflow-y-auto" style={{background:'#111',border:`1px solid ${W8}`,boxShadow:'0 8px 32px rgba(0,0,0,0.4)'}}>{brands.map(b=><button key={b.id} onClick={()=>{setBid(b.id);setBo(false)}} className="w-full flex items-center gap-2 px-4 py-2 text-sm text-left" style={{color:b.id===bid?G:'#888',background:b.id===bid?Gd:'transparent'}}>{b.id===bid&&<Check size={14} style={{color:G}}/>}<span className={b.id===bid?'':'ml-[22px]'}>{b.name}</span></button>)}</div></>}</div>
             <div className="relative"><button onClick={()=>{setDo(!do_);setBo(false)}} className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium" style={{background:'#111',border:`1px solid ${W8}`,color:W}}>{dl}<ChevronDown size={14} className={do_?'rotate-180':''}/></button>
               {do_&&<><div className="fixed inset-0 z-10" onClick={()=>setDo(false)}/><div className="absolute top-full left-0 mt-1 w-48 rounded-lg z-20 py-1" style={{background:'#111',border:`1px solid ${W8}`,boxShadow:'0 8px 32px rgba(0,0,0,0.4)'}}>{DATE_RANGES.map(d=><button key={d.value} onClick={()=>{setDr(d.value);setDo(false)}} className="w-full flex items-center gap-2 px-4 py-2 text-sm text-left" style={{color:d.value===dr?G:'#888',background:d.value===dr?Gd:'transparent'}}>{d.value===dr&&<Check size={14} style={{color:G}}/>}<span className={d.value===dr?'':'ml-[22px]'}>{d.label}</span></button>)}</div></>}</div>
+            <select value={bc} onChange={(e)=>setBc(e.target.value)} className="px-3 py-2.5 rounded-lg text-sm font-medium" style={{background:'#111',border:`1px solid ${W8}`,color:W}} title="Display currency — all figures converted to this base">{BASE_CURRENCIES.map(c=><option key={c} value={c}>{c}</option>)}</select>
             {loading&&<Loader size={18} className="animate-spin text-gray-500"/>}
           </div>
 
