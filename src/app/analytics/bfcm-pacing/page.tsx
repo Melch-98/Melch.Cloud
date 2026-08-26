@@ -76,12 +76,17 @@ interface BfcmPacingData {
   currency: string;
   timezone: string;
   grossMarginPct: number | null;
+  baseCurrency: string;
+  fxRates: Record<string, number>;
+  currencies: { meta: string; google: string | null };
   bfcmWindow: { start: string; end: string };
   today: {
     date: string;
     dayLabel: string;
     hourlySpend: HourlyPoint[];
     totalSpendSoFar: number;
+    googleSpend: number;
+    acquisitionSpend: number;
     purchases: number;
     purchaseValue: number;
     roas: number;
@@ -93,6 +98,15 @@ interface BfcmPacingData {
     roas: number;
     totalSpend: number;
     totalPurchaseValue: number;
+  };
+  aMer: {
+    available: boolean;
+    l7NcRevenue: number;
+    l7MetaSpend: number;
+    l7GoogleSpend: number;
+    l7OtherSpend: number;
+    l7TotalSpend: number;
+    l7: number | null;
   };
   lastYearBfcm: {
     sameDay: { dayLabel: string; date: string; totalSpend: number; hourlySpend: HourlyPoint[]; purchases: number; purchaseValue: number; roas: number };
@@ -111,6 +125,8 @@ type Decision = 'scale' | 'hold' | 'watch' | 'pause' | 'low';
 const currencySymbols: Record<string, string> = {
   USD: '$', CAD: 'CA$', GBP: '£', EUR: '€', AUD: 'A$',
 };
+
+const BASE_CURRENCIES = ['USD', 'CAD', 'GBP', 'EUR', 'AUD'];
 
 function sym(currency: string): string {
   return currencySymbols[currency] || currency + ' ';
@@ -148,9 +164,18 @@ function fmtNum(v: number): string {
   return v.toLocaleString(undefined, { maximumFractionDigits: 0 });
 }
 
+// FX conversion: value_base = value_native * rates[base] / rates[native]
+function toBase(v: number, native: string, fx: Record<string, number>, base: string): number {
+  if (!native || !base || native === base) return v;
+  const rNative = fx[native];
+  const rBase = fx[base];
+  if (!rNative || !rBase) return v;
+  return v * rBase / rNative;
+}
+
 // ─── Decision classification ────────────────────────────────────
 
-const MIN_JUDGE_SPEND = 50; // $ threshold below which a campaign is "too early to judge"
+const MIN_JUDGE_SPEND = 50;
 
 function classifyCampaign(
   c: CampaignToday,
@@ -165,7 +190,6 @@ function classifyCampaign(
     if (c.purchases > 0) return { decision: 'watch', label: 'Under BE' };
     return { decision: 'pause', label: 'Pause' };
   }
-  // No breakeven known — fall back to a fraction of target
   if (c.roas >= targetRoas * 0.6) return { decision: 'hold', label: 'Hold' };
   if (c.purchases > 0) return { decision: 'watch', label: 'Watch' };
   return { decision: 'pause', label: 'Pause' };
@@ -233,12 +257,14 @@ function HourlyCurveChart({
   lastYearSameDay,
   currency,
   currentHour,
+  factor = 1,
 }: {
   today: BfcmPacingData['today'];
   l7Baseline: BfcmPacingData['l7Baseline'];
   lastYearSameDay: BfcmPacingData['lastYearBfcm']['sameDay'];
   currency: string;
   currentHour: number;
+  factor?: number;
 }) {
   let todayCum = 0;
   let l7Cum = 0;
@@ -250,9 +276,9 @@ function HourlyCurveChart({
     lyCum += lastYearSameDay?.hourlySpend?.[hour]?.spend || 0;
     return {
       hour: `${hour}:00`,
-      today: Math.round(todayCum * 100) / 100,
-      l7: Math.round(l7Cum * 100) / 100,
-      lastYear: Math.round(lyCum * 100) / 100,
+      today: Math.round(todayCum * factor * 100) / 100,
+      l7: Math.round(l7Cum * factor * 100) / 100,
+      lastYear: Math.round(lyCum * factor * 100) / 100,
       isProjected: hour > currentHour,
     };
   });
@@ -263,7 +289,7 @@ function HourlyCurveChart({
     <div className="rounded-xl p-6" style={{ backgroundColor: '#111111' }}>
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-semibold" style={{ color: '#F5F5F8' }}>
-          Hourly Cumulative Spend
+          Hourly Cumulative Meta Spend
         </h3>
         <div className="flex items-center gap-4 text-xs" style={{ color: '#666' }}>
           <span className="flex items-center gap-1.5">
@@ -320,11 +346,13 @@ function BfcmWindowChart({
   lastYear,
   currentDate,
   currency,
+  factor = 1,
 }: {
   thisYear: DailyPoint[];
   lastYear: DailyPoint[];
   currentDate: string;
   currency: string;
+  factor?: number;
 }) {
   const [metric, setMetric] = useState<'spend' | 'roas'>('spend');
   const s = sym(currency);
@@ -350,7 +378,7 @@ function BfcmWindowChart({
     return (
       <div className="rounded-xl p-6" style={{ backgroundColor: '#111111' }}>
         <h3 className="text-sm font-semibold mb-4" style={{ color: '#F5F5F8' }}>
-          BFCM Window — Daily Breakdown
+          BFCM Window — Daily Meta Spend
         </h3>
         <div className="flex flex-col items-center justify-center py-10 text-center" style={{ minHeight: 200 }}>
           <div className="text-lg font-semibold mb-2" style={{ color: '#C8B89A' }}>
@@ -365,7 +393,7 @@ function BfcmWindowChart({
             <div className="text-xs mb-3" style={{ color: '#555' }}>Last year&apos;s window for reference</div>
             <ResponsiveContainer width="100%" height={200}>
               <BarChart
-                data={lastYear.map(ly => ({ shortLabel: shortDay(ly.dayLabel), value: ly.spend }))}
+                data={lastYear.map(ly => ({ shortLabel: shortDay(ly.dayLabel), value: ly.spend * factor }))}
                 margin={{ top: 5, right: 20, left: 10, bottom: 5 }}
               >
                 <CartesianGrid stroke="rgba(255,255,255,0.04)" strokeDasharray="3 3" />
@@ -382,7 +410,7 @@ function BfcmWindowChart({
               <span>
                 Last year total:{' '}
                 <span style={{ color: '#F5F5F8', fontWeight: 600 }}>
-                  {fmtMoney(lastYear.reduce((sum, d) => sum + d.spend, 0), currency)}
+                  {fmtMoney(lastYear.reduce((sum, d) => sum + d.spend, 0) * factor, currency)}
                 </span>
               </span>
             </div>
@@ -394,21 +422,23 @@ function BfcmWindowChart({
 
   const data = thisYear.map((ty, i) => ({
     shortLabel: shortDay(ty.dayLabel),
-    thisYear: metric === 'spend' ? ty.spend : ty.roas,
-    lastYear: metric === 'spend' ? (lastYear[i]?.spend || 0) : (lastYear[i]?.roas || 0),
+    thisYear: metric === 'spend' ? ty.spend * factor : ty.roas,
+    lastYear: metric === 'spend' ? (lastYear[i]?.spend || 0) * factor : (lastYear[i]?.roas || 0),
     isFuture: ty.date > currentDate,
   }));
 
-  const tyTotal = thisYear.reduce((sum, d) => sum + d.spend, 0);
-  const lyTotal = lastYear.reduce((sum, d) => sum + d.spend, 0);
-  const yoyPct = lyTotal > 0 ? ((tyTotal - lyTotal) / lyTotal) * 100 : 0;
-  const tyRoas = tyTotal > 0 ? thisYear.reduce((sum, d) => sum + d.purchaseValue, 0) / tyTotal : 0;
+  const tyTotalRaw = thisYear.reduce((sum, d) => sum + d.spend, 0);
+  const lyTotalRaw = lastYear.reduce((sum, d) => sum + d.spend, 0);
+  const tyTotal = tyTotalRaw * factor;
+  const lyTotal = lyTotalRaw * factor;
+  const yoyPct = lyTotalRaw > 0 ? ((tyTotalRaw - lyTotalRaw) / lyTotalRaw) * 100 : 0;
+  const tyRoas = tyTotalRaw > 0 ? thisYear.reduce((sum, d) => sum + d.purchaseValue, 0) / tyTotalRaw : 0;
 
   return (
     <div className="rounded-xl p-6" style={{ backgroundColor: '#111111' }}>
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-semibold" style={{ color: '#F5F5F8' }}>
-          BFCM Window — Daily Breakdown
+          BFCM Window — Daily Meta Spend
         </h3>
         <div className="flex rounded-lg overflow-hidden text-xs" style={{ border: '1px solid rgba(255,255,255,0.08)' }}>
           {(['spend', 'roas'] as const).map(m => (
@@ -446,7 +476,7 @@ function BfcmWindowChart({
 
       <div className="flex flex-wrap gap-6 mt-4 pt-4 text-xs" style={{ borderTop: '1px solid rgba(255,255,255,0.06)', color: '#888' }}>
         <span>
-          Window spend: <span style={{ color: '#F5F5F8', fontWeight: 600 }}>{fmtMoney(tyTotal, currency)}</span>
+          Window Meta spend: <span style={{ color: '#F5F5F8', fontWeight: 600 }}>{fmtMoney(tyTotal, currency)}</span>
         </span>
         <span>
           Last year: <span style={{ color: '#F5F5F8', fontWeight: 600 }}>{fmtMoney(lyTotal, currency)}</span>
@@ -483,11 +513,13 @@ function CampaignTable({
   currency,
   targetRoas,
   breakevenRoas,
+  factor = 1,
 }: {
   campaigns: CampaignToday[];
   currency: string;
   targetRoas: number;
   breakevenRoas: number | null;
+  factor?: number;
 }) {
   const [sortKey, setSortKey] = useState<SortKey>('spend');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
@@ -517,7 +549,7 @@ function CampaignTable({
   if (campaigns.length === 0) {
     return (
       <div className="rounded-xl p-6" style={{ backgroundColor: '#111111' }}>
-        <h3 className="text-sm font-semibold mb-3" style={{ color: '#F5F5F8' }}>Campaign Command</h3>
+        <h3 className="text-sm font-semibold mb-3" style={{ color: '#F5F5F8' }}>Campaign Command (Meta)</h3>
         <div className="text-sm py-8 text-center" style={{ color: '#666' }}>
           No campaign spend today yet.
         </div>
@@ -538,14 +570,14 @@ function CampaignTable({
   return (
     <div className="rounded-xl p-6" style={{ backgroundColor: '#111111' }}>
       <div className="flex items-center justify-between mb-1">
-        <h3 className="text-sm font-semibold" style={{ color: '#F5F5F8' }}>Campaign Command</h3>
+        <h3 className="text-sm font-semibold" style={{ color: '#F5F5F8' }}>Campaign Command (Meta)</h3>
         <div className="text-xs" style={{ color: '#555' }}>
           {campaigns.length} campaigns · target {fmtRoas(targetRoas)}
           {breakevenRoas != null ? ` · breakeven ${fmtRoas(breakevenRoas)}` : ''}
         </div>
       </div>
       <p className="text-xs mb-4" style={{ color: '#666' }}>
-        Decision = today&apos;s ROAS vs target. Campaigns under ${MIN_JUDGE_SPEND} or paused are flagged low-priority.
+        Decision = today&apos;s Meta ROAS vs target. Campaigns under ${MIN_JUDGE_SPEND} or paused are flagged low-priority.
       </p>
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
@@ -585,10 +617,10 @@ function CampaignTable({
                       {c.status === 'ACTIVE' ? 'Live' : c.status}
                     </span>
                   </td>
-                  <td className="py-2.5 pr-4 text-right tabular-nums" style={{ color: '#F5F5F8' }}>{fmtMoney(c.spend, currency)}</td>
-                  <td className="py-2.5 pr-4 text-right tabular-nums" style={{ color: '#ABABAB' }}>{fmtMoney(c.purchaseValue, currency)}</td>
+                  <td className="py-2.5 pr-4 text-right tabular-nums" style={{ color: '#F5F5F8' }}>{fmtMoney(c.spend * factor, currency)}</td>
+                  <td className="py-2.5 pr-4 text-right tabular-nums" style={{ color: '#ABABAB' }}>{fmtMoney(c.purchaseValue * factor, currency)}</td>
                   <td className="py-2.5 pr-4 text-right tabular-nums" style={{ color: c.roas >= targetRoas ? '#22C55E' : '#F5F5F8' }}>{fmtRoas(c.roas)}</td>
-                  <td className="py-2.5 pr-4 text-right tabular-nums" style={{ color: '#ABABAB' }}>{c.cpa > 0 ? fmtMoney(c.cpa, currency) : '—'}</td>
+                  <td className="py-2.5 pr-4 text-right tabular-nums" style={{ color: '#ABABAB' }}>{c.cpa > 0 ? fmtMoney(c.cpa * factor, currency) : '—'}</td>
                   <td className="py-2.5 pr-4 text-right tabular-nums" style={{ color: '#ABABAB' }}>{c.purchases > 0 ? fmtNum(c.purchases) : '—'}</td>
                   <td className="py-2.5 pr-4 text-right tabular-nums">
                     {c.l7DailySpend > 0 ? (
@@ -638,9 +670,9 @@ export default function BfcmPacingPage() {
   const [fetchingData, setFetchingData] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
-  // Per-brand targets (persisted)
   const [targetBudget, setTargetBudget] = useState<number | null>(null);
   const [targetRoas, setTargetRoas] = useState<number | null>(null);
+  const [baseCurrency, setBaseCurrency] = useState<string>('USD');
 
   useEffect(() => {
     const init = async () => {
@@ -661,6 +693,8 @@ export default function BfcmPacingPage() {
       setUserRole(profile.role);
       if (profile.brand_id) setUserBrandId(profile.brand_id);
       setAuthToken(session.access_token);
+      const savedBase = localStorage.getItem('bfcm_base_currency');
+      if (savedBase) setBaseCurrency(savedBase);
       setLoading(false);
     };
     init();
@@ -694,7 +728,7 @@ export default function BfcmPacingPage() {
       setFetchError(null);
       try {
         const res = await fetch(
-          `/api/bfcm-pacing?brandId=${selectedBrandId}`,
+          `/api/bfcm-pacing?brandId=${selectedBrandId}&baseCurrency=${baseCurrency}`,
           { headers: { Authorization: `Bearer ${authToken}` } }
         );
         const json = await res.json();
@@ -708,9 +742,8 @@ export default function BfcmPacingPage() {
       }
     };
     fetchData();
-  }, [authToken, selectedBrandId]);
+  }, [authToken, selectedBrandId, baseCurrency]);
 
-  // Load persisted targets when brand or data changes
   useEffect(() => {
     if (!selectedBrandId) return;
     const bb = localStorage.getItem(`bfcm_target_budget_${selectedBrandId}`);
@@ -719,20 +752,17 @@ export default function BfcmPacingPage() {
     setTargetRoas(tr ? parseFloat(tr) : null);
   }, [selectedBrandId]);
 
-  // Derive break-even ROAS from gross margin
   const breakevenRoas = useMemo(() => {
     if (!data || data.grossMarginPct == null || data.grossMarginPct <= 0) return null;
     return 100 / data.grossMarginPct;
   }, [data]);
 
-  // Effective target ROAS (persisted or default = breakeven × 1.5)
   const effTargetRoas = targetRoas != null
     ? targetRoas
     : breakevenRoas != null
       ? Math.round(breakevenRoas * 1.5 * 10) / 10
       : 2.0;
 
-  // Effective target budget (persisted or default = L7 daily avg)
   const effTargetBudget = targetBudget != null
     ? targetBudget
     : data
@@ -756,62 +786,68 @@ export default function BfcmPacingPage() {
 
   const currentHour = getAdAccountHour();
 
+  const fx = data?.fxRates || {};
+  const base = data?.baseCurrency || baseCurrency;
+  const native = data?.currency || 'USD';
+  const convert = (v: number, fromCurrency?: string) => toBase(v, fromCurrency || native, fx, base);
+
   const l7WithThisHour = data
     ? data.l7Baseline.hourlyAvg.slice(0, currentHour + 1).reduce((s, p) => s + p.spend, 0)
     : 0;
 
-  // Projected EOD spend: assume remaining hours track L7 shape from here
   const projectedTotal = data && l7WithThisHour > 0
     ? (data.today.totalSpendSoFar / l7WithThisHour) * data.l7Baseline.dailyAvg
     : data
       ? data.today.totalSpendSoFar * (24 / (currentHour + 1))
       : 0;
 
-  const budgetPct = effTargetBudget > 0 ? (data ? data.today.totalSpendSoFar / effTargetBudget * 100 : 0) : 0;
+  // Budget tracking: budget is entered in BASE currency; spend converted to base.
+  const acquisitionSpendBase = data ? convert(data.today.acquisitionSpend, native) : 0;
+  const budgetPct = effTargetBudget > 0 ? (acquisitionSpendBase / effTargetBudget) * 100 : 0;
 
   const lySameDay = data?.lastYearBfcm?.sameDay;
   const vsLastYearSpendPct = data && lySameDay && lySameDay.totalSpend > 0
     ? ((data.today.totalSpendSoFar - lySameDay.totalSpend) / lySameDay.totalSpend) * 100
     : 0;
-  const lyRoasDelta = data && lySameDay && lySameDay.totalSpend > 0
-    ? data.today.roas - lySameDay.roas
-    : 0;
 
   const hoursLeft = 24 - currentHour - 1;
   const neededRunRate = data && hoursLeft > 0 && effTargetBudget > 0
-    ? (effTargetBudget - data.today.totalSpendSoFar) / hoursLeft
+    ? (effTargetBudget - acquisitionSpendBase) / hoursLeft
     : 0;
 
-  // Alerts
   const alerts = useMemo(() => {
     if (!data) return [];
     const list: { tone: 'red' | 'amber' | 'green'; text: string }[] = [];
 
     if (effTargetBudget > 0) {
-      const pct = data.today.totalSpendSoFar / effTargetBudget * 100;
+      const pct = acquisitionSpendBase / effTargetBudget * 100;
       if (pct < 75 && currentHour >= 14) {
-        list.push({ tone: 'amber', text: `Behind budget — ${fmtMoney(data.today.totalSpendSoFar, data.currency)} of ${fmtMoney(effTargetBudget, data.currency)} (${pct.toFixed(0)}%). Raise budget or scale winners.` });
+        list.push({ tone: 'amber', text: `Behind budget — ${fmtMoney(acquisitionSpendBase, base)} of ${fmtMoney(effTargetBudget, base)} (${pct.toFixed(0)}%). Raise budget or scale winners.` });
       } else if (pct > 110) {
         list.push({ tone: 'amber', text: `Over budget pace — ${pct.toFixed(0)}% of target. Trim losers before you blow the day.` });
       }
     }
 
     if (breakevenRoas != null && data.today.roas > 0 && data.today.roas < breakevenRoas) {
-      list.push({ tone: 'red', text: `Today ROAS ${data.today.roas.toFixed(2)}× is below breakeven ${breakevenRoas.toFixed(2)}×.` });
+      list.push({ tone: 'red', text: `Today Meta ROAS ${data.today.roas.toFixed(2)}× is below breakeven ${breakevenRoas.toFixed(2)}×.` });
+    }
+
+    if (data.aMer.available && data.aMer.l7 != null && breakevenRoas != null && data.aMer.l7 < breakevenRoas) {
+      list.push({ tone: 'red', text: `L7 aMER ${data.aMer.l7.toFixed(2)}× (all channels) is below breakeven ${breakevenRoas.toFixed(2)}×.` });
     }
 
     const pauseCount = data.campaigns.filter(c => classifyCampaign(c, effTargetRoas, breakevenRoas).decision === 'pause').length;
     const scaleCount = data.campaigns.filter(c => classifyCampaign(c, effTargetRoas, breakevenRoas).decision === 'scale').length;
 
     if (pauseCount > 0) {
-      list.push({ tone: 'red', text: `${pauseCount} campaign${pauseCount > 1 ? 's' : ''} burning (spend with zero conversions) — pause now.` });
+      list.push({ tone: 'red', text: `${pauseCount} campaign${pauseCount > 1 ? 's' : ''} burning (Meta spend with zero conversions) — pause now.` });
     }
     if (scaleCount > 0) {
       list.push({ tone: 'green', text: `${scaleCount} campaign${scaleCount > 1 ? 's' : ''} beating target — scale up.` });
     }
 
-    return list.slice(0, 5);
-  }, [data, effTargetRoas, breakevenRoas, effTargetBudget, currentHour]);
+    return list.slice(0, 6);
+  }, [data, effTargetRoas, breakevenRoas, effTargetBudget, currentHour, acquisitionSpendBase, base]);
 
   const saveTargetBudget = (v: number) => {
     setTargetBudget(v);
@@ -821,6 +857,11 @@ export default function BfcmPacingPage() {
   const saveTargetRoas = (v: number) => {
     setTargetRoas(v);
     if (selectedBrandId) localStorage.setItem(`bfcm_target_roas_${selectedBrandId}`, String(v));
+  };
+
+  const saveBaseCurrency = (c: string) => {
+    setBaseCurrency(c);
+    localStorage.setItem('bfcm_base_currency', c);
   };
 
   if (loading) {
@@ -844,11 +885,11 @@ export default function BfcmPacingPage() {
               <h1 className="text-2xl font-bold" style={{ color: '#F5F5F8' }}>BFCM Command Center</h1>
             </div>
             <p className="text-sm mt-1" style={{ color: '#666' }}>
-              Live spend, revenue, ROAS and campaign-level decisions — one screen for the whole weekend
+              Live spend, revenue, ROAS and aMER — one screen for the whole weekend
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             {/* Brand selector */}
             <div className="relative">
               <button
@@ -886,12 +927,25 @@ export default function BfcmPacingPage() {
               )}
             </div>
 
+            {/* Currency selector */}
+            <select
+              value={baseCurrency}
+              onChange={e => saveBaseCurrency(e.target.value)}
+              className="rounded-lg px-3 py-2 text-sm"
+              style={{ backgroundColor: '#111111', border: '1px solid rgba(255,255,255,0.08)', color: '#F5F5F8' }}
+              title="Display currency — all figures converted to this base"
+            >
+              {BASE_CURRENCIES.map(c => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+
             {/* Refresh */}
             <button
               onClick={() => {
                 if (!authToken || !selectedBrandId) return;
                 setFetchingData(true);
-                fetch(`/api/bfcm-pacing?brandId=${selectedBrandId}`, {
+                fetch(`/api/bfcm-pacing?brandId=${selectedBrandId}&baseCurrency=${baseCurrency}`, {
                   headers: { Authorization: `Bearer ${authToken}` },
                 })
                   .then(r => r.json())
@@ -923,12 +977,20 @@ export default function BfcmPacingPage() {
 
         {data && (
           <>
+            {/* Currency notice */}
+            <div className="flex items-center gap-2 text-xs mb-5" style={{ color: '#666' }}>
+              <Info size={13} />
+              Figures in <span style={{ color: '#C8B89A' }}>{base}</span>
+              {native !== base && <> · converted from native {native}</>}
+              {data.currencies.google && data.currencies.google !== native && <> · Google {data.currencies.google}</>}
+            </div>
+
             {/* Target inputs */}
             <div className="flex flex-wrap items-end gap-4 mb-6">
               <div>
-                <div className="text-xs uppercase tracking-wider mb-1.5" style={{ color: '#777' }}>Daily Budget Target</div>
+                <div className="text-xs uppercase tracking-wider mb-1.5" style={{ color: '#777' }}>Daily Budget Target ({base})</div>
                 <div className="flex items-center gap-1">
-                  <span className="text-sm" style={{ color: '#888' }}>{sym(data.currency)}</span>
+                  <span className="text-sm" style={{ color: '#888' }}>{sym(base)}</span>
                   <input
                     type="number"
                     min={0}
@@ -989,42 +1051,56 @@ export default function BfcmPacingPage() {
             {/* KPI Cards */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
               <KpiCard
-                label="Spend Today"
-                value={fmtMoney(data.today.totalSpendSoFar, data.currency)}
+                label={`Acquisition Spend (${base})`}
+                value={fmtMoney(acquisitionSpendBase, base)}
                 accent="gold"
-                sub={effTargetBudget > 0 ? `of ${fmtMoney(effTargetBudget, data.currency)} target` : `L7 avg ${fmtMoney(data.l7Baseline.dailyAvg, data.currency)}`}
+                sub={`Meta ${fmtMoney(convert(data.today.totalSpendSoFar), base)} · Google ${fmtMoney(convert(data.today.googleSpend, data.currencies.google || native), base)}`}
                 bar={effTargetBudget > 0 ? { pct: budgetPct, color: budgetPct <= 110 ? '#C8B89A' : '#EF4444' } : undefined}
               />
               <KpiCard
-                label="Revenue Today"
-                value={fmtMoney(data.today.purchaseValue, data.currency)}
-                sub={`${fmtNum(data.today.purchases)} orders`}
+                label={`Revenue Today (${base})`}
+                value={fmtMoney(convert(data.today.purchaseValue), base)}
+                sub={`${fmtNum(data.today.purchases)} orders · Meta-attributed`}
               />
               <KpiCard
-                label="ROAS Today"
+                label="Meta ROAS Today"
                 value={fmtRoas(data.today.roas)}
                 accent={effTargetRoas > 0 ? (data.today.roas >= effTargetRoas ? 'green' : data.today.roas > 0 ? 'red' : 'default') : 'default'}
                 sub={`target ${fmtRoas(effTargetRoas)}${breakevenRoas != null ? ` · BE ${fmtRoas(breakevenRoas)}` : ''}`}
               />
               <KpiCard
-                label="Projected EOD"
-                value={fmtMoney(projectedTotal, data.currency)}
-                accent={effTargetBudget > 0 ? (projectedTotal >= effTargetBudget ? 'green' : 'amber') : 'gold'}
-                sub={neededRunRate > 0 ? `needs ${fmtMoney(neededRunRate, data.currency)}/hr` : `${hoursLeft}h left`}
+                label="aMER (L7, all channels)"
+                value={data.aMer.available && data.aMer.l7 != null ? fmtRoas(data.aMer.l7) : '—'}
+                accent={data.aMer.l7 != null ? (breakevenRoas != null ? (data.aMer.l7 >= breakevenRoas ? 'green' : 'red') : 'gold') : 'default'}
+                sub={data.aMer.available
+                  ? `NC ${fmtMoney(convert(data.aMer.l7NcRevenue), base)} ÷ ${fmtMoney(convert(data.aMer.l7TotalSpend), base)} spend`
+                  : 'no Shopify data'}
+              />
+              <KpiCard
+                label={`Projected EOD (${base})`}
+                value={fmtMoney(convert(projectedTotal), base)}
+                accent={effTargetBudget > 0 ? (convert(projectedTotal) >= effTargetBudget ? 'green' : 'amber') : 'gold'}
+                sub={neededRunRate > 0 ? `needs ${fmtMoney(neededRunRate, base)}/hr` : `${hoursLeft}h left`}
               />
               <KpiCard
                 label="vs Last Year Spend"
                 value={lySameDay && lySameDay.totalSpend > 0 ? fmtPct(vsLastYearSpendPct) : '—'}
                 accent={vsLastYearSpendPct >= 0 ? 'green' : 'red'}
-                sub={lySameDay && lySameDay.totalSpend > 0 ? `LY ${fmtMoney(lySameDay.totalSpend, data.currency)}` : 'no LY data'}
-              />
-              <KpiCard
-                label="vs Last Year ROAS"
-                value={lySameDay && lySameDay.totalSpend > 0 ? fmtRoasDelta(lyRoasDelta) : '—'}
-                accent={lyRoasDelta >= 0 ? 'green' : 'red'}
-                sub={lySameDay && lySameDay.totalSpend > 0 ? `LY ${fmtRoas(lySameDay.roas)}` : 'no LY data'}
+                sub={lySameDay && lySameDay.totalSpend > 0 ? `LY ${fmtMoney(convert(lySameDay.totalSpend), base)}` : 'no LY data'}
               />
             </div>
+
+            {/* aMER breakdown strip */}
+            {data.aMer.available && (
+              <div className="rounded-xl px-5 py-3 mb-6 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs" style={{ backgroundColor: '#111111', color: '#888' }}>
+                <span className="font-medium" style={{ color: '#C8B89A' }}>aMER (7-day)</span>
+                <span>NC revenue {fmtMoney(convert(data.aMer.l7NcRevenue), base)}</span>
+                <span>Meta {fmtMoney(convert(data.aMer.l7MetaSpend), base)}</span>
+                <span>Google {fmtMoney(convert(data.aMer.l7GoogleSpend, data.currencies.google || native), base)}</span>
+                {data.aMer.l7OtherSpend > 0 && <span>Other {fmtMoney(convert(data.aMer.l7OtherSpend), base)}</span>}
+                <span>→ {data.aMer.l7 != null ? fmtRoas(data.aMer.l7) : '—'}</span>
+              </div>
+            )}
 
             {/* Hourly curve */}
             <div className="mb-6">
@@ -1032,8 +1108,9 @@ export default function BfcmPacingPage() {
                 today={data.today}
                 l7Baseline={data.l7Baseline}
                 lastYearSameDay={data.lastYearBfcm.sameDay}
-                currency={data.currency}
+                currency={base}
                 currentHour={currentHour}
+                factor={convert(1)}
               />
             </div>
 
@@ -1041,9 +1118,10 @@ export default function BfcmPacingPage() {
             <div className="mb-6">
               <CampaignTable
                 campaigns={data.campaigns}
-                currency={data.currency}
+                currency={base}
                 targetRoas={effTargetRoas}
                 breakevenRoas={breakevenRoas}
+                factor={convert(1)}
               />
             </div>
 
@@ -1053,7 +1131,8 @@ export default function BfcmPacingPage() {
                 thisYear={data.thisYearBfcm.fullWindow}
                 lastYear={data.lastYearBfcm.fullWindow}
                 currentDate={data.today.date}
-                currency={data.currency}
+                currency={base}
+                factor={convert(1)}
               />
             </div>
 

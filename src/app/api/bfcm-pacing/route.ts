@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { fetchAccountCurrency, fetchAccountTimezone } from '@/lib/meta-api';
+import { getCampaignMetrics, normalizeCustomerId, resolvePipeboardToken } from '@/lib/pipeboard-google';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -36,23 +37,30 @@ interface CampaignToday {
   purchaseValue: number;
   roas: number;
   cpa: number;
-  // L7 trend (previous 7 days, not incl. today)
   l7DailySpend: number;
   l7Roas: number;
-  spendPaceVsL7: number; // today spend / l7DailySpend, e.g. 2.3 = 230% of normal
-  roasDeltaVsL7: number; // today roas - l7 roas (percentage points)
+  spendPaceVsL7: number;
+  roasDeltaVsL7: number;
 }
 
 interface BfcmPacingResponse {
-  currency: string;
+  currency: string;                 // native Meta account currency (CAD/USD/…)
   timezone: string;
   grossMarginPct: number | null;
+  baseCurrency: string;             // requested base currency for display
+  fxRates: Record<string, number>;  // rates relative to USD pivot (1 USD = fxRates[cur] cur)
+  currencies: {
+    meta: string;
+    google: string | null;
+  };
   bfcmWindow: { start: string; end: string };
   today: {
     date: string;
     dayLabel: string;
     hourlySpend: HourlyPoint[];
-    totalSpendSoFar: number;
+    totalSpendSoFar: number;        // Meta spend, native
+    googleSpend: number;            // native
+    acquisitionSpend: number;       // Meta + Google, native
     purchases: number;
     purchaseValue: number;
     roas: number;
@@ -64,6 +72,15 @@ interface BfcmPacingResponse {
     roas: number;
     totalSpend: number;
     totalPurchaseValue: number;
+  };
+  aMer: {
+    available: boolean;
+    l7NcRevenue: number;            // native
+    l7MetaSpend: number;
+    l7GoogleSpend: number;
+    l7OtherSpend: number;
+    l7TotalSpend: number;           // meta + google + other
+    l7: number | null;              // aMER = ncRevenue / totalSpend
   };
   lastYearBfcm: {
     sameDay: { dayLabel: string; date: string; totalSpend: number; hourlySpend: HourlyPoint[]; purchases: number; purchaseValue: number; roas: number };
@@ -115,10 +132,7 @@ function getDayLabel(date: Date, thanksgiving: Date): string {
   return days[d.getDay()];
 }
 
-// ─── Meta action extraction ─────────────────────────────────────
-// Meta reports conversions under different action types depending on the
-// account's pixel/CAPI setup. Pick the FIRST matching type — NEVER sum across
-// aliases (purchase + omni_purchase both present = double count).
+// ─── Meta action extraction (never sum aliases) ────────────────
 
 const PURCHASE_TYPES = ['purchase', 'omni_purchase', 'offsite_conversion.fb_pixel_purchase'];
 
@@ -143,7 +157,27 @@ function roas(spend: number, value: number): number {
   return spend > 0 ? value / spend : 0;
 }
 
-// ─── In-memory cache ────────────────────────────────────────────
+// ─── FX (USD pivot) ─────────────────────────────────────────────
+// rates[cur] = how many `cur` per 1 USD. Convert native → base:
+//   value_base = value_native * rates[base] / rates[native]
+
+const FX_CACHE: { rates: Record<string, number>; ts: number } = { rates: {}, ts: 0 };
+
+async function getFxRates(): Promise<Record<string, number>> {
+  if (Date.now() - FX_CACHE.ts < 3600000 && Object.keys(FX_CACHE.rates).length > 0) return FX_CACHE.rates;
+  try {
+    const res: Response = await fetch('https://open.er-api.com/v6/latest/USD');
+    if (res.ok) {
+      const d = (await res.json()) as any;
+      if (d?.rates) { FX_CACHE.rates = d.rates; FX_CACHE.ts = Date.now(); return FX_CACHE.rates; }
+    }
+  } catch { /* fall through to static */ }
+  FX_CACHE.rates = { USD: 1, CAD: 1.38, GBP: 0.73, EUR: 0.86, AUD: 1.55, NZD: 1.7 };
+  FX_CACHE.ts = Date.now();
+  return FX_CACHE.rates;
+}
+
+// ─── In-memory response cache ───────────────────────────────────
 
 const cache = new Map<string, { data: BfcmPacingResponse; ts: number }>();
 const CACHE_TTL = 5 * 60 * 1000; // 5 min
@@ -177,6 +211,7 @@ export async function GET(request: NextRequest) {
   const brandId = searchParams.get('brandId');
   const yearParam = searchParams.get('year');
   const year = yearParam ? parseInt(yearParam, 10) : new Date().getFullYear();
+  const baseCurrency = (searchParams.get('baseCurrency') || 'USD').toUpperCase();
 
   if (!brandId) return NextResponse.json({ error: 'brandId required' }, { status: 400 });
 
@@ -184,7 +219,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
-  const cacheKey = `bfcm:${brandId}:${year}`;
+  const cacheKey = `bfcm:${brandId}:${year}:${baseCurrency}`;
   const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.ts < CACHE_TTL) {
     return NextResponse.json(cached.data);
@@ -225,6 +260,7 @@ export async function GET(request: NextRequest) {
   try {
     const currency = await fetchAccountCurrency(metaToken, adAccountId);
     const timezone = await fetchAccountTimezone(metaToken, adAccountId);
+    const fxRates = await getFxRates();
 
     const bfcmWindow = getBfcmWindow(year);
     const lastYearBfcmWindow = getBfcmWindow(year - 1);
@@ -247,24 +283,21 @@ export async function GET(request: NextRequest) {
       l7Days.push(fmtDate(d));
     }
 
-    // ── Helper: single insights GET (json) ──
     const getInsights = async (path: string): Promise<any> => {
       const res: Response = await fetch(`${META_BASE}/${adAccountId}/insights?${path}&access_token=${metaToken}`);
       if (!res.ok) return {};
       return (await res.json()) as any;
     };
 
-    // ── 1. Today hourly spend (advertiser timezone) ──
+    // ── Meta: today hourly + totals + L7 + BFCM windows ──
     const todayHourlyPromise = getInsights(
       `level=account&time_range=${encodeURIComponent(JSON.stringify({ since: todayStr, until: todayStr }))}&breakdowns=hourly_stats_aggregated_by_advertiser_time_zone&fields=spend&limit=500`
     );
 
-    // ── 2. Today account-level totals (revenue + purchases + roas) ──
     const todayTotalsPromise = getInsights(
       `level=account&time_range=${encodeURIComponent(JSON.stringify({ since: todayStr, until: todayStr }))}&fields=spend,impressions,clicks,actions,action_values&limit=10${ATTRIBUTION}`
     );
 
-    // ── 3. L7 per-day hourly (baseline curve) ──
     const l7HourlyPromises = l7Days.map(async (day): Promise<{ date: string; hourlySpend: HourlyPoint[]; dayTotal: number }> => {
       try {
         const json = await getInsights(
@@ -292,26 +325,22 @@ export async function GET(request: NextRequest) {
       }
     });
 
-    // ── 4. L7 account-level aggregate (roas + daily avg) ──
     const l7AggPromise = getInsights(
       `level=account&time_range=${encodeURIComponent(JSON.stringify({ since: l7StartStr, until: l7EndStr }))}&fields=spend,actions,action_values&limit=10${ATTRIBUTION}`
     );
 
-    // ── 5. Last year BFCM daily (spend + revenue) ──
     const lyStart = fmtDate(lastYearBfcmWindow.start);
     const lyEnd = fmtDate(lastYearBfcmWindow.end);
     const lyDailyPromise = getInsights(
       `level=account&time_range=${encodeURIComponent(JSON.stringify({ since: lyStart, until: lyEnd }))}&time_increment=1&fields=spend,actions,action_values&limit=500${ATTRIBUTION}`
     );
 
-    // ── 6. This year BFCM daily (spend + revenue) ──
     const tyStart = fmtDate(bfcmWindow.start);
     const tyEnd = fmtDate(bfcmWindow.end);
     const tyDailyPromise = getInsights(
       `level=account&time_range=${encodeURIComponent(JSON.stringify({ since: tyStart, until: tyEnd }))}&time_increment=1&fields=spend,actions,action_values&limit=500${ATTRIBUTION}`
     );
 
-    // ── 7. Today campaign-level ──
     const campaignTodayPromise = (async (): Promise<any[]> => {
       const rows: any[] = [];
       let nextUrl: string | null =
@@ -326,7 +355,6 @@ export async function GET(request: NextRequest) {
       return rows;
     })();
 
-    // ── 8. L7 campaign-level (trend baseline) ──
     const campaignL7Promise = (async (): Promise<any[]> => {
       const rows: any[] = [];
       let nextUrl: string | null =
@@ -341,20 +369,77 @@ export async function GET(request: NextRequest) {
       return rows;
     })();
 
+    // ── Google: today spend + currency (Pipeboard) ──
+    const googlePromise = (async (): Promise<{ spend: number; currency: string | null }> => {
+      if (!brand.google_ads_customer_id || !brand.google_ads_customer_id.trim()) return { spend: 0, currency: null };
+      const pipeboardToken = await resolvePipeboardToken(process.env.PIPEBOARD_API_TOKEN, async (key) => {
+        const { data: s } = await supabase.from('app_settings').select('value').eq('key', key).single();
+        return s?.value || null;
+      });
+      if (!pipeboardToken) return { spend: 0, currency: null };
+      const custId = normalizeCustomerId(brand.google_ads_customer_id);
+
+      let gCurrency: string | null = null;
+      try {
+        const infoRes: Response = await fetch(
+          `https://google-ads.mcp.pipeboard.co/?token=${encodeURIComponent(pipeboardToken)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({
+              jsonrpc: '2.0', id: 1, method: 'tools/call',
+              params: { name: 'get_google_ads_account_info', arguments: { customer_id: custId } },
+            }),
+          }
+        );
+        if (infoRes.ok) {
+          const j = (await infoRes.json()) as any;
+          const text = j?.result?.content?.[0]?.text;
+          if (text) {
+            const parsed = JSON.parse(text);
+            gCurrency = parsed?.account?.currency_code || null;
+          }
+        }
+      } catch { /* currency optional */ }
+
+      let spend = 0;
+      try {
+        const m = await getCampaignMetrics(pipeboardToken, custId, 'TODAY');
+        const campaigns = m?.campaigns || [];
+        for (const c of campaigns) spend += Number(c.cost || 0);
+      } catch { /* non-fatal */ }
+
+      return { spend, currency: gCurrency };
+    })();
+
+    // ── daily_pnl: L7 NC revenue + spend (aMER source) ──
+    const dailyPnlPromise = (async (): Promise<{ ncRev: number; meta: number; google: number; other: number; hasData: boolean }> => {
+      const { data, error } = await supabase
+        .from('daily_pnl')
+        .select('date, nc_revenue, meta_spend, google_spend, other_spend')
+        .eq('brand_id', brandId)
+        .gte('date', l7StartStr)
+        .lte('date', l7EndStr);
+      if (error || !data || data.length === 0) return { ncRev: 0, meta: 0, google: 0, other: 0, hasData: false };
+      let ncRev = 0, meta = 0, google = 0, other = 0;
+      for (const r of data) {
+        ncRev += parseFloat(r.nc_revenue || '0');
+        meta += parseFloat(r.meta_spend || '0');
+        google += parseFloat(r.google_spend || '0');
+        other += parseFloat(r.other_spend || '0');
+      }
+      return { ncRev, meta, google, other, hasData: true };
+    })();
+
     // Await the primary parallel batch
-    const [todayHourlyJson, todayTotalsJson, l7DayResults, l7AggJson, lyDailyJson, tyDailyJson, campaignTodayRows, campaignL7Rows] =
+    const [todayHourlyJson, todayTotalsJson, l7DayResults, l7AggJson, lyDailyJson, tyDailyJson, campaignTodayRows, campaignL7Rows, googleRes, pnlRes] =
       await Promise.all([
-        todayHourlyPromise,
-        todayTotalsPromise,
-        Promise.all(l7HourlyPromises),
-        l7AggPromise,
-        lyDailyPromise,
-        tyDailyPromise,
-        campaignTodayPromise,
-        campaignL7Promise,
+        todayHourlyPromise, todayTotalsPromise, Promise.all(l7HourlyPromises), l7AggPromise,
+        lyDailyPromise, tyDailyPromise, campaignTodayPromise, campaignL7Promise,
+        googlePromise, dailyPnlPromise,
       ]);
 
-    // ── Build today hourly + totals ──
+    // ── Today Meta hourly + totals ──
     let todayHourly: HourlyPoint[] = [];
     let totalSpendSoFar = 0;
     if (todayHourlyJson?.data) {
@@ -381,7 +466,7 @@ export async function GET(request: NextRequest) {
       if (totalSpendSoFar === 0) totalSpendSoFar = parseFloat(row.spend || '0');
     }
 
-    // ── Build L7 baseline ──
+    // ── L7 Meta baseline ──
     l7DayResults.sort((a, b) => a.date.localeCompare(b.date));
     let l7DailyAvg = 0;
     const l7HourlyAvg: HourlyPoint[] = Array.from({ length: 24 }, (_, i) => ({ hour: i, spend: 0 }));
@@ -403,7 +488,7 @@ export async function GET(request: NextRequest) {
       l7TotalPurchaseValue = purchaseValue(row.action_values);
     }
 
-    // ── Build BFCM daily (this year + last year) ──
+    // ── BFCM daily ──
     const buildDaily = (json: any, thanksgiving: Date): DailyPoint[] => {
       const out: DailyPoint[] = [];
       if (json?.data) {
@@ -423,21 +508,13 @@ export async function GET(request: NextRequest) {
         out.sort((a, b) => a.date.localeCompare(b.date));
       }
       return out;
-    }
+    };
 
     const lastYearFullWindow = buildDaily(lyDailyJson, lastYearBfcmWindow.thanksgiving);
     const thisYearFullWindow = buildDaily(tyDailyJson, bfcmWindow.thanksgiving);
 
-    // Last year same BFCM day (same position in window) — hourly for curve,
-    // revenue from the fullWindow row.
     let lastYearSameDay: BfcmPacingResponse['lastYearBfcm']['sameDay'] = {
-      dayLabel: '',
-      date: '',
-      totalSpend: 0,
-      hourlySpend: [],
-      purchases: 0,
-      purchaseValue: 0,
-      roas: 0,
+      dayLabel: '', date: '', totalSpend: 0, hourlySpend: [], purchases: 0, purchaseValue: 0, roas: 0,
     };
     const todayInWindow = (today.getDay() + 7 - bfcmWindow.start.getDay()) % 7;
     if (todayInWindow >= 0 && todayInWindow < lastYearFullWindow.length) {
@@ -452,7 +529,6 @@ export async function GET(request: NextRequest) {
         roas: lySameDay.roas,
       };
 
-      // Hourly for last year's same day (curve only)
       const lyHourlyJson = await getInsights(
         `level=account&time_range=${encodeURIComponent(JSON.stringify({ since: lySameDay.date, until: lySameDay.date }))}&breakdowns=hourly_stats_aggregated_by_advertiser_time_zone&fields=spend&limit=500`
       );
@@ -471,7 +547,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // ── Build campaign table (today + L7 trend) ──
+    // ── Campaign table ──
     const l7ByCampaign = new Map<string, { spend: number; purchaseValue: number }>();
     for (const row of campaignL7Rows) {
       const id = row.campaign_id;
@@ -485,7 +561,6 @@ export async function GET(request: NextRequest) {
     const campaigns: CampaignToday[] = [];
     const campaignIds = campaignTodayRows.map((r: any) => r.campaign_id).filter(Boolean);
 
-    // Batch fetch objective + effective_status (chunk 50 ids)
     const campaignMeta: Record<string, { objective: string; status: string }> = {};
     if (campaignIds.length > 0) {
       for (let i = 0; i < campaignIds.length; i += 50) {
@@ -546,18 +621,33 @@ export async function GET(request: NextRequest) {
     }
     campaigns.sort((a, b) => b.spend - a.spend);
 
+    // ── Assemble response ──
+    const googleSpend = Math.round(googleRes.spend * 100) / 100;
+    const acquisitionSpend = totalSpendSoFar + googleSpend;
+
+    const l7TotalSpendAll = pnlRes.meta + pnlRes.google + pnlRes.other;
+    const l7Amer: number | null = pnlRes.hasData && l7TotalSpendAll > 0 ? pnlRes.ncRev / l7TotalSpendAll : null;
+
     const response: BfcmPacingResponse = {
       currency,
       timezone,
       grossMarginPct: brand.gross_margin_pct != null ? Number(brand.gross_margin_pct) : null,
+      baseCurrency,
+      fxRates,
+      currencies: {
+        meta: currency,
+        google: googleRes.currency,
+      },
       bfcmWindow: { start: tyStart, end: tyEnd },
       today: {
         date: todayStr,
         dayLabel: getDayLabel(today, bfcmWindow.thanksgiving),
         hourlySpend: todayHourly,
-        totalSpendSoFar,
+        totalSpendSoFar: Math.round(totalSpendSoFar * 100) / 100,
+        googleSpend,
+        acquisitionSpend: Math.round(acquisitionSpend * 100) / 100,
         purchases: todayPurchases,
-        purchaseValue: todayPurchaseValue,
+        purchaseValue: Math.round(todayPurchaseValue * 100) / 100,
         roas: roas(totalSpendSoFar, todayPurchaseValue),
       },
       l7Baseline: {
@@ -572,13 +662,17 @@ export async function GET(request: NextRequest) {
         totalSpend: Math.round(l7TotalSpend * 100) / 100,
         totalPurchaseValue: Math.round(l7TotalPurchaseValue * 100) / 100,
       },
-      lastYearBfcm: {
-        sameDay: lastYearSameDay,
-        fullWindow: lastYearFullWindow,
+      aMer: {
+        available: pnlRes.hasData,
+        l7NcRevenue: Math.round(pnlRes.ncRev * 100) / 100,
+        l7MetaSpend: Math.round(pnlRes.meta * 100) / 100,
+        l7GoogleSpend: Math.round(pnlRes.google * 100) / 100,
+        l7OtherSpend: Math.round(pnlRes.other * 100) / 100,
+        l7TotalSpend: Math.round(l7TotalSpendAll * 100) / 100,
+        l7: l7Amer !== null ? Math.round(l7Amer * 100) / 100 : null,
       },
-      thisYearBfcm: {
-        fullWindow: thisYearFullWindow,
-      },
+      lastYearBfcm: { sameDay: lastYearSameDay, fullWindow: lastYearFullWindow },
+      thisYearBfcm: { fullWindow: thisYearFullWindow },
       campaigns,
     };
 
