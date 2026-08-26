@@ -152,13 +152,22 @@ function fmtDate(d: Date): string { return d.toISOString().split('T')[0]; }
 
 function dateRangeToMeta(range: string): { since: string; until: string } {
   const now = new Date();
+  const until = fmtDate(now);
+  // Meta's time_range `since` and `until` are BOTH inclusive, so "last N days"
+  // (ending today) must start at now - (N - 1). The old code subtracted N,
+  // which pulled N+1 days and overstated spend vs Meta Ads Manager.
+  const daysFor = (n: number): string => {
+    const d = new Date(now);
+    d.setDate(d.getDate() - (n - 1));
+    return fmtDate(d);
+  };
   switch (range) {
-    case 'last_7d': { const d = new Date(now); d.setDate(d.getDate() - 7); return { since: fmtDate(d), until: fmtDate(now) }; }
-    case 'last_14d': { const d = new Date(now); d.setDate(d.getDate() - 14); return { since: fmtDate(d), until: fmtDate(now) }; }
-    case 'last_30d': { const d = new Date(now); d.setDate(d.getDate() - 30); return { since: fmtDate(d), until: fmtDate(now) }; }
-    case 'last_90d': { const d = new Date(now); d.setDate(d.getDate() - 90); return { since: fmtDate(d), until: fmtDate(now) }; }
-    case 'this_month': return { since: fmtDate(new Date(now.getFullYear(), now.getMonth(), 1)), until: fmtDate(now) };
-    default: return { since: fmtDate(new Date(now.getTime() - 30 * 86400000)), until: fmtDate(now) };
+    case 'last_7d': return { since: daysFor(7), until };
+    case 'last_14d': return { since: daysFor(14), until };
+    case 'last_30d': return { since: daysFor(30), until };
+    case 'last_90d': return { since: daysFor(90), until };
+    case 'this_month': return { since: fmtDate(new Date(now.getFullYear(), now.getMonth(), 1)), until };
+    default: return { since: daysFor(30), until };
   }
 }
 

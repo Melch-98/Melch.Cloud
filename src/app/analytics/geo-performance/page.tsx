@@ -355,7 +355,7 @@ export default function GeoPerformancePage(){
                           {c.campaigns.map(camp=>{const cp=c.normalized_spend>0?(camp.normalized_spend/c.normalized_spend)*100:0;
                             return <tr key={camp.campaign_id} className="hover:bg-white/[0.015] transition-colors" style={{borderBottom:`1px solid ${W4}`}}>
                               <td className="py-3 pl-5 pr-3">
-                                <div className="text-[13px] font-medium text-[#F5F5F8] truncate max-w-[220px]">{camp.campaign_name}</div>
+                                <div className="text-[13px] font-medium text-[#F5F5F8] whitespace-normal break-words min-w-[180px] max-w-[400px]" title={camp.campaign_name}>{camp.campaign_name}</div>
                                 <div className="flex items-center gap-2 mt-0.5">
                                   <span className="text-[10px] font-mono text-gray-600 bg-white/[0.03] px-1 py-px rounded">#{camp.spend_rank}</span>
                                   <span className="text-[10px] text-gray-600">{Pf(cp)}</span>
