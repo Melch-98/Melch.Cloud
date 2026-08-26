@@ -265,7 +265,7 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
             <div>
               <h2 className="text-base font-semibold tracking-tight">Today&apos;s Performance</h2>
-              <p className="text-xs mt-0.5" style={{ color: '#6B6560' }}>Meta + Google combined, by brand</p>
+              <p className="text-xs mt-0.5" style={{ color: '#6B6560' }}>Meta + Google combined, by brand · USD</p>
             </div>
             <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider" style={{ color: '#6B6560' }}>
               <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: '#C8B89A' }} />
