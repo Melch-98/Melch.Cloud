@@ -44,11 +44,13 @@ interface CountryRow {
   country: string; country_name: string; flag: string;
   meta_spend: number; meta_purchases: number; meta_purchase_value: number;
   meta_roas: number; meta_currency: string;
+  google_spend: number; google_currency: string;
   shopify_revenue: number; shopify_nc_revenue: number;
   shopify_currency: string; shopify_orders: number; shopify_nc_orders: number;
   shopify_connected: boolean;
   nc_aov: number | null; ncac: number | null;
-  normalized_spend: number; normalized_revenue: number;
+  normalized_spend: number; normalized_google_spend: number; normalized_total_spend: number;
+  normalized_revenue: number;
   normalized_nc_revenue: number; normalized_roas: number;
   amer: number | null; inc_roas: number; roas_vs_amer_gap: number | null;
   spend_rank: number; amer_rank: number;
@@ -59,16 +61,17 @@ interface CountryRow {
 interface GeoResponse {
   countries: CountryRow[];
   totals: {
-    normalized_spend: number; normalized_revenue: number;
+    normalized_meta_spend: number; normalized_google_spend: number; normalized_spend: number;
+    normalized_revenue: number;
     normalized_nc_revenue: number; meta_roas: number; normalized_roas: number;
     amer: number | null; inc_roas: number; total_orders: number;
     total_nc_orders: number; total_purchases: number;
     base_currency: string; country_count: number; campaign_count: number;
     brand_gross_margin_pct: number; if_factor: number;
-    shopify_connected: boolean;
+    shopify_connected: boolean; google_connected: boolean;
   };
   baseCurrency: string; fxRates: Record<string, number>;
-  meta_currency: string;
+  meta_currency: string; shopify_currency: string; google_currency: string;
   date_range: { from: string; to: string }; errors?: string[]; warnings?: string[];
 }
 
@@ -80,7 +83,7 @@ const DATE_RANGES = [
   { value: 'last_90d' as DateRange, label: 'Last 90 Days' },
   { value: 'this_month' as DateRange, label: 'This Month' },
 ];
-const BASE_CURRENCIES = ['USD', 'CAD', 'GBP', 'EUR', 'AUD'];
+const BASE_CURRENCIES = ['auto', 'USD', 'CAD', 'GBP', 'EUR', 'AUD'];
 
 // ─── Formatters ─────────────────────────────────────────────────
 const $sym = (c: string) => ({USD:'$',CAD:'C$',GBP:'£',EUR:'€',AUD:'A$',NZD:'NZ$',CHF:'CHF'}[c]||c);
@@ -119,7 +122,7 @@ export default function GeoPerformancePage(){
   const [brands,setBrands]=useState<Brand[]>([]);
   const [bid,setBid]=useState('');
   const [dr,setDr]=useState<DateRange>('last_30d');
-  const [bc,setBc]=useState('USD');
+  const [bc,setBc]=useState('auto');
   const [loading,setLoading]=useState(false);
   const [data,setData]=useState<GeoResponse|null>(null);
   const [token,setToken]=useState('');
@@ -140,13 +143,14 @@ export default function GeoPerformancePage(){
       else if(bl.length>0)setBid(bl[0].id);}
   })();},[]); // eslint-disable-line
 
-  const fetchData=async()=>{if(!bid||!token)return;setLoading(true);try{const r=await fetch(`/api/geo-performance?brandId=${bid}&dateRange=${dr}&baseCurrency=${bc}`,{headers:{Authorization:`Bearer ${token}`}});const j=await r.json();if(r.ok)setData(j);}catch{}setLoading(false);};
+  const fetchData=async()=>{if(!bid||!token)return;setLoading(true);try{const r=await fetch(`/api/geo-performance?brandId=${bid}&dateRange=${dr}${bc!=='auto'?`&baseCurrency=${bc}`:''}`,{headers:{Authorization:`Bearer ${token}`}});const j=await r.json();if(r.ok)setData(j);}catch{}setLoading(false);};
   useEffect(()=>{fetchData();},[bid,dr,bc,token]); // eslint-disable-line
   useEffect(()=>{if(bid)localStorage.setItem('melch_sel_geo',bid);},[bid]);
 
-  const chartData=useMemo(()=>data?data.countries.slice(0,6).map(c=>({country:c.flag+' '+c.country,name:c.country_name,spend:c.normalized_spend,revenue:c.normalized_revenue})):[],[data]);
-  const scatterData=useMemo(()=>data?data.countries.map(c=>({country:c.flag+' '+c.country,spend:c.normalized_spend,amer:c.amer??0,eff:c.spend_efficiency,flag:c.flag,name:c.country_name})):[],[data]);
-  const sym=$sym(bc);const sb=brands.find(b=>b.id===bid);const dl=DATE_RANGES.find(d=>d.value===dr)?.label||'';
+  const chartData=useMemo(()=>data?data.countries.slice(0,6).map(c=>({country:c.flag+' '+c.country,name:c.country_name,spend:c.normalized_total_spend,revenue:c.normalized_revenue})):[],[data]);
+  const scatterData=useMemo(()=>data?data.countries.map(c=>({country:c.flag+' '+c.country,spend:c.normalized_total_spend,amer:c.amer??0,eff:c.spend_efficiency,flag:c.flag,name:c.country_name})):[],[data]);
+  const effCurr=bc==='auto'?(data?.baseCurrency||'USD'):bc;
+  const sym=$sym(effCurr);const sb=brands.find(b=>b.id===bid);const dl=DATE_RANGES.find(d=>d.value===dr)?.label||'';
   const toggle=(cc:string)=>setExp(p=>{const n=new Set(p);n.has(cc)?n.delete(cc):n.add(cc);return n;});
   const so=data?.totals?.shopify_connected??false;
 
@@ -159,7 +163,7 @@ export default function GeoPerformancePage(){
           <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
             <div>
               <h1 className="text-2xl font-bold text-white flex items-center gap-2"><Globe size={24} style={{color:G}}/>Geo Performance</h1>
-              <p className="text-sm text-gray-400 mt-1">IF {data?.totals?.if_factor||'…'}× &middot; Meta {data?.meta_currency||'?'} &middot; Base {bc}</p>
+              <p className="text-sm text-gray-400 mt-1">Base {effCurr} (auto) &middot; Shopify {data?.shopify_currency||'?'} &middot; Meta {data?.meta_currency||'?'} &middot; Google {data?.google_currency||'?'} &middot; IF {data?.totals?.if_factor||'…'}×</p>
             </div>
             <button onClick={fetchData} disabled={loading} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium" style={{background:Gd,color:G,border:`1px solid rgba(200,184,154,0.2)`}}><RefreshCw size={14} className={loading?'animate-spin':''}/>Refresh</button>
           </div>
@@ -174,14 +178,14 @@ export default function GeoPerformancePage(){
               {bo&&<><div className="fixed inset-0 z-10" onClick={()=>setBo(false)}/><div className="absolute top-full left-0 mt-1 w-56 rounded-lg z-20 py-1 max-h-64 overflow-y-auto" style={{background:'#111',border:`1px solid ${W8}`,boxShadow:'0 8px 32px rgba(0,0,0,0.4)'}}>{brands.map(b=><button key={b.id} onClick={()=>{setBid(b.id);setBo(false)}} className="w-full flex items-center gap-2 px-4 py-2 text-sm text-left" style={{color:b.id===bid?G:'#888',background:b.id===bid?Gd:'transparent'}}>{b.id===bid&&<Check size={14} style={{color:G}}/>}<span className={b.id===bid?'':'ml-[22px]'}>{b.name}</span></button>)}</div></>}</div>
             <div className="relative"><button onClick={()=>{setDo(!do_);setBo(false)}} className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium" style={{background:'#111',border:`1px solid ${W8}`,color:W}}>{dl}<ChevronDown size={14} className={do_?'rotate-180':''}/></button>
               {do_&&<><div className="fixed inset-0 z-10" onClick={()=>setDo(false)}/><div className="absolute top-full left-0 mt-1 w-48 rounded-lg z-20 py-1" style={{background:'#111',border:`1px solid ${W8}`,boxShadow:'0 8px 32px rgba(0,0,0,0.4)'}}>{DATE_RANGES.map(d=><button key={d.value} onClick={()=>{setDr(d.value);setDo(false)}} className="w-full flex items-center gap-2 px-4 py-2 text-sm text-left" style={{color:d.value===dr?G:'#888',background:d.value===dr?Gd:'transparent'}}>{d.value===dr&&<Check size={14} style={{color:G}}/>}<span className={d.value===dr?'':'ml-[22px]'}>{d.label}</span></button>)}</div></>}</div>
-            <select value={bc} onChange={(e)=>setBc(e.target.value)} className="px-3 py-2.5 rounded-lg text-sm font-medium" style={{background:'#111',border:`1px solid ${W8}`,color:W}} title="Display currency — all figures converted to this base">{BASE_CURRENCIES.map(c=><option key={c} value={c}>{c}</option>)}</select>
+            <select value={bc} onChange={(e)=>setBc(e.target.value)} className="px-3 py-2.5 rounded-lg text-sm font-medium" style={{background:'#111',border:`1px solid ${W8}`,color:W}} title="Display currency — 'auto' = Shopify store currency">{BASE_CURRENCIES.map(c=><option key={c} value={c}>{c==='auto'?`Auto (${data?.baseCurrency||'?'})`:c}</option>)}</select>
             {loading&&<Loader size={18} className="animate-spin text-gray-500"/>}
           </div>
 
           {/* ── Top stats ── */}
           {data&&!loading&&<div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
             <Stat l="Meta ROAS" v={Rx(data.totals.meta_roas)} s="Purchase value ÷ spend" i={<TrendingUp size={18}/>} c={data.totals.meta_roas>=1.5?Gn:data.totals.meta_roas>=1?Am:Rd}/>
-            <Stat l="aMER" v={Rna(data.totals.amer)} s={so?'NC rev ÷ spend':'No Shopify data'} i={<Gauge size={18}/>} c={!so?'#666':(data.totals.amer??0)>=1.5?Gn:(data.totals.amer??0)>=0.8?Am:Rd}/>
+            <Stat l="aMER" v={Rna(data.totals.amer)} s={so?'NC rev ÷ total spend':'No Shopify data'} i={<Gauge size={18}/>} c={!so?'#666':(data.totals.amer??0)>=1.5?Gn:(data.totals.amer??0)>=0.8?Am:Rd}/>
             <Stat l="Inc. ROAS" v={Rx(data.totals.inc_roas)} s={`× IF ${data.totals.if_factor}`} i={<Zap size={18}/>} c={data.totals.inc_roas>=2?Gn:data.totals.inc_roas>=1.2?Am:Rd}/>
             <Stat l="Gross Margin" v={`${data.totals.brand_gross_margin_pct}%`} s={data.totals.brand_gross_margin_pct>=35?'Strong buffer':'Tight margin'} i={<BarChart3 size={18}/>} c={data.totals.brand_gross_margin_pct>=35?Gn:Am}/>
           </div>}
@@ -208,8 +212,8 @@ export default function GeoPerformancePage(){
             {data.countries.map((c)=>{
               const isX=exp.has(c.country);
               const isXX=c.country==='XX';
-              const maxSp=data.countries[0]?.normalized_spend||1;
-              const bp=Math.min((c.normalized_spend/maxSp)*100,100);
+              const maxSp=data.countries[0]?.normalized_total_spend||1;
+              const bp=Math.min((c.normalized_total_spend/maxSp)*100,100);
 
               return <div key={c.country}>
 
@@ -239,10 +243,11 @@ export default function GeoPerformancePage(){
 
                     {/* Metric pills */}
                     <div className="flex items-center gap-0">
-                      {/* Spend */}
+                      {/* Spend (Meta + Google) */}
                       <div className="flex flex-col items-end px-4">
                         <span className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-0.5">Spend</span>
-                        <span className="text-base font-mono font-semibold text-white">{$k(c.normalized_spend,sym)}</span>
+                        <span className="text-base font-mono font-semibold text-white">{$k(c.normalized_total_spend,sym)}</span>
+                        {c.normalized_google_spend>0&&<span className="text-[9px] text-gray-600 font-mono">M {$k(c.normalized_spend,sym)} + G {$k(c.normalized_google_spend,sym)}</span>}
                       </div>
                       {/* Meta ROAS */}
                       <div className="flex flex-col items-end px-4" style={{borderLeft:`1px solid ${W4}`}}>
@@ -288,11 +293,11 @@ export default function GeoPerformancePage(){
                     <div className="flex items-center gap-2 mb-4">
                       <span className="text-lg">{c.flag}</span>
                       <span className="text-sm font-semibold text-white">{c.country_name||c.country}</span>
-                      <span className="text-xs text-gray-500">&middot; {c.campaign_count} campaign{c.campaign_count!==1?'s':''} &middot; {$k(c.normalized_spend,sym)} total spend</span>
+                      <span className="text-xs text-gray-500">&middot; {c.campaign_count} campaign{c.campaign_count!==1?'s':''} &middot; {$k(c.normalized_total_spend,sym)} total spend</span>
                     </div>
 
                     {/* 4-column metric grid with clear section labels */}
-                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 text-sm">
+                    <div className="grid grid-cols-2 lg:grid-cols-5 gap-6 text-sm">
                       {/* Meta Performance */}
                       <div className="space-y-2.5">
                         <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-widest mb-3 pb-2" style={{borderBottom:`1px solid ${W4}`}}>Meta</div>
@@ -300,6 +305,12 @@ export default function GeoPerformancePage(){
                         <Row l="Spend" v={$k(c.normalized_spend,sym)} c={W}/>
                         <Row l="Purchases" v={Nf(c.meta_purchases)} c='#999'/>
                         <Row l="Inc. ROAS" v={Rx(c.inc_roas)} c={c.inc_roas>=2?Gn:'#999'}/>
+                      </div>
+                      {/* Google */}
+                      <div className="space-y-2.5">
+                        <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-widest mb-3 pb-2" style={{borderBottom:`1px solid ${W4}`}}>Google</div>
+                        <Row l="Spend" v={c.normalized_google_spend>0?$k(c.normalized_google_spend,sym):'—'} c={c.normalized_google_spend>0?'#999':'#555'}/>
+                        <Row l="Acct Curr" v={c.google_currency} c='#999'/>
                       </div>
                       {/* Shopify NC */}
                       <div className="space-y-2.5">
