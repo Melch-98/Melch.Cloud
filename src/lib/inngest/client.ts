@@ -51,9 +51,4 @@ export type Events = {
       shop_domain: string;
     };
   };
-  'submission/created': {
-    data: {
-      submission_id: string;
-    };
-  };
 };

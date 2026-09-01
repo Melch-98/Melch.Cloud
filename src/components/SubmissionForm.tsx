@@ -607,6 +607,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
           .insert({
             brand_id: selectedBrandId,
             user_id: user?.id,
+            drive_sync_status: 'pending',
             batch_name: batch.batchName,
             creative_type: (() => {
               // Derive from file-level creative types — use the most common, or 'mixed'

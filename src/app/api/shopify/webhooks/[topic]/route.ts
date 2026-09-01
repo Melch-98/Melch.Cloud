@@ -87,8 +87,9 @@ export async function POST(
     }
   } catch (err) {
     console.error('[shopify-webhook] dispatch failed', err);
-    // Still return 200 — we don't want Shopify to retry forever if Inngest is down.
-    // Inngest events themselves will retry inside the function.
+    // Return 500 so Shopify retries with backoff. Silently returning 200 here
+    // would permanently drop the order/refund event if Inngest is down.
+    return NextResponse.json({ error: 'Dispatch failed' }, { status: 500 });
   }
 
   return NextResponse.json({ ok: true });

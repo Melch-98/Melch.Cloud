@@ -13,26 +13,54 @@ export const maxDuration = 300;
 
 /**
  * POST /api/admin/retry-sync
- * Body: { submission_id: string, secret: string }
+ * Body: { submission_id: string }
  *
- * Service-role retry for stuck submissions. Resumable — skips files that
+ * Admin-only retry for stuck submissions. Resumable — skips files that
  * already have a dropbox_path set from a previous partial run.
+ *
+ * Auth is an admin session (Authorization: Bearer <access_token>), NOT a raw
+ * service-role key in the request body.
  */
 export async function POST(req: NextRequest) {
-  let body: { submission_id?: string; secret?: string };
+  let body: { submission_id?: string };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
-  if (body.secret !== process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
   if (!body.submission_id) {
     return NextResponse.json({ error: 'submission_id required' }, { status: 400 });
   }
 
+  // Admin session auth
+  const authHeader = req.headers.get('authorization');
+  const token = authHeader?.replace('Bearer ', '');
+  if (!token) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const supabase = createServiceClient();
+  if (!supabase) {
+    return NextResponse.json(
+      { error: 'Server config error: missing Supabase credentials' },
+      { status: 500 }
+    );
+  }
+
+  const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+  if (authError || !user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const { data: profile } = await supabase
+    .from('users_profile')
+    .select('role')
+    .eq('id', user.id)
+    .single();
+
+  if (!profile || profile.role !== 'admin') {
+    return NextResponse.json({ error: 'Forbidden — admin only' }, { status: 403 });
+  }
   const { data: submission, error: subError } = await supabase
     .from('submissions')
     .select(

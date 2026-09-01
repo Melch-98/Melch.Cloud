@@ -62,6 +62,11 @@ CREATE TABLE submissions (
   is_flexible boolean DEFAULT false,
   is_whitelist boolean DEFAULT false,
   creator_social_handle text DEFAULT '',
+  drive_sync_status text,
+  drive_folder_url text,
+  drive_folder_id text,
+  drive_synced_at timestamptz,
+  drive_sync_error text,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now(),
   CONSTRAINT not_both_carousel_and_flexible CHECK (NOT (is_carousel AND is_flexible))
@@ -89,6 +94,8 @@ CREATE TABLE submission_files (
   launch_time time,
   ad_name text,
   notes text,
+  dropbox_path text,
+  dropbox_job_id text,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );

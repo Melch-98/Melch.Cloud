@@ -27,17 +27,29 @@ export const maxDuration = 300;
  *   - syncing   → stuck mid-sync (function timed out, status never updated)
  *   - partial   → some files synced before timeout/error
  *   - failed    → explicit failure, worth retrying
+ *   - null      → pre-pipeline insertion or silently-failed first sync, treated as pending
  *
- * Skips: synced (done), null (pre-pipeline submissions)
+ * Skips: synced (done)
  */
 async function runSync() {
   const supabase = createServiceClient();
+  if (!supabase) {
+    return NextResponse.json(
+      { error: 'Server config error: missing Supabase credentials' },
+      { status: 500 }
+    );
+  }
 
-  // Find all submissions that need syncing, ordered oldest-first
+  // Find all submissions that need syncing, ordered oldest-first.
+  // `drive_sync_status` is null for submissions inserted before the status
+  // pipeline or whose initial sync-drive call failed silently — treat those
+  // as pending too, otherwise they'd starve forever.
   const { data: stuck, error: queryError } = await supabase
     .from('submissions')
     .select('id, batch_name, brand_id, drive_sync_status, created_at')
-    .in('drive_sync_status', ['pending', 'syncing', 'partial', 'failed'])
+    .or(
+      'drive_sync_status.in.(pending,syncing,partial,failed),drive_sync_status.is.null'
+    )
     .order('created_at', { ascending: true })
     .limit(50);
 
@@ -65,6 +77,7 @@ async function runSync() {
   // Track time — leave 30s buffer before Vercel kills us at 300s
   const startTime = Date.now();
   const TIME_LIMIT_MS = 270_000; // 270s = 4.5 minutes
+  const deadlineMs = startTime + TIME_LIMIT_MS;
 
   for (const sub of stuck) {
     // Check if we're running low on time
@@ -81,7 +94,7 @@ async function runSync() {
     }
 
     try {
-      const result = await syncOneBatch(supabase, sub.id);
+      const result = await syncOneBatch(supabase, sub.id, deadlineMs);
       results.push({
         id: sub.id,
         batch_name: sub.batch_name,
@@ -106,13 +119,23 @@ async function runSync() {
   }
 
   const totalUploaded = results.reduce((s, r) => s + r.uploaded, 0);
-  return NextResponse.json({
-    ok: true,
-    processed: results.length,
-    totalPending: stuck.length,
-    totalUploaded,
-    results,
-  });
+  const failures = results.filter((r) => r.status === 'error');
+  failures.forEach((r) =>
+    console.error(`[sync-pending] batch ${r.batch_name} (${r.id}) failed: ${r.error}`)
+  );
+  // Surface a total failure (every batch errored) as a non-200 so Vercel logs
+  // and alerts on it. Partial progress still returns 200 but logs the failures.
+  const totalFailure = results.length > 0 && failures.length === results.length;
+  return NextResponse.json(
+    {
+      ok: !totalFailure,
+      processed: results.length,
+      totalPending: stuck.length,
+      totalUploaded,
+      results,
+    },
+    { status: totalFailure ? 500 : 200 }
+  );
 }
 
 /**
@@ -120,7 +143,8 @@ async function runSync() {
  */
 async function syncOneBatch(
   supabase: ReturnType<typeof createServiceClient>,
-  submissionId: string
+  submissionId: string,
+  deadlineMs: number
 ): Promise<{ status: string; uploaded: number; skipped: number; total: number; error?: string }> {
   // Load full submission data
   const { data: submission, error: subError } = await supabase
@@ -158,6 +182,7 @@ async function syncOneBatch(
 
   // Check in-progress jobs first
   let completedFromJobs = 0;
+  const retryFileIds = new Set<string>();
   for (const f of inProgressFiles) {
     try {
       const status = await checkSaveUrlJob(f.dropbox_job_id);
@@ -174,6 +199,7 @@ async function syncOneBatch(
           .update({ dropbox_job_id: null })
           .eq('id', f.id);
         pendingFiles.push(f); // retry this file now
+        retryFileIds.add(f.id);
       }
       // 'in_progress' → leave it, check again next cron run
     } catch {
@@ -183,11 +209,13 @@ async function syncOneBatch(
         .update({ dropbox_job_id: null })
         .eq('id', f.id);
       pendingFiles.push(f);
+      retryFileIds.add(f.id);
     }
   }
 
   const alreadySynced = allFiles.filter((f: any) => f.dropbox_path).length + completedFromJobs;
-  const stillInProgress = inProgressFiles.length - completedFromJobs - pendingFiles.filter(f => inProgressFiles.includes(f)).length;
+  // In-progress jobs that are neither completed nor moved back to pending.
+  const stillInProgress = inProgressFiles.length - completedFromJobs - retryFileIds.size;
 
   // All files done (synced or just completed from jobs)
   if (pendingFiles.length === 0 && stillInProgress === 0 && alreadySynced === allFiles.length) {
@@ -236,6 +264,9 @@ async function syncOneBatch(
     let uploadedCount = completedFromJobs;
     for (const f of pendingFiles) {
       const signedUrl = await getSignedStorageUrl(f.file_url, 3600);
+      if (!signedUrl) {
+        throw new Error(`Failed to generate signed URL for ${f.file_name}`);
+      }
       const filePath = `${batchPath}/${sanitizeDropboxPathSegment(f.file_name)}`;
       const result = await saveUrlToDropbox({ url: signedUrl, path: filePath });
 
@@ -257,6 +288,9 @@ async function syncOneBatch(
         // Poll up to 60s with 2s intervals
         let settled = false;
         for (let elapsed = 0; elapsed < 60_000; elapsed += 2_000) {
+          // If we're about to hit the function time limit, stop polling.
+          // dropbox_job_id stays set, so the next cron run resumes the poll.
+          if (Date.now() >= deadlineMs) break;
           await new Promise(r => setTimeout(r, 2_000));
           const status = await checkSaveUrlJob(jobId);
           if (status['.tag'] === 'complete') {
@@ -362,8 +396,9 @@ export async function GET(req: NextRequest) {
   const authHeader = req.headers.get('authorization');
   const cronSecret = process.env.CRON_SECRET;
 
-  // Allow if CRON_SECRET matches, or if no CRON_SECRET is set (dev mode)
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+  // Fail closed: require CRON_SECRET to be set AND to match. Without it the
+  // endpoint would be open to anyone hitting the URL directly.
+  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -382,6 +417,12 @@ export async function POST(req: NextRequest) {
 
   // Check for admin session
   const supabase = createServiceClient();
+  if (!supabase) {
+    return NextResponse.json(
+      { error: 'Server config error: missing Supabase credentials' },
+      { status: 500 }
+    );
+  }
   const token = authHeader?.replace('Bearer ', '');
   if (!token) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

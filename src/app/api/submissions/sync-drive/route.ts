@@ -39,6 +39,12 @@ export async function POST(req: NextRequest) {
   }
 
   const supabase = createServiceClient();
+  if (!supabase) {
+    return NextResponse.json(
+      { error: 'Server config error: missing Supabase credentials' },
+      { status: 500 }
+    );
+  }
 
   // Load submission + brand + files (include dropbox_path for resume check)
   const { data: submission, error: subError } = await supabase
@@ -116,6 +122,9 @@ export async function POST(req: NextRequest) {
     const uploaded: Array<{ name: string; path: string }> = [];
     for (const f of pendingFiles) {
       const signedUrl = await getSignedStorageUrl(f.file_url, 3600);
+      if (!signedUrl) {
+        throw new Error(`Failed to generate signed URL for ${f.file_name}`);
+      }
       const filePath = `${batchPath}/${sanitizeDropboxPathSegment(f.file_name)}`;
       const result = await saveUrlToDropbox({ url: signedUrl, path: filePath });
 
