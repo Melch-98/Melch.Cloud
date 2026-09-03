@@ -384,9 +384,24 @@ function dateRangeToMeta(range: string): { since: string; until: string } | stri
       since.setDate(since.getDate() - 90);
       return { since: fmt(since), until: fmt(now) };
     }
+    case 'last_180d': {
+      const since = new Date(now);
+      since.setDate(since.getDate() - 180);
+      return { since: fmt(since), until: fmt(now) };
+    }
+    case 'last_365d': {
+      const since = new Date(now);
+      since.setDate(since.getDate() - 365);
+      return { since: fmt(since), until: fmt(now) };
+    }
     case 'this_month': {
       const since = new Date(now.getFullYear(), now.getMonth(), 1);
       return { since: fmt(since), until: fmt(now) };
+    }
+    case 'last_month': {
+      const since = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const until = new Date(now.getFullYear(), now.getMonth(), 0);
+      return { since: fmt(since), until: fmt(until) };
     }
     default: {
       const since = new Date(now);

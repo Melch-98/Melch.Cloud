@@ -79,7 +79,7 @@ interface Campaign {
 
 type StatusFilter = 'all' | 'active' | 'paused';
 
-type DateRange = 'last_7d' | 'last_14d' | 'last_30d' | 'last_90d' | 'this_month';
+type DateRange = 'last_7d' | 'last_14d' | 'last_30d' | 'last_90d' | 'last_180d' | 'last_365d' | 'this_month' | 'last_month';
 type SortKey = 'spend' | 'roas' | 'purchases' | 'purchaseValue' | 'ctr' | 'cpc' | 'cpm' | 'impressions' | 'clicks' | 'cpa';
 type SortDir = 'asc' | 'desc';
 type PlatformFilter = 'all' | 'meta' | 'google';
@@ -89,7 +89,10 @@ const DATE_RANGES: { value: DateRange; label: string }[] = [
   { value: 'last_14d', label: 'Last 14 Days' },
   { value: 'last_30d', label: 'Last 30 Days' },
   { value: 'last_90d', label: 'Last 90 Days' },
+  { value: 'last_180d', label: 'Last 6 Months' },
+  { value: 'last_365d', label: 'Last 12 Months' },
   { value: 'this_month', label: 'This Month' },
+  { value: 'last_month', label: 'Last Month' },
 ];
 
 // ─── Formatters ─────────────────────────────────────────────────
@@ -148,7 +151,7 @@ function ChartTooltip({ active, payload, label }: any) {
           <div className="w-2 h-2 rounded-full" style={{ backgroundColor: p.color }} />
           <span style={{ color: '#999' }}>{p.name}:</span>
           <span className="font-semibold" style={{ color: '#F5F5F8' }}>
-            {p.name.includes('Spend') || p.name.includes('Revenue') ? fmtCurrency(p.value) : fmtNum(p.value)}
+            {p.name.includes('Spend') || p.name.includes('Revenue') || p.name.includes('CPM') ? fmtCurrency(p.value) : fmtNum(p.value)}
           </span>
         </div>
       ))}
@@ -343,7 +346,7 @@ export default function CampaignPerformancePage() {
   const [sortKey, setSortKey] = useState<SortKey>('spend');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [selectedCampaign, setSelectedCampaign] = useState<string | null>(null);
-  const [chartMetric, setChartMetric] = useState<'spend' | 'roas' | 'purchases'>('spend');
+  const [chartMetric, setChartMetric] = useState<'spend' | 'roas' | 'purchases' | 'cpm'>('spend');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');
 
   // ── Auth & brands ──
@@ -514,22 +517,24 @@ export default function CampaignPerformancePage() {
 
   // Build daily chart data (aggregate across all filtered campaigns)
   const chartData = useMemo(() => {
-    const byDate = new Map<string, { date: string; metaSpend: number; googleSpend: number; metaRev: number; googleRev: number; metaPurchases: number; googlePurchases: number }>();
+    const byDate = new Map<string, { date: string; metaSpend: number; googleSpend: number; metaRev: number; googleRev: number; metaPurchases: number; googlePurchases: number; metaImpressions: number; googleImpressions: number }>();
 
     for (const c of filteredCampaigns) {
       for (const d of c.daily) {
         if (!byDate.has(d.date)) {
-          byDate.set(d.date, { date: d.date, metaSpend: 0, googleSpend: 0, metaRev: 0, googleRev: 0, metaPurchases: 0, googlePurchases: 0 });
+          byDate.set(d.date, { date: d.date, metaSpend: 0, googleSpend: 0, metaRev: 0, googleRev: 0, metaPurchases: 0, googlePurchases: 0, metaImpressions: 0, googleImpressions: 0 });
         }
         const entry = byDate.get(d.date)!;
         if (c.platform === 'meta') {
           entry.metaSpend += d.spend;
           entry.metaRev += d.purchaseValue;
           entry.metaPurchases += d.purchases;
+          entry.metaImpressions += d.impressions;
         } else {
           entry.googleSpend += d.spend;
           entry.googleRev += d.purchaseValue;
           entry.googlePurchases += d.purchases;
+          entry.googleImpressions += d.impressions;
         }
       }
     }
@@ -974,7 +979,7 @@ export default function CampaignPerformancePage() {
                     Daily Performance
                   </h2>
                   <div className="flex rounded-md overflow-hidden" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.04)' }}>
-                    {(['spend', 'roas', 'purchases'] as const).map((m) => (
+                    {(['spend', 'roas', 'purchases', 'cpm'] as const).map((m) => (
                       <button
                         key={m}
                         onClick={() => setChartMetric(m)}
@@ -984,7 +989,7 @@ export default function CampaignPerformancePage() {
                           color: chartMetric === m ? GOLD : '#555',
                         }}
                       >
-                        {m === 'spend' ? 'Spend & Revenue' : m === 'roas' ? 'ROAS' : 'Purchases'}
+                        {m === 'spend' ? 'Spend & Revenue' : m === 'roas' ? 'ROAS' : m === 'purchases' ? 'Purchases' : 'CPM'}
                       </button>
                     ))}
                   </div>
@@ -1045,6 +1050,32 @@ export default function CampaignPerformancePage() {
                       <Bar dataKey="metaPurchases" name="Meta Purchases" fill={META_BLUE} radius={[2, 2, 0, 0]} />
                       <Bar dataKey="googlePurchases" name="Google Purchases" fill={GOOGLE_GREEN} radius={[2, 2, 0, 0]} />
                     </BarChart>
+                  ) : chartMetric === 'cpm' ? (
+                    <AreaChart data={chartData.map(d => ({
+                      ...d,
+                      metaCPM: d.metaImpressions > 0 ? (d.metaSpend / d.metaImpressions) * 1000 : 0,
+                      googleCPM: d.googleImpressions > 0 ? (d.googleSpend / d.googleImpressions) * 1000 : 0,
+                    }))}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                      <XAxis
+                        dataKey="date"
+                        tick={{ fill: '#444', fontSize: 10 }}
+                        tickFormatter={(v) => { const d = new Date(v + 'T12:00:00'); return `${d.getMonth()+1}/${d.getDate()}`; }}
+                        axisLine={{ stroke: 'rgba(255,255,255,0.04)' }}
+                        tickLine={false}
+                      />
+                      <YAxis
+                        tick={{ fill: '#444', fontSize: 10 }}
+                        tickFormatter={(v) => `$${v.toFixed(0)}`}
+                        axisLine={false}
+                        tickLine={false}
+                        width={40}
+                      />
+                      <Tooltip content={<ChartTooltip />} />
+                      <Legend wrapperStyle={{ fontSize: '10px', color: '#666' }} iconType="circle" iconSize={6} />
+                      <Area type="monotone" dataKey="metaCPM" name="Meta CPM" stroke={META_BLUE} fill="none" strokeWidth={2} />
+                      <Area type="monotone" dataKey="googleCPM" name="Google CPM" stroke={GOOGLE_GREEN} fill="none" strokeWidth={2} />
+                    </AreaChart>
                   ) : (
                     <AreaChart data={chartData.map(d => ({
                       ...d,
