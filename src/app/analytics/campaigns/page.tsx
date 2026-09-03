@@ -110,6 +110,18 @@ const fmtNum = (n: number) => {
 const fmtPct = (n: number) => `${n.toFixed(2)}%`;
 const fmtDec = (n: number) => n.toFixed(2);
 
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+// Formats a chart bucket label: daily "YYYY-MM-DD" -> "M/D", monthly "YYYY-MM" -> "Mon YYYY"
+const formatChartLabel = (v: string) => {
+  if (!v) return '';
+  if (/^\d{4}-\d{2}$/.test(v)) {
+    const [y, m] = v.split('-');
+    return `${MONTHS_SHORT[parseInt(m, 10) - 1]} ${y}`;
+  }
+  const d = new Date(v + 'T12:00:00');
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+};
+
 // ─── Helpers ────────────────────────────────────────────────────
 
 // ─── Platform Badge ─────────────────────────────────────────────
@@ -144,7 +156,7 @@ function ChartTooltip({ active, payload, label }: any) {
       }}
     >
       <div className="text-[10px] font-semibold mb-1" style={{ color: '#666' }}>
-        {label}
+      {formatChartLabel(String(label))}
       </div>
       {payload.map((p: any, i: number) => (
         <div key={i} className="flex items-center gap-2 text-xs">
@@ -515,16 +527,21 @@ export default function CampaignPerformancePage() {
   const dateLabel = DATE_RANGES.find(d => d.value === dateRange)?.label || dateRange;
   const platformLabel = platformFilter === 'all' ? 'All Platforms' : platformFilter === 'meta' ? 'Meta Only' : 'Google Only';
 
+  // Long ranges bucket by month instead of day so the chart stays readable
+  const isMonthlyView = dateRange === 'last_90d' || dateRange === 'last_180d' || dateRange === 'last_365d';
+  const bucketKey = (date: string) => (isMonthlyView ? date.slice(0, 7) : date);
+
   // Build daily chart data (aggregate across all filtered campaigns)
   const chartData = useMemo(() => {
     const byDate = new Map<string, { date: string; metaSpend: number; googleSpend: number; metaRev: number; googleRev: number; metaPurchases: number; googlePurchases: number; metaImpressions: number; googleImpressions: number }>();
 
     for (const c of filteredCampaigns) {
       for (const d of c.daily) {
-        if (!byDate.has(d.date)) {
-          byDate.set(d.date, { date: d.date, metaSpend: 0, googleSpend: 0, metaRev: 0, googleRev: 0, metaPurchases: 0, googlePurchases: 0, metaImpressions: 0, googleImpressions: 0 });
+        const key = bucketKey(d.date);
+        if (!byDate.has(key)) {
+          byDate.set(key, { date: key, metaSpend: 0, googleSpend: 0, metaRev: 0, googleRev: 0, metaPurchases: 0, googlePurchases: 0, metaImpressions: 0, googleImpressions: 0 });
         }
-        const entry = byDate.get(d.date)!;
+        const entry = byDate.get(key)!;
         if (c.platform === 'meta') {
           entry.metaSpend += d.spend;
           entry.metaRev += d.purchaseValue;
@@ -540,13 +557,33 @@ export default function CampaignPerformancePage() {
     }
 
     return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
-  }, [filteredCampaigns]);
+  }, [filteredCampaigns, isMonthlyView]);
 
   // Campaign-specific chart data
   const campaignChartData = useMemo(() => {
     if (!selectedCampaign) return null;
     const c = campaigns.find(c => c.campaignId === selectedCampaign);
     if (!c) return null;
+    if (isMonthlyView) {
+      const byMonth = new Map<string, { spend: number; purchaseValue: number; purchases: number }>();
+      for (const d of c.daily) {
+        const key = d.date.slice(0, 7);
+        const e = byMonth.get(key) || { spend: 0, purchaseValue: 0, purchases: 0 };
+        e.spend += d.spend;
+        e.purchaseValue += d.purchaseValue;
+        e.purchases += d.purchases;
+        byMonth.set(key, e);
+      }
+      return Array.from(byMonth.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([date, v]) => ({
+          date,
+          Spend: v.spend,
+          Revenue: v.purchaseValue,
+          Purchases: v.purchases,
+          ROAS: v.spend > 0 ? v.purchaseValue / v.spend : 0,
+        }));
+    }
     return c.daily.map(d => ({
       date: d.date,
       Spend: d.spend,
@@ -554,7 +591,7 @@ export default function CampaignPerformancePage() {
       Purchases: d.purchases,
       ROAS: d.spend > 0 ? d.purchaseValue / d.spend : 0,
     }));
-  }, [selectedCampaign, campaigns]);
+  }, [selectedCampaign, campaigns, isMonthlyView]);
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir(d => d === 'desc' ? 'asc' : 'desc');
@@ -976,7 +1013,7 @@ export default function CampaignPerformancePage() {
               >
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-sm font-bold" style={{ color: '#F5F5F8' }}>
-                    Daily Performance
+                    {isMonthlyView ? 'Monthly Performance' : 'Daily Performance'}
                   </h2>
                   <div className="flex rounded-md overflow-hidden" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.04)' }}>
                     {(['spend', 'roas', 'purchases', 'cpm'] as const).map((m) => (
@@ -1012,7 +1049,7 @@ export default function CampaignPerformancePage() {
                       <XAxis
                         dataKey="date"
                         tick={{ fill: '#444', fontSize: 10 }}
-                        tickFormatter={(v) => { const d = new Date(v + 'T12:00:00'); return `${d.getMonth()+1}/${d.getDate()}`; }}
+                        tickFormatter={(v) => formatChartLabel(v)}
                         axisLine={{ stroke: 'rgba(255,255,255,0.04)' }}
                         tickLine={false}
                       />
@@ -1040,7 +1077,7 @@ export default function CampaignPerformancePage() {
                       <XAxis
                         dataKey="date"
                         tick={{ fill: '#444', fontSize: 10 }}
-                        tickFormatter={(v) => { const d = new Date(v + 'T12:00:00'); return `${d.getMonth()+1}/${d.getDate()}`; }}
+                        tickFormatter={(v) => formatChartLabel(v)}
                         axisLine={{ stroke: 'rgba(255,255,255,0.04)' }}
                         tickLine={false}
                       />
@@ -1060,7 +1097,7 @@ export default function CampaignPerformancePage() {
                       <XAxis
                         dataKey="date"
                         tick={{ fill: '#444', fontSize: 10 }}
-                        tickFormatter={(v) => { const d = new Date(v + 'T12:00:00'); return `${d.getMonth()+1}/${d.getDate()}`; }}
+                        tickFormatter={(v) => formatChartLabel(v)}
                         axisLine={{ stroke: 'rgba(255,255,255,0.04)' }}
                         tickLine={false}
                       />
@@ -1086,7 +1123,7 @@ export default function CampaignPerformancePage() {
                       <XAxis
                         dataKey="date"
                         tick={{ fill: '#444', fontSize: 10 }}
-                        tickFormatter={(v) => { const d = new Date(v + 'T12:00:00'); return `${d.getMonth()+1}/${d.getDate()}`; }}
+                        tickFormatter={(v) => formatChartLabel(v)}
                         axisLine={{ stroke: 'rgba(255,255,255,0.04)' }}
                         tickLine={false}
                       />
@@ -1252,7 +1289,7 @@ export default function CampaignPerformancePage() {
                         <XAxis
                           dataKey="date"
                           tick={{ fill: '#444', fontSize: 10 }}
-                          tickFormatter={(v) => { const d = new Date(v + 'T12:00:00'); return `${d.getMonth()+1}/${d.getDate()}`; }}
+                          tickFormatter={(v) => formatChartLabel(v)}
                           axisLine={{ stroke: 'rgba(255,255,255,0.04)' }}
                           tickLine={false}
                         />
