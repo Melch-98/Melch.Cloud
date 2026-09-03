@@ -152,12 +152,16 @@ function fmtDate(d: Date): string { return d.toISOString().split('T')[0]; }
 
 function dateRangeToMeta(range: string): { since: string; until: string } {
   const now = new Date();
-  const until = fmtDate(now);
-  // Meta's time_range `since` and `until` are BOTH inclusive, so "last N days"
-  // (ending today) must start at now - (N - 1). The old code subtracted N,
-  // which pulled N+1 days and overstated spend vs Meta Ads Manager.
+  // "Last N days" = N FULL days ending yesterday (the last complete day).
+  // This matches the bfcm-pacing route and the daily meta_report.py convention.
+  // Yesterday avoids the partial-today distortion and gives stable numbers.
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const until = fmtDate(yesterday);
+  // since = N days before until. Both since and until are inclusive, so
+  // since = yesterday - (N - 1) gives exactly N days.
   const daysFor = (n: number): string => {
-    const d = new Date(now);
+    const d = new Date(yesterday);
     d.setDate(d.getDate() - (n - 1));
     return fmtDate(d);
   };
