@@ -170,7 +170,7 @@ function dateRangeToMeta(range: string): { since: string; until: string } {
     case 'last_14d': return { since: daysFor(14), until };
     case 'last_30d': return { since: daysFor(30), until };
     case 'last_90d': return { since: daysFor(90), until };
-    case 'this_month': return { since: fmtDate(new Date(now.getFullYear(), now.getMonth(), 1)), until };
+    case 'this_month': return { since: fmtDate(new Date(now.getFullYear(), now.getMonth(), 1)), until: fmtDate(now) };
     default: return { since: daysFor(30), until };
   }
 }
