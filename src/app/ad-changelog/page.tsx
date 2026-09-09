@@ -12,6 +12,7 @@ import {
   PlusCircle,
   MinusCircle,
   Filter,
+  AlertCircle,
 } from 'lucide-react';
 import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
@@ -146,6 +147,10 @@ export default function AdChangelogPage() {
   const [filterPlatform, setFilterPlatform] = useState<'all' | 'meta' | 'google'>('all');
   const [filterType, setFilterType] = useState<string>('all');
   const [lastRefreshed, setLastRefreshed] = useState<string | null>(null);
+  const [entriesLoading, setEntriesLoading] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [scanInfo, setScanInfo] = useState<string | null>(null);
 
   // ─── Auth ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -200,12 +205,24 @@ export default function AdChangelogPage() {
   // ─── Fetch changelog entries ────────────────────────────────────
   const fetchEntries = useCallback(async () => {
     if (!authToken || !selectedBrandId) return;
-    const res = await fetch(`/api/ad-changelog?brand_id=${selectedBrandId}&limit=200`, {
-      headers: { Authorization: `Bearer ${authToken}` },
-    });
-    if (res.ok) {
-      const { entries: data } = await res.json();
-      setEntries(data || []);
+    setEntriesLoading(true);
+    setFetchError(null);
+    try {
+      const res = await fetch(`/api/ad-changelog?brand_id=${selectedBrandId}&limit=200`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setFetchError(body?.error || `Failed to load changelog (${res.status})`);
+        setEntries([]);
+        return;
+      }
+      setEntries(body.entries || []);
+    } catch (e: unknown) {
+      setFetchError(e instanceof Error ? e.message : 'Failed to load changelog');
+      setEntries([]);
+    } finally {
+      setEntriesLoading(false);
     }
   }, [authToken, selectedBrandId]);
 
@@ -217,6 +234,8 @@ export default function AdChangelogPage() {
   const handleRefresh = async () => {
     if (!authToken || !selectedBrandId || refreshing) return;
     setRefreshing(true);
+    setScanError(null);
+    setScanInfo(null);
     try {
       const res = await fetch('/api/ad-changelog', {
         method: 'POST',
@@ -226,15 +245,26 @@ export default function AdChangelogPage() {
         },
         body: JSON.stringify({ brand_id: selectedBrandId }),
       });
-      const result = await res.json();
-      if (result.success) {
-        setLastRefreshed(new Date().toISOString());
-        await fetchEntries();
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok || !result.success) {
+        setScanError(result?.error || `Scan failed (${res.status})`);
+        return;
       }
-    } catch {
-      // silent
+      setLastRefreshed(new Date().toISOString());
+      const scanned = result.entities_scanned ?? 0;
+      const changes = result.changes_detected ?? 0;
+      let info = `Scanned ${scanned} entities · ${changes} change${changes === 1 ? '' : 's'} detected`;
+      if (Array.isArray(result.errors) && result.errors.length > 0) {
+        info += ` · warnings: ${result.errors.join('; ')}`;
+        setScanError(result.errors.join(' · '));
+      }
+      setScanInfo(info);
+      await fetchEntries();
+    } catch (e: unknown) {
+      setScanError(e instanceof Error ? e.message : 'Scan failed');
+    } finally {
+      setRefreshing(false);
     }
-    setRefreshing(false);
   };
 
   // ─── Brand switch ───────────────────────────────────────────────
@@ -384,35 +414,67 @@ export default function AdChangelogPage() {
           ))}
         </div>
 
-        {/* ── Last refreshed ──────────────────────────────────── */}
-        {lastRefreshed && (
-          <p className="text-[10px] mb-4" style={{ color: TEXT_DIM }}>
-            Last scanned: {formatDate(lastRefreshed)}
+        {/* ── Status banners ──────────────────────────────────── */}
+        {(lastRefreshed || scanInfo) && (
+          <p className="text-[10px] mb-3" style={{ color: TEXT_DIM }}>
+            {scanInfo || `Last scanned: ${formatDate(lastRefreshed!)}`}
           </p>
+        )}
+        {(fetchError || scanError) && (
+          <div
+            className="flex items-start gap-2 mb-4 px-4 py-3 rounded-xl text-sm"
+            style={{
+              background: 'rgba(248,113,113,0.08)',
+              border: '1px solid rgba(248,113,113,0.25)',
+              color: '#F87171',
+            }}
+          >
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              {fetchError && <p>{fetchError}</p>}
+              {scanError && <p>{scanError}</p>}
+            </div>
+          </div>
         )}
 
         {/* ── Timeline ────────────────────────────────────────── */}
-        {filtered.length === 0 ? (
+        {entriesLoading ? (
+          <div
+            className="rounded-xl p-12 flex flex-col items-center justify-center gap-3"
+            style={{ background: BG_CARD, border: `1px solid ${BORDER}` }}
+          >
+            <Loader className="animate-spin" size={28} style={{ color: GOLD }} />
+            <p className="text-xs" style={{ color: TEXT_DIM }}>
+              Loading changelog…
+            </p>
+          </div>
+        ) : filtered.length === 0 ? (
           <div
             className="rounded-xl p-12 text-center"
             style={{ background: BG_CARD, border: `1px solid ${BORDER}` }}
           >
             <Activity size={36} style={{ color: TEXT_DIM }} className="mx-auto mb-3" />
             <p className="text-sm mb-1" style={{ color: TEXT_MUTED }}>
-              No changes detected yet
+              {entries.length > 0
+                ? 'No changes match these filters'
+                : 'No changes detected yet'}
             </p>
             <p className="text-xs mb-4" style={{ color: TEXT_DIM }}>
-              Click &quot;Refresh Now&quot; to scan your ad accounts for the first time.
+              {entries.length > 0
+                ? 'Try clearing platform or type filters.'
+                : 'Click “Refresh Now” to snapshot Meta campaigns/ad sets and Google campaigns (Pipeboard). First scan seeds the baseline; later scans show diffs. Scanning is manual — there is no weekly cron.'}
             </p>
-            <button
-              onClick={handleRefresh}
-              disabled={refreshing}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium"
-              style={{ background: GOLD, color: '#0a0a0a' }}
-            >
-              <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
-              {refreshing ? 'Scanning...' : 'Scan Now'}
-            </button>
+            {entries.length === 0 && (
+              <button
+                onClick={handleRefresh}
+                disabled={refreshing || !selectedBrandId}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
+                style={{ background: GOLD, color: '#0a0a0a' }}
+              >
+                <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
+                {refreshing ? 'Scanning...' : 'Scan Now'}
+              </button>
+            )}
           </div>
         ) : (
           <div className="space-y-6">

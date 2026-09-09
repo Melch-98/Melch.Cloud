@@ -1,3 +1,9 @@
+> **ARCHIVED — historical Hermes dump (June 2026).**  
+> This file is **NOT** the source of truth for coding agents or humans.  
+> Use **[AGENTS.md](../../AGENTS.md)** at the repo root instead.
+
+---
+
 # Melch.Cloud -- Complete Project Context for Autonomous Agent
 
 > This document contains everything an autonomous AI agent needs to understand and contribute to the Melch.Cloud codebase. Written June 2026.
