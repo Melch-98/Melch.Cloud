@@ -67,6 +67,12 @@ export async function POST(request: NextRequest) {
       .select('id, email, brand_id');
 
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    if (!data || data.length === 0) {
+      return NextResponse.json(
+        { error: 'No user updated — assignment did not apply' },
+        { status: 404 }
+      );
+    }
     return NextResponse.json({ ok: true, updated: data });
   }
 

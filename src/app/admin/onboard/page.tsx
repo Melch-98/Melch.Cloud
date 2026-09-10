@@ -17,6 +17,7 @@ import {
   ArrowLeft,
   Archive,
   RotateCcw,
+  Activity,
 } from 'lucide-react';
 import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
@@ -149,6 +150,17 @@ export default function OnboardPage() {
   const [newUsers, setNewUsers] = useState<{ email: string; fullName: string; role: string }[]>([
     { email: '', fullName: '', role: 'strategist' },
   ]);
+
+  type InviteUserResult = {
+    email: string;
+    ok?: boolean;
+    error?: string;
+    actionLink?: string | null;
+    welcomeEmail?: { sent?: boolean; error?: string; skipped?: string } | null;
+  };
+  const [inviteResults, setInviteResults] = useState<InviteUserResult[]>([]);
+  const [healthByBrand, setHealthByBrand] = useState<Record<string, { key: string; label: string; status: string; detail: string }[]>>({});
+
 
   /* Created brand ID (after step 1) */
   const [createdBrandId, setCreatedBrandId] = useState<string | null>(null);
@@ -329,9 +341,11 @@ export default function OnboardPage() {
       }),
     });
 
+    const result = await res.json();
     if (!res.ok) {
-      const result = await res.json();
       setError(result.error || 'Failed to create users');
+    } else {
+      setInviteResults(result.results || []);
     }
     setSaving(false);
     setStep('review');
@@ -373,6 +387,27 @@ export default function OnboardPage() {
     },
     [archivedBrands]
   );
+
+  useEffect(() => {
+    if (mode !== 'manage' || brands.length === 0) return;
+    (async () => {
+      try {
+        const { data: session } = await supabase.auth.getSession();
+        const token = session.session?.access_token;
+        if (!token) return;
+        const res = await fetch('/api/admin/brand-health', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const map: Record<string, { key: string; label: string; status: string; detail: string }[]> = {};
+        for (const b of data.brands || []) map[b.brandId] = b.chips || [];
+        setHealthByBrand(map);
+      } catch {
+        /* non-fatal */
+      }
+    })();
+  }, [mode, brands.length, supabase]);
 
   /* ---------------------------------------------------------------- */
   /*  Render helpers                                                   */
@@ -426,7 +461,7 @@ export default function OnboardPage() {
                   borderBottom: '1px solid #1a1a1a',
                 }}
               >
-                <div>
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ color: '#fff', fontSize: 14, fontWeight: 600 }}>{b.name}</div>
                   <div style={{ color: '#666', fontSize: 12, marginTop: 2 }}>
                     {[
@@ -438,6 +473,34 @@ export default function OnboardPage() {
                       .filter(Boolean)
                       .join(' · ') || 'No integrations'}
                   </div>
+                  {healthByBrand[b.id] && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
+                      <span style={{ fontSize: 10, color: '#555', display: 'inline-flex', alignItems: 'center', gap: 4, marginRight: 4 }}>
+                        <Activity size={10} /> Health
+                      </span>
+                      {healthByBrand[b.id].map((c) => {
+                        const fg = c.status === 'green' ? '#34A853' : c.status === 'yellow' ? '#EAB308' : '#EF4444';
+                        const bg = c.status === 'green' ? 'rgba(52,168,83,0.12)' : c.status === 'yellow' ? 'rgba(234,179,8,0.12)' : 'rgba(239,68,68,0.12)';
+                        return (
+                          <span
+                            key={c.key}
+                            title={c.detail}
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 500,
+                              padding: '2px 8px',
+                              borderRadius: 999,
+                              color: fg,
+                              background: bg,
+                              border: `1px solid ${fg}40`,
+                            }}
+                          >
+                            {c.label}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
                 <button
                   onClick={() => handleArchive(b.id)}
@@ -786,7 +849,7 @@ export default function OnboardPage() {
             <div style={{ display: 'flex', gap: 12 }}>
               <button onClick={() => setStep('dropbox')} style={btnSecondary}>Back</button>
               <button onClick={handleInviteUsers} disabled={saving} style={btnPrimary}>
-                {saving ? 'Creating...' : 'Next'}
+                {saving ? 'Inviting...' : 'Next'}
                 {!saving && <ChevronRight size={14} style={{ marginLeft: 6, verticalAlign: 'middle' }} />}
               </button>
               <button onClick={() => setStep('review')} style={{ ...btnSecondary, marginLeft: 'auto' }}>
@@ -837,6 +900,32 @@ export default function OnboardPage() {
                 onEdit={() => setStep('users')}
               />
             </div>
+
+            {inviteResults.length > 0 && (
+              <div style={{ marginTop: 20, ...card, padding: 16, background: '#0d0d0d' }}>
+                <div style={{ fontSize: 12, color: '#C8B89A', fontWeight: 600, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.06 }}>
+                  Invite fallback links
+                </div>
+                <p style={{ fontSize: 12, color: '#666', marginBottom: 12 }}>
+                  Welcome emails carry set-password links. If email failed or was skipped, copy the one-time link below.
+                </p>
+                {inviteResults.map((r) => (
+                  <div key={r.email} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid #1a1a1a' }}>
+                    <div style={{ fontSize: 13, color: '#fff' }}>
+                      {r.email}{' '}
+                      <span style={{ color: r.ok ? '#34A853' : '#EF4444', fontSize: 11 }}>
+                        {r.ok ? (r.welcomeEmail?.sent ? 'email sent' : 'ok') : r.error || 'failed'}
+                      </span>
+                    </div>
+                    {r.actionLink && (
+                      <div style={{ marginTop: 6, fontSize: 11, color: '#C8B89A', wordBreak: 'break-all', fontFamily: 'monospace' }}>
+                        {r.actionLink}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div style={{ marginTop: 24, display: 'flex', gap: 12 }}>
               <button onClick={() => setStep('users')} style={btnSecondary}>Back</button>
