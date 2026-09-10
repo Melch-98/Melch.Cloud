@@ -6,18 +6,27 @@ export interface WelcomeData {
   brandName?: string;
   /** Sign-in URL — defaults to NEXT_PUBLIC_APP_URL */
   loginUrl?: string;
+  /** One-time invite / set-password link (preferred CTA when present) */
+  inviteLink?: string;
   /** Invited by / agency contact for reply-to context */
   invitedBy?: string;
 }
 
 export function renderWelcome(data: WelcomeData): { subject: string; html: string } {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://melch.cloud';
-  const loginUrl = data.loginUrl || appUrl;
+  const ctaUrl = data.inviteLink || data.loginUrl || appUrl;
+  const ctaLabel = data.inviteLink ? 'Set your password & sign in' : 'Sign in';
   const firstName = data.name?.split(' ')[0] || 'there';
 
   const brandLine = data.brandName
     ? `Everything for <strong style="color:#F5F5F8;">${escapeHtml(data.brandName)}</strong> lives here now`
     : `Everything lives here now`;
+
+  const inviteNote = data.inviteLink
+    ? `<p style="color:#ABABAB;font-size:14px;line-height:1.6;margin:0 0 14px 0;">
+         Use the button below to set your password and get in — the link is one-time and expires, so tap it soon.
+       </p>`
+    : '';
 
   const body = `
     <h2 style="font-size:20px;font-weight:600;margin:0 0 12px 0;color:#F5F5F8;">
@@ -27,6 +36,7 @@ export function renderWelcome(data: WelcomeData): { subject: string; html: strin
       I built melch.cloud to get us out of the tool-hopping and spreadsheet chaos.
       ${brandLine} — drop creative, see what's live, track how it's performing, all in one spot.
     </p>
+    ${inviteNote}
     <p style="color:#ABABAB;font-size:14px;line-height:1.6;margin:0 0 20px 0;">
       Poke around and let me know what's missing.
     </p>
@@ -38,8 +48,8 @@ export function renderWelcome(data: WelcomeData): { subject: string; html: strin
     html: layout({
       preheader: `You're in, ${firstName}. Everything for ${data.brandName || 'your brand'} lives here now.`,
       body,
-      ctaLabel: 'Sign in',
-      ctaUrl: loginUrl,
+      ctaLabel,
+      ctaUrl,
     }),
   };
 }
