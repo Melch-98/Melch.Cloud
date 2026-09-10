@@ -27,6 +27,7 @@ import {
 } from 'recharts';
 import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
+import { makeFmt, type Fmt } from '@/lib/format';
 
 // ─── Brand Palette ──────────────────────────────────────────────
 const GOLD = '#C8B89A';
@@ -97,10 +98,14 @@ const DATE_RANGES: { value: DateRange; label: string }[] = [
 
 // ─── Formatters ─────────────────────────────────────────────────
 
+let campaignFmt: Fmt = makeFmt('USD');
+function setCampaignReportingCurrency(code?: string | null) {
+  campaignFmt = makeFmt((code || 'USD').toUpperCase());
+}
 const fmtCurrency = (n: number) => {
-  if (Math.abs(n) >= 1000000) return `$${(n / 1000000).toFixed(1)}M`;
-  if (Math.abs(n) >= 10000) return `$${(n / 1000).toFixed(1)}K`;
-  return `$${n.toFixed(2)}`;
+  if (Math.abs(n) >= 1000000) return `${campaignFmt.symbol}${(n / 1000000).toFixed(1)}M`;
+  if (Math.abs(n) >= 10000) return `${campaignFmt.symbol}${(n / 1000).toFixed(1)}K`;
+  return campaignFmt.currencyFull(n);
 };
 const fmtNum = (n: number) => {
   if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
@@ -373,8 +378,7 @@ export default function CampaignPerformancePage() {
         .eq('id', session.user.id)
         .single();
 
-      // Temporary: founders blocked while P&L rebuild / Kleio test.
-      if (!profile || !['admin', 'strategist'].includes(profile.role)) {
+      if (!profile || !['admin', 'strategist', 'founder'].includes(profile.role)) {
         router.push('/');
         return;
       }
@@ -426,6 +430,7 @@ export default function CampaignPerformancePage() {
         { headers: { Authorization: `Bearer ${session?.access_token}` } }
       );
       const data = await res.json();
+      if (data.reporting_currency) setCampaignReportingCurrency(data.reporting_currency);
       if (data.campaigns) allCampaigns.push(...data.campaigns);
       if (data.errors?.length) {
         console.warn('Campaign fetch warnings:', data.errors);

@@ -126,7 +126,7 @@ const currencySymbols: Record<string, string> = {
   USD: '$', CAD: 'CA$', GBP: '£', EUR: '€', AUD: 'A$',
 };
 
-const BASE_CURRENCIES = ['USD', 'CAD', 'GBP', 'EUR', 'AUD'];
+const BASE_CURRENCIES = ['AUTO', 'USD', 'CAD', 'GBP', 'EUR', 'AUD'];
 
 function sym(currency: string): string {
   return currencySymbols[currency] || currency + ' ';
@@ -672,7 +672,8 @@ export default function BfcmPacingPage() {
 
   const [targetBudget, setTargetBudget] = useState<number | null>(null);
   const [targetRoas, setTargetRoas] = useState<number | null>(null);
-  const [baseCurrency, setBaseCurrency] = useState<string>('USD');
+  // AUTO → API resolves Shopify settlement currency (CAD for Tallow Twins, etc.)
+  const [baseCurrency, setBaseCurrency] = useState<string>('AUTO');
 
   useEffect(() => {
     const init = async () => {
@@ -685,8 +686,7 @@ export default function BfcmPacingPage() {
         .eq('id', session.user.id)
         .single();
 
-      // Temporary: founders blocked while P&L rebuild / Kleio test.
-      if (!profile || !['admin', 'strategist'].includes(profile.role)) {
+      if (!profile || !['admin', 'strategist', 'founder'].includes(profile.role)) {
         router.push('/');
         return;
       }
@@ -702,7 +702,7 @@ export default function BfcmPacingPage() {
   }, [router, supabase]);
 
   useEffect(() => {
-    if (!userRole || !['admin', 'strategist'].includes(userRole)) return;
+    if (!userRole || !['admin', 'strategist', 'founder'].includes(userRole)) return;
     const fetchBrands = async () => {
       try {
         let query = supabase.from('brands').select('id, name, slug').is('archived_at', null).order('name');
@@ -735,6 +735,10 @@ export default function BfcmPacingPage() {
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || 'Failed to fetch data');
         setData(json);
+        // After AUTO resolve, pin selector to the brand reporting currency (once).
+        if (baseCurrency === 'AUTO' && json.baseCurrency) {
+          setBaseCurrency(json.baseCurrency);
+        }
       } catch (err: any) {
         setFetchError(err.message || 'Failed to load BFCM pacing data');
         setData(null);

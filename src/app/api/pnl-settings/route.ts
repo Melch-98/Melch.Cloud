@@ -27,8 +27,7 @@ async function authCheck(request: NextRequest, supabase: any) {
     .eq('id', user.id)
     .single();
 
-  // Temporary: founders blocked while P&L rebuild / Kleio test.
-  if (!profile || profile.role !== 'admin') return null;
+  if (!profile || !['admin', 'founder'].includes(profile.role)) return null;
   return { user, profile };
 }
 

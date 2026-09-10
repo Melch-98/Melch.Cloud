@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
+import { makeFmt, type Fmt } from '@/lib/format';
 
 interface Brand {
   id: string;
@@ -253,14 +254,36 @@ function buildYearData(rows: PnlRow[], year: number): YearData {
   return { ytd: toAgg('ytd', ytdLabel, ytdAgg), months };
 }
 
-// ─── Formatters ─────────────────────────────────────────────────
+// ─── Formatters (reporting-currency aware) ──────────────────────
+// Child row/card components call fmtCurrency; the page sets the active
+// reporting currency when /api/shopify-sync returns it.
+
+let pnlFmt: Fmt = makeFmt('USD');
+let reportingCurrencyCode = 'USD';
+
+function setPnlReportingCurrency(code?: string | null) {
+  reportingCurrencyCode = (code || 'USD').toUpperCase();
+  pnlFmt = makeFmt(reportingCurrencyCode);
+}
 
 const fmtCurrency = (v: number) => {
   const abs = Math.abs(v);
-  const formatted = abs >= 1000
-    ? `$${abs.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
-    : `$${abs.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
-  return v < 0 ? `-${formatted}` : formatted;
+  try {
+    const formatted = new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: reportingCurrencyCode,
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(abs);
+    // Intl may already include a minus for some locales; normalize.
+    const clean = formatted.replace(/^-/, '');
+    return v < 0 ? `-${clean}` : clean;
+  } catch {
+    const formatted = abs >= 1000
+      ? `${pnlFmt.symbol}${abs.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+      : `${pnlFmt.symbol}${abs.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+    return v < 0 ? `-${formatted}` : formatted;
+  }
 };
 
 const fmtNum = (v: number) => v.toLocaleString('en-US', { maximumFractionDigits: 0 });
@@ -544,8 +567,8 @@ function RowCard({ row, c, grossMargin, onToggle, childCount }: {
     { label: 'Net Revenue', value: fmtCurrency(c.netRevenue), accent: '#C8B89A' },
     { label: 'Total Spend', value: fmtCurrency(c.totalSpend), accent: undefined },
     { label: 'MER', value: `${fmtDec(c.mer)}x`, accent: undefined },
-    { label: 'NC AOV', value: `$${c.ncAov.toFixed(2)}`, accent: undefined },
-    { label: 'NC CAC', value: `$${c.cac.toFixed(2)}`, accent: undefined },
+    { label: 'NC AOV', value: fmtCurrency(c.ncAov), accent: undefined },
+    { label: 'NC CAC', value: fmtCurrency(c.cac), accent: undefined },
     { label: 'Orders', value: fmtNum(row.ncOrders + row.rcOrders), accent: undefined },
   ];
 
@@ -691,6 +714,7 @@ export default function DailyPnlPage() {
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [reportingCurrency, setReportingCurrency] = useState<string>('USD');
 
   // Settings state
   const [grossMargin, setGrossMargin] = useState(62);
@@ -727,8 +751,7 @@ export default function DailyPnlPage() {
     });
   };
 
-  // ─── Auth & Setup ──────────────────────────────────────────
-  // Temporary: founders blocked while P&L rebuild / Kleio test (admins only).
+  // ─── Auth & Setup (admin-only) ──────────────────────────────
 
   useEffect(() => {
     const init = async () => {
@@ -747,7 +770,7 @@ export default function DailyPnlPage() {
         .eq('id', session.user.id)
         .single();
 
-      if (!profile || profile.role !== 'admin') {
+      if (!profile || !['admin', 'founder'].includes(profile.role)) {
         router.push('/');
         return;
       }
@@ -763,17 +786,17 @@ export default function DailyPnlPage() {
 
   // Fetch brands (admin sees all, founder sees their brand)
   useEffect(() => {
-    if (!userRole || userRole !== 'admin') return;
+    if (!userRole || !['admin', 'founder'].includes(userRole)) return;
 
     const fetchBrands = async () => {
       setFetchingBrands(true);
       try {
-        // Admin-only page (founders redirected) — list all active brands.
-        const { data: allBrands } = await supabase
-          .from('brands')
-          .select('id, name, slug')
-          .is('archived_at', null)
-          .order('name');
+        let query = supabase.from('brands').select('id, name, slug').is('archived_at', null).order('name');
+        // Founders only see their own brand
+        if (userRole === 'founder' && userBrandId) {
+          query = query.eq('id', userBrandId);
+        }
+        const { data: allBrands } = await query;
 
         setBrands(allBrands || []);
         if (allBrands && allBrands.length > 0 && !selectedBrandId) {
@@ -827,9 +850,12 @@ export default function DailyPnlPage() {
         const pnlData = await pnlRes.json();
         const settingsData = await settingsRes.json();
 
-        // 1. Apply Shopify data
+        // 1. Apply Shopify data + reporting currency (Shopify settlement)
         setShopifyConnected(pnlData.shopify_connected || false);
         if (pnlData.last_synced_at) setLastSyncedAt(pnlData.last_synced_at);
+        const rc = (pnlData.reporting_currency || pnlData.shop_currency || 'USD') as string;
+        setReportingCurrency(rc);
+        setPnlReportingCurrency(rc);
 
         if (pnlData.rows && pnlData.rows.length > 0) {
           const yearData = buildYearData(pnlData.rows, currentYear);
@@ -1202,9 +1228,16 @@ export default function DailyPnlPage() {
               <div>
                 <h1 className="text-base md:text-lg font-extrabold tracking-tight flex items-center gap-2" style={{ color: '#F5F5F8' }}>
                   Daily P&L
+                  <span
+                    className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
+                    style={{ backgroundColor: 'rgba(200,184,154,0.15)', color: '#C8B89A' }}
+                    title="Shopify/store settlement (reporting) currency"
+                  >
+                    {reportingCurrency}
+                  </span>
                 </h1>
                 <p className="text-[11px] mt-0.5" style={{ color: '#444' }}>
-                  {selectedBrand ? `${selectedBrand.name}` : 'Select a brand'} — Revenue, spend & margin
+                  {selectedBrand ? `${selectedBrand.name}` : 'Select a brand'} — Revenue, spend & margin · amounts in {reportingCurrency}
                 </p>
               </div>
             </div>
@@ -1339,7 +1372,7 @@ export default function DailyPnlPage() {
                 <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg" style={{ background: 'rgba(255,255,255,0.02)' }}>
                   <span className="text-[10px] font-bold uppercase tracking-wider whitespace-nowrap" style={{ color: '#555' }}>Other Spend</span>
                   <div className="flex items-center rounded-md" style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(200,184,154,0.12)' }}>
-                    <span className="text-sm font-bold pl-2" style={{ color: '#C8B89A' }}>$</span>
+                    <span className="text-sm font-bold pl-2" style={{ color: '#C8B89A' }}>{makeFmt(reportingCurrency).symbol}</span>
                     <input
                       type="text"
                       value={otherSpendAmount}
@@ -1350,7 +1383,7 @@ export default function DailyPnlPage() {
                     />
                   </div>
                   <span className="text-[10px] hidden 2xl:inline" style={{ color: '#444' }}>
-                    <strong style={{ color: '#666' }}>${Math.round(dailyOtherSpend)}</strong>/day
+                    <strong style={{ color: '#666' }}>{makeFmt(reportingCurrency).symbol}{Math.round(dailyOtherSpend)}</strong>/day
                   </span>
                   <button
                     onClick={() => setIsLocked(!isLocked)}
@@ -1374,7 +1407,7 @@ export default function DailyPnlPage() {
                 <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg" style={{ background: 'rgba(255,255,255,0.02)' }}>
                   <span className="text-[10px] font-bold uppercase tracking-wider whitespace-nowrap" style={{ color: '#555' }}>Off-Shopify</span>
                   <div className="flex items-center rounded-md" style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(168,85,247,0.12)' }}>
-                    <span className="text-sm font-bold pl-2" style={{ color: '#A855F7' }}>$</span>
+                    <span className="text-sm font-bold pl-2" style={{ color: '#A855F7' }}>{makeFmt(reportingCurrency).symbol}</span>
                     <input
                       type="text"
                       value={offShopifyAmount}
@@ -1385,7 +1418,7 @@ export default function DailyPnlPage() {
                     />
                   </div>
                   <span className="text-[10px] hidden 2xl:inline" style={{ color: '#444' }}>
-                    <strong style={{ color: '#666' }}>${Math.round(dailyOffShopify)}</strong>/day
+                    <strong style={{ color: '#666' }}>{makeFmt(reportingCurrency).symbol}{Math.round(dailyOffShopify)}</strong>/day
                   </span>
                   <button
                     onClick={() => setIsOffShopifyLocked(!isOffShopifyLocked)}
@@ -1427,7 +1460,7 @@ export default function DailyPnlPage() {
                 <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg" style={{ background: 'rgba(255,255,255,0.02)' }}>
                   <span className="text-[10px] font-bold uppercase tracking-wider whitespace-nowrap" style={{ color: '#555' }}>Fulfill/ord</span>
                   <div className="flex items-center rounded-md" style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(200,184,154,0.12)' }}>
-                    <span className="text-sm font-bold pl-2" style={{ color: '#C8B89A' }}>$</span>
+                    <span className="text-sm font-bold pl-2" style={{ color: '#C8B89A' }}>{makeFmt(reportingCurrency).symbol}</span>
                     <input
                       type="text"
                       value={fulfillmentPerOrder}
@@ -1576,8 +1609,8 @@ export default function DailyPnlPage() {
                 {
                   title: 'Off-Shopify Breakdown',
                   lines: [
-                    { label: 'Monthly Input', value: `$${offShopifyAmount}`, icon: '📊', accent: '#A855F7' },
-                    { label: 'Daily Distribution', value: `$${Math.round(dailyOffShopify)}/day`, indent: true },
+                    { label: 'Monthly Input', value: `${makeFmt(reportingCurrency).symbol}${offShopifyAmount}`, icon: '📊', accent: '#A855F7' },
+                    { label: 'Daily Distribution', value: `${makeFmt(reportingCurrency).symbol}${Math.round(dailyOffShopify)}/day`, indent: true },
                     { label: `Days in ${MONTHS_SHORT[currentMonth - 1]}`, value: `${daysInMonth}`, indent: true },
                     { label: isOffShopifyLocked ? 'Status: Locked ✓' : 'Status: Unlocked', value: '', accent: isOffShopifyLocked ? '#A855F7' : '#555', divider: true },
                   ],
@@ -1696,7 +1729,7 @@ export default function DailyPnlPage() {
             />
             <MetricCard
               label="CAC"
-              value={`$${mtdCalc.cac.toFixed(2)}`}
+              value={fmtCurrency(mtdCalc.cac)}
               sub={`${fmtNum(mtdRow.ncOrders)} new customers`}
               sections={[
                 {
@@ -1704,7 +1737,7 @@ export default function DailyPnlPage() {
                   lines: [
                     { label: 'Total Ad Spend', value: fmtCurrency(mtdCalc.totalSpend), icon: '📣' },
                     { label: 'NC Orders', value: fmtNum(mtdRow.ncOrders), icon: '🆕' },
-                    { label: 'CAC', value: `$${mtdCalc.cac.toFixed(2)}`, divider: true, bold: true },
+                    { label: 'CAC', value: fmtCurrency(mtdCalc.cac), divider: true, bold: true },
                   ],
                 },
                 {
@@ -1717,7 +1750,7 @@ export default function DailyPnlPage() {
             />
             <MetricCard
               label="NC AOV"
-              value={`$${mtdCalc.ncAov.toFixed(2)}`}
+              value={fmtCurrency(mtdCalc.ncAov)}
               sub={`${fmtNum(mtdRow.ncOrders)} NC · ${fmtNum(mtdRow.rcOrders)} RC orders`}
               sections={[
                 {
@@ -1725,7 +1758,7 @@ export default function DailyPnlPage() {
                   lines: [
                     { label: 'NC Net Revenue', value: fmtCurrency(mtdCalc.ncNetRevenue), icon: '🆕', accent: '#5DADE2' },
                     { label: 'NC Orders', value: fmtNum(mtdRow.ncOrders) },
-                    { label: 'NC AOV', value: `$${mtdCalc.ncAov.toFixed(2)}`, divider: true, bold: true },
+                    { label: 'NC AOV', value: fmtCurrency(mtdCalc.ncAov), divider: true, bold: true },
                   ],
                 },
                 {
@@ -1737,8 +1770,8 @@ export default function DailyPnlPage() {
                 {
                   title: 'Comparison',
                   lines: [
-                    { label: 'RC AOV', value: mtdRow.rcOrders > 0 ? `$${(mtdCalc.rcNetRevenue / mtdRow.rcOrders).toFixed(2)}` : '—' },
-                    { label: 'Blended AOV', value: (mtdRow.ncOrders + mtdRow.rcOrders) > 0 ? `$${((mtdCalc.netRevenue - mtdRow.offShopifyRevenue) / (mtdRow.ncOrders + mtdRow.rcOrders)).toFixed(2)}` : '—' },
+                    { label: 'RC AOV', value: mtdRow.rcOrders > 0 ? fmtCurrency(mtdCalc.rcNetRevenue / mtdRow.rcOrders) : '—' },
+                    { label: 'Blended AOV', value: (mtdRow.ncOrders + mtdRow.rcOrders) > 0 ? fmtCurrency((mtdCalc.netRevenue - mtdRow.offShopifyRevenue) / (mtdRow.ncOrders + mtdRow.rcOrders)) : '—' },
                   ],
                 },
               ]}

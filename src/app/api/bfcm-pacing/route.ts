@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { fetchAccountCurrency, fetchAccountTimezone } from '@/lib/meta-api';
 import { getCampaignMetrics, normalizeCustomerId, resolvePipeboardToken } from '@/lib/pipeboard-google';
+import { getFxRates, currencyFromShopInfo, resolveReportingCurrency } from '@/lib/currency';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -157,25 +158,7 @@ function roas(spend: number, value: number): number {
   return spend > 0 ? value / spend : 0;
 }
 
-// ─── FX (USD pivot) ─────────────────────────────────────────────
-// rates[cur] = how many `cur` per 1 USD. Convert native → base:
-//   value_base = value_native * rates[base] / rates[native]
-
-const FX_CACHE: { rates: Record<string, number>; ts: number } = { rates: {}, ts: 0 };
-
-async function getFxRates(): Promise<Record<string, number>> {
-  if (Date.now() - FX_CACHE.ts < 3600000 && Object.keys(FX_CACHE.rates).length > 0) return FX_CACHE.rates;
-  try {
-    const res: Response = await fetch('https://open.er-api.com/v6/latest/USD');
-    if (res.ok) {
-      const d = (await res.json()) as any;
-      if (d?.rates) { FX_CACHE.rates = d.rates; FX_CACHE.ts = Date.now(); return FX_CACHE.rates; }
-    }
-  } catch { /* fall through to static */ }
-  FX_CACHE.rates = { USD: 1, CAD: 1.38, GBP: 0.73, EUR: 0.86, AUD: 1.55, NZD: 1.7 };
-  FX_CACHE.ts = Date.now();
-  return FX_CACHE.rates;
-}
+// FX: shared via @/lib/currency (open.er-api.com USD pivot)
 
 // ─── In-memory response cache ───────────────────────────────────
 
@@ -203,8 +186,7 @@ export async function GET(request: NextRequest) {
     .eq('id', user.id)
     .single();
 
-  // Temporary: founders blocked while P&L rebuild / Kleio test.
-  if (!profile || !['admin', 'strategist'].includes(profile.role)) {
+  if (!profile || !['admin', 'strategist', 'founder'].includes(profile.role)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
@@ -212,18 +194,12 @@ export async function GET(request: NextRequest) {
   const brandId = searchParams.get('brandId');
   const yearParam = searchParams.get('year');
   const year = yearParam ? parseInt(yearParam, 10) : new Date().getFullYear();
-  const baseCurrency = (searchParams.get('baseCurrency') || 'USD').toUpperCase();
+  const baseCurrencyParam = (searchParams.get('baseCurrency') || 'AUTO').toUpperCase();
 
   if (!brandId) return NextResponse.json({ error: 'brandId required' }, { status: 400 });
 
   if (profile.role !== 'admin' && profile.brand_id !== brandId) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
-
-  const cacheKey = `bfcm:${brandId}:${year}:${baseCurrency}`;
-  const cached = cache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < CACHE_TTL) {
-    return NextResponse.json(cached.data);
   }
 
   const { data: brand, error: brandError } = await supabase
@@ -234,6 +210,28 @@ export async function GET(request: NextRequest) {
 
   if (brandError || !brand) {
     return NextResponse.json({ error: 'Brand not found' }, { status: 404 });
+  }
+
+  // Reporting currency = Shopify settlement when AUTO (default). Do not invent.
+  let shopCurrency: string | null = null;
+  if (brand.shopify_store_domain) {
+    const { data: storeRow } = await supabase
+      .from('shopify_stores')
+      .select('shop_info')
+      .eq('shop_domain', brand.shopify_store_domain)
+      .maybeSingle();
+    shopCurrency = currencyFromShopInfo(storeRow?.shop_info);
+  }
+  const resolvedReporting = resolveReportingCurrency({
+    override: baseCurrencyParam,
+    shopCurrency,
+  });
+  const baseCurrency = resolvedReporting.code;
+
+  const cacheKey = `bfcm:${brandId}:${year}:${baseCurrency}`;
+  const cached = cache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < CACHE_TTL) {
+    return NextResponse.json(cached.data);
   }
 
   if (!brand.meta_ad_account_id || !brand.meta_ad_account_id.trim()) {

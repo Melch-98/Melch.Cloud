@@ -514,16 +514,6 @@ export default function AdPerspectivePage() {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) { router.push('/'); return; }
-      // Temporary: founders blocked — Ad Perspective mixes Shopify MER (P&L rebuild / Kleio test).
-      const { data: profile } = await supabase
-        .from('users_profile')
-        .select('role')
-        .eq('id', session.user.id)
-        .single();
-      if (!profile || !['admin', 'strategist'].includes(profile.role)) {
-        router.push('/');
-        return;
-      }
       setAuthToken(session.access_token);
       try {
         const res = await fetch('/api/meta-insights?action=accounts', {

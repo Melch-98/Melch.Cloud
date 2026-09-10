@@ -6,6 +6,7 @@ import {
   releaseSyncLock,
   invalidatePnlCache,
 } from '@/lib/redis';
+import { currencyFromShopInfo, resolveReportingCurrency } from '@/lib/currency';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -22,7 +23,8 @@ async function tripleWhaleSQL(
   shopId: string,
   query: string,
   startDate: string,
-  endDate: string
+  endDate: string,
+  reportingCurrency: string = 'USD'
 ): Promise<any[]> {
   const res = await fetch('https://api.triplewhale.com/api/v2/orcabase/api/sql', {
     method: 'POST',
@@ -33,7 +35,10 @@ async function tripleWhaleSQL(
     body: JSON.stringify({
       shopId,
       query,
-      currency: 'USD',
+      // RESIDUAL RISK: TW Custom SQL historically forced USD. Prefer brand
+      // reporting (Shopify settlement) currency when known; still may differ
+      // from Meta/Google native. Re-sync via shopify-sync converts ad spend.
+      currency: reportingCurrency,
       period: { startDate, endDate },
     }),
   });
@@ -76,7 +81,7 @@ export async function POST(request: NextRequest) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
-  // Auth check — admin only (temporary: founders blocked while P&L rebuild / Kleio test)
+  // Auth check — admin/founder only
   const authHeader = request.headers.get('authorization');
   if (!authHeader) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -97,8 +102,8 @@ export async function POST(request: NextRequest) {
     .eq('id', user.id)
     .single();
 
-  if (!profile || profile.role !== 'admin') {
-    return NextResponse.json({ error: 'Forbidden — admin only' }, { status: 403 });
+  if (!profile || !['admin', 'founder'].includes(profile.role)) {
+    return NextResponse.json({ error: 'Forbidden — admin/founder only' }, { status: 403 });
   }
 
   // Parse body
@@ -134,6 +139,17 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   }
+
+  let shopCurrency: string | null = null;
+  {
+    const { data: storeRow } = await supabase
+      .from('shopify_stores')
+      .select('shop_info')
+      .eq('shop_domain', brand.shopify_store_domain)
+      .maybeSingle();
+    shopCurrency = currencyFromShopInfo(storeRow?.shop_info);
+  }
+  const reportingCurrency = resolveReportingCurrency({ shopCurrency }).code;
 
   // Rate limit: 5 syncs per minute per brand
   const limiter = getSyncRateLimiter();
@@ -171,7 +187,8 @@ export async function POST(request: NextRequest) {
       brand.shopify_store_domain,
       'SELECT event_date, orders_count, new_customer_orders, new_customer_revenue, gross_product_sales, order_revenue, discounts, refund_money, taxes, shipping_price, spend FROM blended_stats_tvf WHERE event_date BETWEEN @startDate AND @endDate',
       start,
-      end
+      end,
+      reportingCurrency
     );
 
     // Call 2: Per-channel ad spend
@@ -180,7 +197,8 @@ export async function POST(request: NextRequest) {
       brand.shopify_store_domain,
       'SELECT event_date, channel, SUM(spend) AS spend FROM ads_table WHERE event_date BETWEEN @startDate AND @endDate GROUP BY event_date, channel',
       start,
-      end
+      end,
+      reportingCurrency
     );
 
     // Build spend maps by channel
@@ -223,6 +241,7 @@ export async function POST(request: NextRequest) {
     const rows = Array.from(blendedByDate.entries()).map(([date, day]) => ({
       brand_id: brand.id,
       date,
+      currency: reportingCurrency,
       nc_orders: day.new_customer_orders || 0,
       nc_revenue: round2(day.new_customer_revenue || 0),
       rc_orders: (day.orders_count || 0) - (day.new_customer_orders || 0),
@@ -252,6 +271,7 @@ export async function POST(request: NextRequest) {
         spendOnlyRows.push({
           brand_id: brand.id,
           date,
+          currency: reportingCurrency,
           ...(metaSpendMap.has(date) ? { meta_spend: round2(metaSpendMap.get(date)!) } : {}),
           ...(googleSpendMap.has(date) ? { google_spend: round2(googleSpendMap.get(date)!) } : {}),
           ...(otherSpendMap.has(date) ? { other_spend: round2(otherSpendMap.get(date)!) } : {}),

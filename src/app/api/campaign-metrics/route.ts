@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { fetchAccountCurrency } from '@/lib/meta-api';
+import {
+  currencyFromShopInfo,
+  getFxRates,
+  resolveReportingCurrency,
+  toReportingCurrency,
+} from '@/lib/currency';
 import { getCampaignMetrics, getCampaigns } from '@/lib/pipeboard-google';
 
 export const dynamic = 'force-dynamic';
@@ -49,8 +56,7 @@ export async function GET(request: NextRequest) {
     .eq('id', user.id)
     .single();
 
-  // Temporary: founders blocked while P&L rebuild / Kleio test.
-  if (!profile || !['admin', 'strategist'].includes(profile.role)) {
+  if (!profile || !['admin', 'strategist', 'founder'].includes(profile.role)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
@@ -341,8 +347,48 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // Convert Meta/Google native amounts into Shopify reporting currency.
+  let shopCurrency: string | null = null;
+  if (brand.shopify_store_domain) {
+    const { data: storeRow } = await supabase
+      .from('shopify_stores')
+      .select('shop_info')
+      .eq('shop_domain', brand.shopify_store_domain)
+      .maybeSingle();
+    shopCurrency = currencyFromShopInfo(storeRow?.shop_info);
+  }
+  let metaCurrency: string | null = null;
+  if (brand.meta_ad_account_id && metaToken) {
+    try {
+      metaCurrency = await fetchAccountCurrency(metaToken, brand.meta_ad_account_id);
+    } catch { /* optional */ }
+  }
+  const reporting = resolveReportingCurrency({ shopCurrency, metaCurrency });
+  const fxRates = await getFxRates();
+  const conv = (v: number, native: string | null) =>
+    Math.round(toReportingCurrency(v, native || reporting.code, reporting.code, fxRates) * 100) / 100;
+
+  for (const c of campaigns) {
+    // Google currency not fetched here yet — leave Google amounts as-is (residual risk).
+    const from = c.platform === 'meta' ? (metaCurrency || reporting.code) : reporting.code;
+    c.spend = conv(c.spend, from);
+    c.purchaseValue = conv(c.purchaseValue, from);
+    c.cpc = conv(c.cpc, from);
+    c.cpm = conv(c.cpm, from);
+    c.cpa = conv(c.cpa, from);
+    c.daily = c.daily.map((d) => ({
+      ...d,
+      spend: conv(d.spend, from),
+      purchaseValue: conv(d.purchaseValue, from),
+    }));
+    // Recompute ROAS after conversion (ratio unchanged if both sides converted)
+    c.roas = c.spend > 0 ? c.purchaseValue / c.spend : 0;
+  }
+
   return NextResponse.json({
     campaigns,
+    reporting_currency: reporting.code,
+    meta_currency: metaCurrency,
     errors: errors.length > 0 ? errors : undefined,
     meta: {
       metaAccountId: brand.meta_ad_account_id,

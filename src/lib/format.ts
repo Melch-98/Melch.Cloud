@@ -3,6 +3,7 @@
 // currencies (USD, CAD, ...). Every analytics page previously
 // hardcoded "$" — this factory builds formatters for the account's
 // actual currency (returned by /api/meta-insights as `currency`).
+// For FX conversion + brand reporting currency, see `src/lib/currency.ts`.
 
 export interface Fmt {
   /** Full currency, 2 decimals: CA$1,234.56 */
