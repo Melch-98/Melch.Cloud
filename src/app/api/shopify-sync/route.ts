@@ -8,6 +8,14 @@ import {
   setCachedPnl,
   invalidatePnlCache,
 } from '@/lib/redis';
+import {
+  currencyFromShopInfo,
+  getFxRates,
+  normalizeCurrencyCode,
+  resolveReportingCurrency,
+  toReportingCurrency,
+} from '@/lib/currency';
+import { fetchGoogleAdsCurrency } from '@/lib/pipeboard-google';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300; // Shopify pagination + customer enrichment + ad spend sync
@@ -74,6 +82,103 @@ interface DayBucket {
   refunds: number;
   taxes: number;
   shipping: number;
+}
+
+
+async function upsertDailyPnl(
+  supabase: any,
+  rows: any[]
+): Promise<{ error: any }> {
+  if (!rows.length) return { error: null };
+  const first = await supabase.from('daily_pnl').upsert(rows, { onConflict: 'brand_id,date' });
+  if (!first.error) return first;
+  const msg = String(first.error.message || '');
+  // If currency column missing (migration not applied), retry without it.
+  if (/currency/i.test(msg) && (msg.includes('column') || msg.includes('schema'))) {
+    const stripped = rows.map(({ currency: _c, ...rest }) => rest);
+    return await supabase.from('daily_pnl').upsert(stripped, { onConflict: 'brand_id,date' });
+  }
+  return first;
+}
+
+// ─── Reporting currency + spend FX ──────────────────────────────
+
+function convertSpendMap(
+  daily: Map<string, number>,
+  native: string,
+  reporting: string,
+  rates: Record<string, number>
+): Map<string, number> {
+  const from = normalizeCurrencyCode(native);
+  const to = normalizeCurrencyCode(reporting);
+  if (from === to) return daily;
+  const out = new Map<string, number>();
+  Array.from(daily.entries()).forEach(([date, amount]) => {
+    out.set(date, Math.round(toReportingCurrency(amount, from, to, rates) * 100) / 100);
+  });
+  return out;
+}
+
+async function fetchMetaAccountCurrency(
+  adAccountId: string | null | undefined,
+  metaToken: string
+): Promise<string | null> {
+  if (!adAccountId || !adAccountId.trim() || !metaToken) return null;
+  try {
+    const res = await fetch(
+      `https://graph.facebook.com/v21.0/${adAccountId}?fields=currency&access_token=${metaToken}`
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.currency ? normalizeCurrencyCode(data.currency) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchGoogleAccountCurrency(
+  customerId: string | null | undefined,
+  pipeboardToken: string
+): Promise<string | null> {
+  return fetchGoogleAdsCurrency(pipeboardToken, customerId);
+}
+
+async function resolveBrandReportingCurrency(
+  supabase: any,
+  brand: { id: string; shopify_store_domain?: string | null },
+  orderCurrencies: Array<string | null | undefined> = [],
+  metaCurrency?: string | null,
+  googleCurrency?: string | null
+): Promise<{ code: string; source: string }> {
+  let shopCurrency: string | null = null;
+  if (brand.shopify_store_domain) {
+    const { data: storeRow } = await supabase
+      .from('shopify_stores')
+      .select('shop_info')
+      .eq('shop_domain', brand.shopify_store_domain)
+      .maybeSingle();
+    shopCurrency = currencyFromShopInfo(storeRow?.shop_info);
+  }
+
+  // If shop_info missing, sample recent shopify_orders currencies (no inventing).
+  if (!shopCurrency && orderCurrencies.length === 0) {
+    const { data: sample } = await supabase
+      .from('shopify_orders')
+      .select('currency')
+      .eq('brand_id', brand.id)
+      .not('currency', 'is', null)
+      .limit(50);
+    if (sample?.length) {
+      orderCurrencies = sample.map((r: { currency?: string }) => r.currency);
+    }
+  }
+
+  return resolveReportingCurrency({
+    shopCurrency,
+    orderCurrencies,
+    metaCurrency,
+    googleCurrency,
+  });
 }
 
 // ─── Shopify Token Exchange (Client Credentials Grant) ──────────
@@ -593,7 +698,43 @@ export async function POST(request: NextRequest) {
     const dayBuckets = aggregateOrdersByDay(orders);
 
     // Fetch ad spend in parallel with order processing
-    const [dailyGoogle, dailyMeta] = await Promise.all([fetchGoogle(), fetchMeta()]);
+    const [dailyGoogleNative, dailyMetaNative] = await Promise.all([fetchGoogle(), fetchMeta()]);
+
+    // Resolve reporting currency (Shopify settlement) + convert Meta/Google spend into it.
+    const metaTokenForFx = process.env.META_ACCESS_TOKEN || '';
+    let pipeboardTokenForFx = process.env.PIPEBOARD_API_TOKEN || '';
+    if (!pipeboardTokenForFx) {
+      const { data: pbSettings } = await supabase
+        .from('app_settings')
+        .select('value')
+        .eq('key', 'pipeboard_api_token')
+        .single();
+      pipeboardTokenForFx = pbSettings?.value || '';
+    }
+    const [metaCurrency, googleCurrency, fxRates] = await Promise.all([
+      fetchMetaAccountCurrency(brand.meta_ad_account_id, metaTokenForFx),
+      fetchGoogleAccountCurrency(brand.google_ads_customer_id, pipeboardTokenForFx),
+      getFxRates(),
+    ]);
+    const reporting = await resolveBrandReportingCurrency(
+      supabase,
+      brand,
+      orders.map((o) => o.currency),
+      metaCurrency,
+      googleCurrency
+    );
+    const dailyMeta = convertSpendMap(
+      dailyMetaNative,
+      metaCurrency || reporting.code,
+      reporting.code,
+      fxRates
+    );
+    const dailyGoogle = convertSpendMap(
+      dailyGoogleNative,
+      googleCurrency || reporting.code,
+      reporting.code,
+      fxRates
+    );
 
     // Build order rows WITH spend data merged in
     const rows = Array.from(dayBuckets.entries()).map(([date, bucket]) => ({
@@ -608,6 +749,7 @@ export async function POST(request: NextRequest) {
       refunds: Math.round(bucket.refunds * 100) / 100,
       taxes: Math.round(bucket.taxes * 100) / 100,
       shipping: Math.round(bucket.shipping * 100) / 100,
+      currency: reporting.code,
       synced_at: new Date().toISOString(),
       // Merge spend data if we have it for this date — omit if not available
       // so Supabase won't overwrite existing spend values
@@ -619,9 +761,7 @@ export async function POST(request: NextRequest) {
     metaDaysSynced = dailyMeta.size;
 
     if (rows.length > 0) {
-      const { error: upsertError } = await supabase
-        .from('daily_pnl')
-        .upsert(rows, { onConflict: 'brand_id,date' });
+      const { error: upsertError } = await upsertDailyPnl(supabase, rows);
 
       if (upsertError) {
         console.error('Upsert error:', upsertError);
@@ -639,6 +779,7 @@ export async function POST(request: NextRequest) {
         spendOnlyRows.push({
           brand_id: brand.id,
           date,
+          currency: reporting.code,
           ...(dailyMeta.has(date) ? { meta_spend: Math.round(dailyMeta.get(date)! * 100) / 100 } : {}),
           ...(dailyGoogle.has(date) ? { google_spend: Math.round(dailyGoogle.get(date)! * 100) / 100 } : {}),
         });
@@ -646,9 +787,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (spendOnlyRows.length > 0) {
-      const { error: spendOnlyErr } = await supabase
-        .from('daily_pnl')
-        .upsert(spendOnlyRows, { onConflict: 'brand_id,date' });
+      const { error: spendOnlyErr } = await upsertDailyPnl(supabase, spendOnlyRows);
       if (spendOnlyErr) {
         adSpendErrors.push(`Spend-only upsert: ${spendOnlyErr.message}`);
       }
@@ -769,7 +908,42 @@ export async function POST(request: NextRequest) {
 
     } else {
       // ── Spend-only mode: fetch and upsert ad spend without touching order columns ──
-      const [dailyGoogle, dailyMeta] = await Promise.all([fetchGoogle(), fetchMeta()]);
+      const [dailyGoogleNative, dailyMetaNative] = await Promise.all([fetchGoogle(), fetchMeta()]);
+
+      const metaTokenForFx = process.env.META_ACCESS_TOKEN || '';
+      let pipeboardTokenForFx = process.env.PIPEBOARD_API_TOKEN || '';
+      if (!pipeboardTokenForFx) {
+        const { data: pbSettings } = await supabase
+          .from('app_settings')
+          .select('value')
+          .eq('key', 'pipeboard_api_token')
+          .single();
+        pipeboardTokenForFx = pbSettings?.value || '';
+      }
+      const [metaCurrency, googleCurrency, fxRates] = await Promise.all([
+        fetchMetaAccountCurrency(brand.meta_ad_account_id, metaTokenForFx),
+        fetchGoogleAccountCurrency(brand.google_ads_customer_id, pipeboardTokenForFx),
+        getFxRates(),
+      ]);
+      const reporting = await resolveBrandReportingCurrency(
+        supabase,
+        brand,
+        [],
+        metaCurrency,
+        googleCurrency
+      );
+      const dailyMeta = convertSpendMap(
+        dailyMetaNative,
+        metaCurrency || reporting.code,
+        reporting.code,
+        fxRates
+      );
+      const dailyGoogle = convertSpendMap(
+        dailyGoogleNative,
+        googleCurrency || reporting.code,
+        reporting.code,
+        fxRates
+      );
 
       const adSpendByDate = new Map<string, { google_spend?: number; meta_spend?: number }>();
       for (const [date, spend] of dailyGoogle) {
@@ -785,11 +959,10 @@ export async function POST(request: NextRequest) {
         const adRows = Array.from(adSpendByDate.entries()).map(([date, vals]) => ({
           brand_id: brand.id,
           date,
+          currency: reporting.code,
           ...vals,
         }));
-        const { error: adErr } = await supabase
-          .from('daily_pnl')
-          .upsert(adRows, { onConflict: 'brand_id,date' });
+        const { error: adErr } = await upsertDailyPnl(supabase, adRows);
         if (adErr) {
           adSpendErrors.push(`Ad spend upsert: ${adErr.message}`);
         } else {
@@ -921,24 +1094,38 @@ export async function GET(request: NextRequest) {
     // (b) custom-distribution client credentials on the brand row.
     const { data: brand } = await supabase
       .from('brands')
-      .select('shopify_store_domain, shopify_client_id, gross_margin_pct')
+      .select('shopify_store_domain, shopify_client_id, gross_margin_pct, meta_ad_account_id, google_ads_customer_id')
       .eq('id', brandId)
       .single();
 
     let hasOauthInstall = false;
+    let shopInfo: unknown = null;
     if (brand?.shopify_store_domain) {
       const { data: storeRow } = await supabase
         .from('shopify_stores')
-        .select('access_token, uninstalled_at')
+        .select('access_token, uninstalled_at, shop_info')
         .eq('shop_domain', brand.shopify_store_domain)
         .maybeSingle();
       hasOauthInstall = !!(storeRow?.access_token && !storeRow.uninstalled_at);
+      shopInfo = storeRow?.shop_info ?? null;
     }
 
     // Get last synced timestamp
     const lastSyncedRow = (rows && rows.length > 0)
       ? rows.reduce((latest: any, r: any) => (!latest || r.synced_at > latest.synced_at) ? r : latest, null)
       : null;
+
+    // Reporting currency: prefer tagged daily_pnl.currency, else shop_info / orders.
+    const taggedCurrency = (rows || []).find((r: any) => r.currency)?.currency as string | undefined;
+    const reporting = taggedCurrency
+      ? { code: normalizeCurrencyCode(taggedCurrency), source: 'daily_pnl' as const }
+      : await resolveBrandReportingCurrency(
+          supabase,
+          { id: brandId, shopify_store_domain: brand?.shopify_store_domain },
+          [],
+          null,
+          null
+        );
 
     const payload = {
       rows: rows || [],
@@ -947,6 +1134,9 @@ export async function GET(request: NextRequest) {
       ),
       gross_margin_pct: brand?.gross_margin_pct || 62,
       last_synced_at: lastSyncedRow?.synced_at || null,
+      reporting_currency: reporting.code,
+      reporting_currency_source: reporting.source,
+      shop_currency: currencyFromShopInfo(shopInfo),
     };
 
     // Fire-and-forget cache write

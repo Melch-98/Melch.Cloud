@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { gaqlQuery, normalizeCustomerId } from '@/lib/pipeboard-google';
+import { getFxRates, toBase } from '@/lib/currency';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -214,31 +215,7 @@ function classObj(obj: string): string {
   return 'Demand Capture';
 }
 
-// ─── FX (USD pivot) ─────────────────────────────────────────────
-const FX_CACHE: { rates: Record<string, number>; ts: number } = { rates: {}, ts: 0 };
-async function getFxRates(): Promise<Record<string, number>> {
-  if (Date.now() - FX_CACHE.ts < 3600000 && Object.keys(FX_CACHE.rates).length > 0) return FX_CACHE.rates;
-  try {
-    const res: Response = await fetch('https://open.er-api.com/v6/latest/USD');
-    if (res.ok) {
-      const d = (await res.json()) as any;
-      if (d?.rates) { FX_CACHE.rates = d.rates; FX_CACHE.ts = Date.now(); return FX_CACHE.rates; }
-    }
-  } catch { /* fall through to static per-USD rates */ }
-  FX_CACHE.rates = { USD: 1, CAD: 1.38, GBP: 0.73, EUR: 0.86, AUD: 1.55, NZD: 1.70 };
-  FX_CACHE.ts = Date.now();
-  return FX_CACHE.rates;
-}
-
-// rates[cur] = units of `cur` per 1 USD.
-// value_base = value_native × rates[base] / rates[native]
-function toBase(v: number, native: string, base: string, rates: Record<string, number>): number {
-  if (!native || native === base) return v;
-  const rNative = rates[native];
-  const rBase = rates[base];
-  if (!rNative || !rBase) return v;
-  return v * rBase / rNative;
-}
+// FX: shared via @/lib/currency (open.er-api.com USD pivot)
 
 // ─── Fetch Meta campaign × country ──────────────────────────────
 
