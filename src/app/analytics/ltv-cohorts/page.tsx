@@ -277,6 +277,12 @@ export default function LTVCohortPage() {
         .eq('id', session.user.id)
         .single();
 
+      // Temporary: founders blocked while P&L rebuild / Kleio test (shopify_orders/daily_pnl).
+      if (!profile || profile.role !== 'admin') {
+        router.push('/');
+        return;
+      }
+
       const { data: brandList } = await supabase
         .from('brands')
         .select('id, name, slug, gross_margin_pct')

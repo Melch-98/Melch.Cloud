@@ -727,7 +727,8 @@ export default function DailyPnlPage() {
     });
   };
 
-  // ─── Auth & Setup (admin-only) ──────────────────────────────
+  // ─── Auth & Setup ──────────────────────────────────────────
+  // Temporary: founders blocked while P&L rebuild / Kleio test (admins only).
 
   useEffect(() => {
     const init = async () => {
@@ -746,7 +747,7 @@ export default function DailyPnlPage() {
         .eq('id', session.user.id)
         .single();
 
-      if (!profile || !['admin', 'founder'].includes(profile.role)) {
+      if (!profile || profile.role !== 'admin') {
         router.push('/');
         return;
       }
@@ -762,17 +763,17 @@ export default function DailyPnlPage() {
 
   // Fetch brands (admin sees all, founder sees their brand)
   useEffect(() => {
-    if (!userRole || !['admin', 'founder'].includes(userRole)) return;
+    if (!userRole || userRole !== 'admin') return;
 
     const fetchBrands = async () => {
       setFetchingBrands(true);
       try {
-        let query = supabase.from('brands').select('id, name, slug').is('archived_at', null).order('name');
-        // Founders only see their own brand
-        if (userRole === 'founder' && userBrandId) {
-          query = query.eq('id', userBrandId);
-        }
-        const { data: allBrands } = await query;
+        // Admin-only page (founders redirected) — list all active brands.
+        const { data: allBrands } = await supabase
+          .from('brands')
+          .select('id, name, slug')
+          .is('archived_at', null)
+          .order('name');
 
         setBrands(allBrands || []);
         if (allBrands && allBrands.length > 0 && !selectedBrandId) {

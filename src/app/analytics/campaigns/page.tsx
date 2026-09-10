@@ -373,7 +373,8 @@ export default function CampaignPerformancePage() {
         .eq('id', session.user.id)
         .single();
 
-      if (!profile || !['admin', 'strategist', 'founder'].includes(profile.role)) {
+      // Temporary: founders blocked while P&L rebuild / Kleio test.
+      if (!profile || !['admin', 'strategist'].includes(profile.role)) {
         router.push('/');
         return;
       }

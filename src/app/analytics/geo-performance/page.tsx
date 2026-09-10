@@ -135,6 +135,8 @@ export default function GeoPerformancePage(){
     if(!session){router.push('/');return;}
     setToken(session.access_token);
     const{data:p}=await sup.from('users_profile').select('role,brand_id').eq('id',session.user.id).single();
+    // Temporary: founders blocked while P&L rebuild / Kleio test (Shopify-backed aMER).
+    if(!p||!['admin','strategist'].includes(p.role)){router.push('/');return;}
     if(p)setProfile(p);
     const{data:bl}=await sup.from('brands').select('id,name,slug').is('archived_at',null).order('name');
     if(bl){setBrands(bl);const sv=localStorage.getItem('melch_sel_geo');

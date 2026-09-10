@@ -432,7 +432,8 @@ export async function GET(request: NextRequest) {
   if (authErr || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const { data: profile } = await supabase.from('users_profile').select('role, brand_id').eq('id', user.id).single();
-  if (!profile || !['admin', 'strategist', 'founder'].includes(profile.role)) {
+  // Temporary: founders blocked while P&L rebuild / Kleio test.
+  if (!profile || !['admin', 'strategist'].includes(profile.role)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 

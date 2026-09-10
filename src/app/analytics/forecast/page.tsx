@@ -239,6 +239,12 @@ export default function ForecastPage() {
         .eq('id', session.user.id)
         .single();
 
+      // Temporary: founders blocked while P&L rebuild / Kleio test (daily_pnl-backed).
+      if (!profile || profile.role !== 'admin') {
+        router.push('/');
+        return;
+      }
+
       const { data: brandList } = await supabase
         .from('brands')
         .select('id, name, slug, gross_margin_pct, target_roas, nc_share_pct, ltv_3m_mult, ltv_6m_mult, ltv_12m_mult')

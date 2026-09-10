@@ -49,7 +49,8 @@ export async function GET(request: NextRequest) {
     .eq('id', user.id)
     .single();
 
-  if (!profile || !['admin', 'strategist', 'founder'].includes(profile.role)) {
+  // Temporary: founders blocked while P&L rebuild / Kleio test.
+  if (!profile || !['admin', 'strategist'].includes(profile.role)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 

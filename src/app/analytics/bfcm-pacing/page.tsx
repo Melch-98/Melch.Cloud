@@ -685,7 +685,8 @@ export default function BfcmPacingPage() {
         .eq('id', session.user.id)
         .single();
 
-      if (!profile || !['admin', 'strategist', 'founder'].includes(profile.role)) {
+      // Temporary: founders blocked while P&L rebuild / Kleio test.
+      if (!profile || !['admin', 'strategist'].includes(profile.role)) {
         router.push('/');
         return;
       }
@@ -701,7 +702,7 @@ export default function BfcmPacingPage() {
   }, [router, supabase]);
 
   useEffect(() => {
-    if (!userRole || !['admin', 'strategist', 'founder'].includes(userRole)) return;
+    if (!userRole || !['admin', 'strategist'].includes(userRole)) return;
     const fetchBrands = async () => {
       try {
         let query = supabase.from('brands').select('id, name, slug').is('archived_at', null).order('name');

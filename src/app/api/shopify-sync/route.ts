@@ -404,8 +404,9 @@ export async function POST(request: NextRequest) {
     .eq('id', user.id)
     .single();
 
-  if (!profile || !['admin', 'founder'].includes(profile.role)) {
-    return NextResponse.json({ error: 'Forbidden — admin/founder only' }, { status: 403 });
+  // Temporary: founders blocked while P&L rebuild / Kleio test.
+  if (!profile || profile.role !== 'admin') {
+    return NextResponse.json({ error: 'Forbidden — admin only' }, { status: 403 });
   }
 
   // Parse body
@@ -878,7 +879,8 @@ export async function GET(request: NextRequest) {
     .eq('id', user.id)
     .single();
 
-  if (!profile || !['admin', 'strategist', 'founder'].includes(profile.role)) {
+  // Temporary: founders blocked while P&L rebuild / Kleio test (daily_pnl reader).
+  if (!profile || !['admin', 'strategist'].includes(profile.role)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
@@ -890,8 +892,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'brand_id is required' }, { status: 400 });
   }
 
-  // Strategists and founders can only see their own brand
-  if (['strategist', 'founder'].includes(profile.role) && profile.brand_id !== brandId) {
+  // Non-admins can only see their own brand
+  if (profile.role !== 'admin' && profile.brand_id !== brandId) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 

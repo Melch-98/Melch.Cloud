@@ -40,6 +40,7 @@ interface NavChild {
   href: string;
   icon: React.ElementType;
   roles?: string[];
+  badge?: string;
 }
 
 interface NavLink {
@@ -153,19 +154,23 @@ export default function Navbar({ children }: { children?: React.ReactNode }) {
       icon: LayoutDashboard,
       roles: ['admin'],
     },
-      { label: 'Performance', href: '/analytics/bfcm-pacing', icon: TrendingUp, roles: ['admin', 'strategist', 'founder'], badge: 'Beta', children: [
-        { label: 'BFCM Command Center', href: '/analytics/bfcm-pacing', icon: Zap, roles: ['admin', 'strategist', 'founder'] },
-        { label: 'Daily P&L', href: '/analytics/daily-pnl', icon: DollarSign, roles: ['admin', 'founder'] },
-        { label: 'Campaigns', href: '/analytics/campaigns', icon: Activity, roles: ['admin', 'founder', 'strategist'] },
-        { label: 'Geo Performance', href: '/analytics/geo-performance', icon: Globe, roles: ['admin', 'founder', 'strategist'] },
-        { label: 'Efficiency Curve', href: '/analytics/efficiency', icon: TrendingUp, roles: ['admin', 'founder'] },
-        { label: 'LTV Cohorts', href: '/analytics/ltv-cohorts', icon: Users, roles: ['admin', 'founder'] },
-        { label: 'Forecast', href: '/analytics/forecast', icon: Target, roles: ['admin', 'founder'] },
+      // Temporary: hide Shopify/TW/daily_pnl Performance money surfaces from founders while P&L rebuild / Kleio test.
+      // Admins keep full access; strategists keep prior non-founder-only items. Founders only see Daily P&L (Kleio).
+      { label: 'Performance', href: '/analytics/daily-pnl-kleio', icon: TrendingUp, roles: ['admin', 'strategist', 'founder'], badge: 'Beta', children: [
+        { label: 'BFCM Command Center', href: '/analytics/bfcm-pacing', icon: Zap, roles: ['admin', 'strategist'] },
+        { label: 'Daily P&L', href: '/analytics/daily-pnl', icon: DollarSign, roles: ['admin'] },
+        { label: 'Daily P&L (Kleio)', href: '/analytics/daily-pnl-kleio', icon: DollarSign, roles: ['admin', 'founder'], badge: 'Beta' },
+        { label: 'Campaigns', href: '/analytics/campaigns', icon: Activity, roles: ['admin', 'strategist'] },
+        { label: 'Geo Performance', href: '/analytics/geo-performance', icon: Globe, roles: ['admin', 'strategist'] },
+        { label: 'Efficiency Curve', href: '/analytics/efficiency', icon: TrendingUp, roles: ['admin'] },
+        { label: 'LTV Cohorts', href: '/analytics/ltv-cohorts', icon: Users, roles: ['admin'] },
+        { label: 'Forecast', href: '/analytics/forecast', icon: Target, roles: ['admin'] },
       ]},
       { label: 'Creative Analytics', href: '/analytics', icon: Sparkles, roles: ['admin', 'strategist', 'founder'], badge: 'Beta', children: [
         { label: 'Top Creatives', href: '/analytics', icon: Sparkles },
         { label: 'Copy Analysis', href: '/analytics/copy-analysis', icon: Type },
-        { label: 'Ad Perspective', href: '/analytics/ad-perspective', icon: TableProperties },
+        // Temporary: Ad Perspective mixes Shopify MER — hide from founders during P&L rebuild.
+        { label: 'Ad Perspective', href: '/analytics/ad-perspective', icon: TableProperties, roles: ['admin', 'strategist'] },
         { label: 'Creative Matrix', href: '/analytics/creative-matrix', icon: Grid3X3, roles: ['admin', 'strategist'] },
       ]},
     // Hidden — Ad Changelog needs rework before re-enabling
@@ -453,10 +458,21 @@ export default function Navbar({ children }: { children?: React.ReactNode }) {
                             style={{ color: childActive ? '#C8B89A' : undefined }}
                           />
                           <span
-                            className="text-[13px] font-medium transition-colors"
+                            className="text-[13px] font-medium transition-colors flex items-center gap-2"
                             style={{ color: childActive ? '#C8B89A' : undefined }}
                           >
                             {child.label}
+                            {child.badge && (
+                              <span
+                                className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
+                                style={{
+                                  backgroundColor: 'rgba(200,184,154,0.15)',
+                                  color: '#C8B89A',
+                                }}
+                              >
+                                {child.badge}
+                              </span>
+                            )}
                           </span>
                           {!childActive && (
                             <div

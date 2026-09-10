@@ -76,7 +76,7 @@ export async function POST(request: NextRequest) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
-  // Auth check — admin/founder only
+  // Auth check — admin only (temporary: founders blocked while P&L rebuild / Kleio test)
   const authHeader = request.headers.get('authorization');
   if (!authHeader) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -97,8 +97,8 @@ export async function POST(request: NextRequest) {
     .eq('id', user.id)
     .single();
 
-  if (!profile || !['admin', 'founder'].includes(profile.role)) {
-    return NextResponse.json({ error: 'Forbidden — admin/founder only' }, { status: 403 });
+  if (!profile || profile.role !== 'admin') {
+    return NextResponse.json({ error: 'Forbidden — admin only' }, { status: 403 });
   }
 
   // Parse body
