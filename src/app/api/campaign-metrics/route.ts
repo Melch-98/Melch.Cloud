@@ -7,7 +7,7 @@ import {
   resolveReportingCurrency,
   toReportingCurrency,
 } from '@/lib/currency';
-import { getCampaignMetrics, getCampaigns } from '@/lib/pipeboard-google';
+import { fetchGoogleAdsCurrency } from '@/lib/pipeboard-google';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -363,14 +363,34 @@ export async function GET(request: NextRequest) {
       metaCurrency = await fetchAccountCurrency(metaToken, brand.meta_ad_account_id);
     } catch { /* optional */ }
   }
-  const reporting = resolveReportingCurrency({ shopCurrency, metaCurrency });
+
+  // Google account currency (symmetric with Meta) for FX into reporting.
+  let googleCurrency: string | null = null;
+  let pipeboardTokenForFx = process.env.PIPEBOARD_API_TOKEN || '';
+  if (!pipeboardTokenForFx) {
+    const { data: settings } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'pipeboard_api_token')
+      .single();
+    pipeboardTokenForFx = settings?.value || '';
+  }
+  if (brand.google_ads_customer_id && pipeboardTokenForFx) {
+    try {
+      googleCurrency = await fetchGoogleAdsCurrency(pipeboardTokenForFx, brand.google_ads_customer_id);
+    } catch { /* optional */ }
+  }
+
+  const reporting = resolveReportingCurrency({ shopCurrency, metaCurrency, googleCurrency });
   const fxRates = await getFxRates();
   const conv = (v: number, native: string | null) =>
     Math.round(toReportingCurrency(v, native || reporting.code, reporting.code, fxRates) * 100) / 100;
 
   for (const c of campaigns) {
-    // Google currency not fetched here yet — leave Google amounts as-is (residual risk).
-    const from = c.platform === 'meta' ? (metaCurrency || reporting.code) : reporting.code;
+    const from =
+      c.platform === 'meta'
+        ? (metaCurrency || reporting.code)
+        : (googleCurrency || reporting.code);
     c.spend = conv(c.spend, from);
     c.purchaseValue = conv(c.purchaseValue, from);
     c.cpc = conv(c.cpc, from);
@@ -389,6 +409,7 @@ export async function GET(request: NextRequest) {
     campaigns,
     reporting_currency: reporting.code,
     meta_currency: metaCurrency,
+    google_currency: googleCurrency,
     errors: errors.length > 0 ? errors : undefined,
     meta: {
       metaAccountId: brand.meta_ad_account_id,

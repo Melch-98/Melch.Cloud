@@ -1061,7 +1061,7 @@ export default function CampaignPerformancePage() {
                       />
                       <YAxis
                         tick={{ fill: '#444', fontSize: 10 }}
-                        tickFormatter={(v) => `$${(v/1000).toFixed(0)}k`}
+                        tickFormatter={(v) => `${campaignFmt.symbol}${(v/1000).toFixed(0)}k`}
                         axisLine={false}
                         tickLine={false}
                         width={50}
@@ -1109,7 +1109,7 @@ export default function CampaignPerformancePage() {
                       />
                       <YAxis
                         tick={{ fill: '#444', fontSize: 10 }}
-                        tickFormatter={(v) => `$${v.toFixed(0)}`}
+                        tickFormatter={(v) => `${campaignFmt.symbol}${v.toFixed(0)}`}
                         axisLine={false}
                         tickLine={false}
                         width={40}
@@ -1299,7 +1299,7 @@ export default function CampaignPerformancePage() {
                           axisLine={{ stroke: 'rgba(255,255,255,0.04)' }}
                           tickLine={false}
                         />
-                        <YAxis tick={{ fill: '#444', fontSize: 10 }} tickFormatter={(v) => `$${(v/1000).toFixed(0)}k`} axisLine={false} tickLine={false} width={45} />
+                        <YAxis tick={{ fill: '#444', fontSize: 10 }} tickFormatter={(v) => `${campaignFmt.symbol}${(v/1000).toFixed(0)}k`} axisLine={false} tickLine={false} width={45} />
                         <Tooltip content={<ChartTooltip />} />
                         <Legend wrapperStyle={{ fontSize: '10px', color: '#666' }} iconType="circle" iconSize={6} />
                         <Area type="monotone" dataKey="Spend" stroke={GOLD} fill="url(#spendGrad)" strokeWidth={2} />

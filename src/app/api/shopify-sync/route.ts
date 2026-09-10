@@ -15,6 +15,7 @@ import {
   resolveReportingCurrency,
   toReportingCurrency,
 } from '@/lib/currency';
+import { fetchGoogleAdsCurrency } from '@/lib/pipeboard-google';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300; // Shopify pagination + customer enrichment + ad spend sync
@@ -139,37 +140,7 @@ async function fetchGoogleAccountCurrency(
   customerId: string | null | undefined,
   pipeboardToken: string
 ): Promise<string | null> {
-  if (!customerId || !customerId.trim() || !pipeboardToken) return null;
-  try {
-    const custId = customerId.replace(/\D/g, '');
-    const query = 'SELECT customer.currency_code, customer.id FROM customer LIMIT 1';
-    const res = await fetch(
-      `https://google-ads.mcp.pipeboard.co/?token=${encodeURIComponent(pipeboardToken)}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'tools/call',
-          params: {
-            name: 'execute_google_ads_gaql_query',
-            arguments: { customer_id: custId, query },
-          },
-        }),
-      }
-    );
-    if (!res.ok) return null;
-    const j = await res.json();
-    const text = j?.result?.content?.[0]?.text;
-    if (!text) return null;
-    const parsed = JSON.parse(text);
-    const rows = Array.isArray(parsed) ? parsed : parsed?.results || [];
-    const code = rows?.[0]?.customer?.currencyCode;
-    return code ? normalizeCurrencyCode(code) : null;
-  } catch {
-    return null;
-  }
+  return fetchGoogleAdsCurrency(pipeboardToken, customerId);
 }
 
 async function resolveBrandReportingCurrency(
