@@ -479,8 +479,8 @@ export default function OnboardPage() {
                         <Activity size={10} /> Health
                       </span>
                       {healthByBrand[b.id].map((c) => {
-                        const fg = c.status === 'green' ? '#34A853' : c.status === 'yellow' ? '#EAB308' : '#EF4444';
-                        const bg = c.status === 'green' ? 'rgba(52,168,83,0.12)' : c.status === 'yellow' ? 'rgba(234,179,8,0.12)' : 'rgba(239,68,68,0.12)';
+                        const fg = c.status === 'green' ? '#34A853' : c.status === 'yellow' ? '#EAB308' : c.status === 'gray' ? '#9CA3AF' : '#EF4444';
+                        const bg = c.status === 'green' ? 'rgba(52,168,83,0.12)' : c.status === 'yellow' ? 'rgba(234,179,8,0.12)' : c.status === 'gray' ? 'rgba(156,163,175,0.10)' : 'rgba(239,68,68,0.12)';
                         return (
                           <span
                             key={c.key}

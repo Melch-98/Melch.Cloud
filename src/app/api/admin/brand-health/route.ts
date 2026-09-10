@@ -5,7 +5,7 @@ import { resolvePipeboardToken } from '@/lib/pipeboard-google';
 
 export const dynamic = 'force-dynamic';
 
-type ChipStatus = 'green' | 'yellow' | 'red';
+type ChipStatus = 'green' | 'yellow' | 'red' | 'gray';
 
 type HealthChip = {
   key: string;
@@ -255,21 +255,32 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Triple Whale (optional) — domain present via website or shopify domain
-    const twDomain = brand.website_url || brand.shopify_store_domain;
-    if (twDomain) {
+    // Triple Whale (optional): used when shopify_store_domain is the TW shopId
+    // and the brand has no direct Shopify connection (OAuth or custom-app creds).
+    // Do not treat website_url / domain-alone as "healthy TW".
+    const hasShopifyCreds = !!(brand.shopify_client_id && brand.shopify_client_secret);
+    const twConfigured = !!brand.shopify_store_domain && !hasOauth && !hasShopifyCreds;
+    const twApiKeyConfigured = !!process.env.TRIPLEWHALE_API_KEY;
+    if (!twConfigured) {
       chips.push({
         key: 'triple_whale',
         label: 'Triple Whale',
-        status: 'green',
-        detail: `Domain present (${twDomain})`,
+        status: 'gray',
+        detail: 'N/A — not configured (no TW shopId without Shopify path)',
+      });
+    } else if (!twApiKeyConfigured) {
+      chips.push({
+        key: 'triple_whale',
+        label: 'Triple Whale',
+        status: 'yellow',
+        detail: `shopId set (${brand.shopify_store_domain}) — TRIPLEWHALE_API_KEY missing`,
       });
     } else {
       chips.push({
         key: 'triple_whale',
         label: 'Triple Whale',
-        status: 'yellow',
-        detail: 'Optional — no domain set',
+        status: 'green',
+        detail: `Configured · shopId ${brand.shopify_store_domain}`,
       });
     }
 

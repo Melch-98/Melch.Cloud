@@ -263,7 +263,7 @@ function MemberRow({
 type HealthChip = {
   key: string;
   label: string;
-  status: 'green' | 'yellow' | 'red';
+  status: 'green' | 'yellow' | 'red' | 'gray';
   detail: string;
 };
 
@@ -271,6 +271,7 @@ const CHIP_COLORS: Record<HealthChip['status'], { bg: string; fg: string; border
   green: { bg: 'rgba(52,168,83,0.12)', fg: '#34A853', border: 'rgba(52,168,83,0.25)' },
   yellow: { bg: 'rgba(234,179,8,0.12)', fg: '#EAB308', border: 'rgba(234,179,8,0.25)' },
   red: { bg: 'rgba(239,68,68,0.12)', fg: '#EF4444', border: 'rgba(239,68,68,0.25)' },
+  gray: { bg: 'rgba(156,163,175,0.10)', fg: '#9CA3AF', border: 'rgba(156,163,175,0.22)' },
 };
 
 function ConnectionHealthPanel({
