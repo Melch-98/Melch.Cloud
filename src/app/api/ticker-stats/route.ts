@@ -83,9 +83,10 @@ export async function GET(request: NextRequest) {
   }
 
   // Fetch brands (founders see only their brand)
+  // Active brands only — archived_at IS NULL (never hardcode brand slugs like MTE).
   let brandsQuery = supabase
     .from('brands')
-    .select('id, name, meta_ad_account_id, google_ads_customer_id, shopify_store_domain')
+    .select('id, name, meta_ad_account_id, google_ads_customer_id, shopify_store_domain, archived_at')
     .is('archived_at', null)
     .order('name');
 
@@ -93,10 +94,12 @@ export async function GET(request: NextRequest) {
     brandsQuery = brandsQuery.eq('id', profile.brand_id);
   }
 
-  const { data: brands, error: brandsError } = await brandsQuery;
+  const { data: brandsRaw, error: brandsError } = await brandsQuery;
   if (brandsError) {
     return NextResponse.json({ error: brandsError.message }, { status: 500 });
   }
+  // Defensive: drop anything with archived_at set even if the IS NULL filter is bypassed.
+  const brands = (brandsRaw || []).filter((b: { archived_at?: string | null }) => !b.archived_at);
 
   // Meta token
   let metaToken = process.env.META_ACCESS_TOKEN || '';
