@@ -1,14 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { getCampaignMetrics, gaqlQuery, resolvePipeboardToken } from '@/lib/pipeboard-google';
-import { fetchAccountCurrency } from '@/lib/meta-api';
+import { getFxRates, toReportingCurrency, normalizeCurrencyCode } from '@/lib/currency';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
-// Returns today's spend + ROAS per brand for Meta and Google.
-// Falls back to Triple Whale data when direct API calls fail (e.g. token permissions).
-// Used by the founder dashboard ticker.
+/**
+ * Dashboard brand performance ticker — Melch-native source of truth.
+ *
+ * Reads `daily_pnl` (same table / net-revenue formula as Daily P&L & Performance),
+ * excludes archived brands (`archived_at IS NULL`), and converts each brand's
+ * reporting currency → USD for the cross-brand rollup table.
+ *
+ * Previously this route hit live Meta/Google/TW APIs. Those numbers diverged from
+ * Performance (ad-platform purchase ROAS ≠ Shopify net revenue; forced USD labels
+ * on CAD brands). Nick's bar: accurate Melch data or fix the widgets — keep Dashboard.
+ */
 
 interface TickerRow {
   brand_id: string;
@@ -17,42 +24,36 @@ interface TickerRow {
   spend: number;
   revenue: number;
   roas: number;
+  as_of_date: string;
+  native_currency: string;
 }
 
-interface BrandRow {
-  id: string;
-  name: string;
-  meta_ad_account_id: string | null;
-  google_ads_customer_id: string | null;
-  shopify_store_domain: string | null;
+interface BrandSummary {
+  brand_id: string;
+  brand_name: string;
+  spend: number;
+  revenue: number;
+  roas: number;
+  meta_spend: number;
+  google_spend: number;
+  other_spend: number;
+  channels: Array<'meta' | 'google'>;
+  as_of_date: string;
+  native_currency: string;
 }
 
-// ─── FX (USD pivot) ─────────────────────────────────────────────
-// Meta and Google return spend/revenue in each brand's native currency
-// (CAD for Tallow Twins + Mintier, USD for everyone else). The dashboard
-// renders one combined table, so normalize everything to USD before it
-// leaves the route. rates[cur] = units of `cur` per 1 USD.
-//   value_usd = value_native × rates['USD'] / rates[native] = value_native / rates[native]
-const FX_CACHE: { rates: Record<string, number>; ts: number } = { rates: {}, ts: 0 };
-async function getFxRates(): Promise<Record<string, number>> {
-  if (Date.now() - FX_CACHE.ts < 3600000 && Object.keys(FX_CACHE.rates).length > 0) return FX_CACHE.rates;
-  try {
-    const res: Response = await fetch('https://open.er-api.com/v6/latest/USD');
-    if (res.ok) {
-      const d = (await res.json()) as { rates?: Record<string, number> };
-      if (d?.rates) { FX_CACHE.rates = d.rates; FX_CACHE.ts = Date.now(); return FX_CACHE.rates; }
-    }
-  } catch { /* fall through to static per-USD rates */ }
-  FX_CACHE.rates = { USD: 1, CAD: 1.38, GBP: 0.73, EUR: 0.86, AUD: 1.55, NZD: 1.7 };
-  FX_CACHE.ts = Date.now();
-  return FX_CACHE.rates;
-}
-
-function toUsd(v: number, native: string, rates: Record<string, number>): number {
-  if (!native || native === 'USD') return v;
-  const rNative = rates[native];
-  if (!rNative) return v;
-  return v / rNative;
+/** Same Shopify net as Daily P&L calcFields (taxes are pass-through, not subtracted). */
+function netRevenueFromPnl(row: {
+  gross_sales?: number | string | null;
+  discounts?: number | string | null;
+  refunds?: number | string | null;
+  shipping?: number | string | null;
+}): number {
+  const gross = Number(row.gross_sales || 0);
+  const discounts = Number(row.discounts || 0);
+  const refunds = Number(row.refunds || 0);
+  const shipping = Number(row.shipping || 0);
+  return gross + discounts + refunds + shipping;
 }
 
 export async function GET(request: NextRequest) {
@@ -61,7 +62,6 @@ export async function GET(request: NextRequest) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
-  // Auth
   const authHeader = request.headers.get('authorization');
   if (!authHeader) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -82,10 +82,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
-  // Fetch brands (founders see only their brand)
+  // Active brands only — never hardcode MTE; archived_at IS NULL is the rule.
   let brandsQuery = supabase
     .from('brands')
-    .select('id, name, meta_ad_account_id, google_ads_customer_id, shopify_store_domain')
+    .select('id, name')
     .is('archived_at', null)
     .order('name');
 
@@ -98,155 +98,160 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: brandsError.message }, { status: 500 });
   }
 
-  // Meta token
-  let metaToken = process.env.META_ACCESS_TOKEN || '';
-  if (!metaToken) {
-    const { data: settings } = await supabase
-      .from('app_settings')
-      .select('value')
-      .eq('key', 'meta_access_token')
-      .single();
-    if (settings?.value) metaToken = settings.value;
+  const brandList = brands || [];
+  if (brandList.length === 0) {
+    return NextResponse.json({
+      rows: [] as TickerRow[],
+      brands: [] as BrandSummary[],
+      source: 'daily_pnl',
+      display_currency: 'USD',
+      lookback_days: 14,
+      as_of: new Date().toISOString(),
+    });
   }
 
-  const twApiKey = process.env.TRIPLEWHALE_API_KEY || '';
-  const pipeboardToken = await resolvePipeboardToken(process.env.PIPEBOARD_API_TOKEN, async (key) => {
-    const { data: settings } = await supabase
-      .from('app_settings')
-      .select('value')
-      .eq('key', key)
-      .single();
-    return settings?.value || null;
-  });
-  const today = new Date().toISOString().split('T')[0];
-  const fxRates = await getFxRates();
+  const brandIds = brandList.map((b) => b.id);
+  const brandNameById = new Map(brandList.map((b) => [b.id, b.name]));
 
-  const fetchMeta = async (brand: BrandRow): Promise<TickerRow | null> => {
-    if (!brand.meta_ad_account_id || !metaToken) return null;
-    const acctId = brand.meta_ad_account_id.startsWith('act_')
-      ? brand.meta_ad_account_id
-      : `act_${brand.meta_ad_account_id}`;
-    try {
-      const currency = await fetchAccountCurrency(metaToken, acctId);
-      const url = `https://graph.facebook.com/v21.0/${acctId}/insights?fields=spend,action_values&date_preset=today&access_token=${encodeURIComponent(metaToken)}`;
-      const res = await fetch(url);
-      if (!res.ok) return null;
-      const j = (await res.json()) as { data?: Array<{ spend?: string; action_values?: Array<{ action_type: string; value: string }> }> };
-      const row = j.data?.[0];
-      if (!row) return { brand_id: brand.id, brand_name: brand.name, channel: 'meta', spend: 0, revenue: 0, roas: 0 };
-      const spend = toUsd(parseFloat(row.spend || '0'), currency, fxRates);
-      const purchase = row.action_values?.find((a) => a.action_type === 'purchase' || a.action_type === 'omni_purchase');
-      const revenue = toUsd(purchase ? parseFloat(purchase.value) : 0, currency, fxRates);
-      return {
+  // Look back 14 days so brands with stale sync still appear (labeled by as_of_date).
+  const lookbackDays = 14;
+  const since = new Date();
+  since.setUTCDate(since.getUTCDate() - lookbackDays);
+  const sinceStr = since.toISOString().split('T')[0];
+
+  const { data: pnlRows, error: pnlError } = await supabase
+    .from('daily_pnl')
+    .select(
+      'brand_id, date, currency, gross_sales, discounts, refunds, shipping, meta_spend, google_spend, other_spend, synced_at'
+    )
+    .in('brand_id', brandIds)
+    .gte('date', sinceStr)
+    .order('date', { ascending: false });
+
+  if (pnlError) {
+    return NextResponse.json({ error: pnlError.message }, { status: 500 });
+  }
+
+  type PnlRow = {
+    brand_id: string;
+    date: string;
+    currency: string | null;
+    gross_sales: number | string | null;
+    discounts: number | string | null;
+    refunds: number | string | null;
+    shipping: number | string | null;
+    meta_spend: number | string | null;
+    google_spend: number | string | null;
+    other_spend: number | string | null;
+    synced_at: string | null;
+  };
+
+  // Latest row per brand (query is date DESC).
+  const latestByBrand = new Map<string, PnlRow>();
+  for (const row of (pnlRows || []) as PnlRow[]) {
+    if (!latestByBrand.has(row.brand_id)) {
+      latestByBrand.set(row.brand_id, row);
+    }
+  }
+
+  const fxRates = await getFxRates();
+  const displayCurrency = 'USD';
+
+  const brandSummaries: BrandSummary[] = [];
+  const tickerRows: TickerRow[] = [];
+
+  for (const brand of brandList) {
+    const row = latestByBrand.get(brand.id);
+    if (!row) continue;
+
+    const native = normalizeCurrencyCode(row.currency || 'USD');
+    const toUsd = (v: number) => toReportingCurrency(v, native, displayCurrency, fxRates);
+
+    const revenueNative = netRevenueFromPnl(row);
+    const metaNative = Number(row.meta_spend || 0);
+    const googleNative = Number(row.google_spend || 0);
+    const otherNative = Number(row.other_spend || 0);
+    const spendNative = metaNative + googleNative + otherNative;
+
+    const revenue = toUsd(revenueNative);
+    const metaSpend = toUsd(metaNative);
+    const googleSpend = toUsd(googleNative);
+    const otherSpend = toUsd(otherNative);
+    const spend = toUsd(spendNative);
+    const roas = spend > 0 ? revenue / spend : 0;
+
+    const channels: Array<'meta' | 'google'> = [];
+    if (metaSpend > 0) channels.push('meta');
+    if (googleSpend > 0) channels.push('google');
+    // Still show brand if it has revenue/spend with only "other" or zeros for visibility
+    if (channels.length === 0 && (spend > 0 || revenue > 0)) {
+      // No paid-channel spend — skip channel ticker chips but keep brand summary
+    }
+
+    brandSummaries.push({
+      brand_id: brand.id,
+      brand_name: brandNameById.get(brand.id) || brand.name,
+      spend,
+      revenue,
+      roas,
+      meta_spend: metaSpend,
+      google_spend: googleSpend,
+      other_spend: otherSpend,
+      channels: channels.length > 0 ? channels : [],
+      as_of_date: row.date,
+      native_currency: native,
+    });
+
+    // Channel ticker rows: split revenue by spend share so brandAgg sum == net revenue once.
+    const paid = metaSpend + googleSpend;
+    if (metaSpend > 0) {
+      const share = paid > 0 ? metaSpend / paid : 1;
+      const chRev = revenue * share;
+      tickerRows.push({
         brand_id: brand.id,
         brand_name: brand.name,
         channel: 'meta',
-        spend,
-        revenue,
-        roas: spend > 0 ? revenue / spend : 0,
-      };
-    } catch {
-      return null;
+        spend: metaSpend,
+        revenue: chRev,
+        roas: metaSpend > 0 ? chRev / metaSpend : 0,
+        as_of_date: row.date,
+        native_currency: native,
+      });
     }
-  };
-
-  // Google spend via Pipeboard Google MCP (direct Google Ads API by customer_id).
-  // Windsor was cancelled; Pipeboard is the correct replacement and covers every
-  // brand including Mintier (which has no shopify_store_domain).
-  const fetchGoogle = async (brand: BrandRow): Promise<TickerRow | null> => {
-    if (!brand.google_ads_customer_id || !pipeboardToken) return null;
-    try {
-      let currency = 'USD';
-      try {
-        const curRows = await gaqlQuery(pipeboardToken, brand.google_ads_customer_id, 'SELECT customer.currency_code, customer.id FROM customer LIMIT 1');
-        if (curRows?.[0]?.customer?.currencyCode) currency = curRows[0].customer.currencyCode;
-      } catch { /* default USD */ }
-      const m = await getCampaignMetrics(pipeboardToken, brand.google_ads_customer_id, 'TODAY');
-      const campaigns = m?.campaigns || [];
-      let spend = 0;
-      let revenue = 0;
-      for (const c of campaigns) {
-        spend += Number(c.cost || 0);
-        revenue += Number(c.conversions_value || 0);
-      }
-      if (spend === 0) return null;
-      spend = toUsd(spend, currency, fxRates);
-      revenue = toUsd(revenue, currency, fxRates);
-      return {
+    if (googleSpend > 0) {
+      const share = paid > 0 ? googleSpend / paid : 1;
+      const chRev = revenue * share;
+      tickerRows.push({
         brand_id: brand.id,
         brand_name: brand.name,
         channel: 'google',
-        spend,
-        revenue,
-        roas: spend > 0 ? revenue / spend : 0,
-      };
-    } catch {
-      return null;
-    }
-  };
-
-  // Triple Whale fallback — used when direct Meta/Google API calls fail
-  // (e.g. token doesn't have permission for a specific ad account)
-  const fetchTwFallback = async (brand: BrandRow): Promise<TickerRow | null> => {
-    if (!brand.shopify_store_domain || !twApiKey) return null;
-    try {
-      const res = await fetch('https://api.triplewhale.com/api/v2/orcabase/api/sql', {
-        method: 'POST',
-        headers: { 'x-api-key': twApiKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          shopId: brand.shopify_store_domain,
-          query: 'SELECT SUM(spend) AS spend, SUM(order_revenue) AS revenue FROM blended_stats_tvf WHERE event_date = @startDate',
-          currency: 'USD',
-          period: { startDate: today, endDate: today },
-        }),
+        spend: googleSpend,
+        revenue: chRev,
+        roas: googleSpend > 0 ? chRev / googleSpend : 0,
+        as_of_date: row.date,
+        native_currency: native,
       });
-      if (!res.ok) return null;
-      const data = await res.json();
-      const rows = Array.isArray(data) ? data : data.data || [];
-      const row = rows[0];
-      if (!row) return null;
-      const spend = parseFloat(row.spend || '0');
-      const revenue = parseFloat(row.revenue || '0');
-      if (spend === 0 && revenue === 0) return null;
-      return {
-        brand_id: brand.id,
-        brand_name: brand.name,
-        channel: 'meta', // TW fallback — attribute to primary paid channel
-        spend,
-        revenue,
-        roas: spend > 0 ? revenue / spend : 0,
-      };
-    } catch {
-      return null;
-    }
-  };
-
-  // Phase 1: Fan out direct Meta + Google API calls in parallel
-  const directTasks: Promise<TickerRow | null>[] = [];
-  for (const b of brands || []) {
-    directTasks.push(fetchMeta(b));
-    directTasks.push(fetchGoogle(b));
-  }
-  const directResults = await Promise.all(directTasks);
-
-  // Phase 2: Run TW fallback for brands that got NO direct API results
-  const brandsWithResults = new Set<string>();
-  for (const r of directResults) {
-    if (r) brandsWithResults.add(r.brand_id);
-  }
-
-  const fallbackTasks: Promise<TickerRow | null>[] = [];
-  for (const b of brands || []) {
-    if (!brandsWithResults.has(b.id)) {
-      fallbackTasks.push(fetchTwFallback(b));
     }
   }
-  const fallbackResults = fallbackTasks.length > 0 ? await Promise.all(fallbackTasks) : [];
 
-  const results = [...directResults, ...fallbackResults].filter((r): r is TickerRow => r !== null);
+  // Sort brands by spend desc (same as prior Dashboard UX)
+  brandSummaries.sort((a, b) => b.spend - a.spend);
+  tickerRows.sort((a, b) => b.spend - a.spend);
+
+  const latestDate = brandSummaries.reduce<string | null>((max, b) => {
+    if (!max || b.as_of_date > max) return b.as_of_date;
+    return max;
+  }, null);
 
   return NextResponse.json({
-    rows: results,
+    rows: tickerRows,
+    brands: brandSummaries,
+    source: 'daily_pnl',
+    display_currency: displayCurrency,
+    lookback_days: lookbackDays,
+    as_of_date: latestDate,
     as_of: new Date().toISOString(),
+    brand_count_active: brandList.length,
+    brand_count_with_data: brandSummaries.length,
   });
 }

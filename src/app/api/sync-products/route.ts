@@ -39,6 +39,7 @@ export async function POST(request: NextRequest) {
   let query = supabase
     .from('brands')
     .select('id, name, shopify_store_domain, shopify_client_id, shopify_client_secret')
+    .is('archived_at', null)
     .not('shopify_store_domain', 'is', null)
     .not('shopify_client_id', 'is', null)
     .not('shopify_client_secret', 'is', null);
