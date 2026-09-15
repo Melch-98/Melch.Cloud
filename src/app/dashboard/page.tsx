@@ -16,18 +16,6 @@ interface TickerRow {
   spend: number;
   revenue: number;
   roas: number;
-  as_of_date?: string;
-}
-
-interface BrandSummary {
-  brand_id: string;
-  brand_name: string;
-  spend: number;
-  revenue: number;
-  roas: number;
-  channels: Array<'meta' | 'google'>;
-  as_of_date: string;
-  native_currency?: string;
 }
 
 interface BrandAgg {
@@ -37,7 +25,6 @@ interface BrandAgg {
   revenue: number;
   roas: number;
   channels: Array<'meta' | 'google'>;
-  as_of_date?: string;
 }
 
 interface NewBatch {
@@ -76,8 +63,6 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [userName, setUserName] = useState('');
   const [tickerRows, setTickerRows] = useState<TickerRow[]>([]);
-  const [brandSummaries, setBrandSummaries] = useState<BrandSummary[]>([]);
-  const [tickerMeta, setTickerMeta] = useState<{ source?: string; as_of_date?: string | null; brand_count_active?: number; brand_count_with_data?: number }>({});
   const [tickerError, setTickerError] = useState(false);
   const [newBatches, setNewBatches] = useState<NewBatch[]>([]);
   const [batchFilter, setBatchFilter] = useState<string>('all');
@@ -123,13 +108,6 @@ export default function DashboardPage() {
         const j = await res.json();
         if (!cancelled) {
           setTickerRows(j.rows || []);
-          setBrandSummaries(j.brands || []);
-          setTickerMeta({
-            source: j.source,
-            as_of_date: j.as_of_date,
-            brand_count_active: j.brand_count_active,
-            brand_count_with_data: j.brand_count_with_data,
-          });
           setTickerError(false);
         }
       } catch {
@@ -174,7 +152,7 @@ export default function DashboardPage() {
 
       if (!cancelled && !error && data) {
         const mapped: NewBatch[] = (data as any[])
-          .filter((r) => !r.brands?.archived_at)
+          .filter((r) => r.brands && !r.brands.archived_at)
           .map((r) => ({
             id: r.id,
             batch_name: r.batch_name,
@@ -201,19 +179,8 @@ export default function DashboardPage() {
     };
   }, [loading, supabase]);
 
-  // Prefer Melch daily_pnl brand summaries from the API; fall back to channel rollup.
+  // Aggregate ticker rows by brand (combine Meta + Google)
   const brandAggs = useMemo<BrandAgg[]>(() => {
-    if (brandSummaries.length > 0) {
-      return brandSummaries.map((b) => ({
-        brand_id: b.brand_id,
-        brand_name: b.brand_name,
-        spend: b.spend,
-        revenue: b.revenue,
-        roas: b.roas,
-        channels: b.channels || [],
-        as_of_date: b.as_of_date,
-      }));
-    }
     const map = new Map<string, BrandAgg>();
     for (const r of tickerRows) {
       const existing = map.get(r.brand_id);
@@ -221,9 +188,6 @@ export default function DashboardPage() {
         existing.spend += r.spend;
         existing.revenue += r.revenue;
         if (!existing.channels.includes(r.channel)) existing.channels.push(r.channel);
-        if (r.as_of_date && (!existing.as_of_date || r.as_of_date > existing.as_of_date)) {
-          existing.as_of_date = r.as_of_date;
-        }
       } else {
         map.set(r.brand_id, {
           brand_id: r.brand_id,
@@ -232,7 +196,6 @@ export default function DashboardPage() {
           revenue: r.revenue,
           roas: 0,
           channels: [r.channel],
-          as_of_date: r.as_of_date,
         });
       }
     }
@@ -242,7 +205,7 @@ export default function DashboardPage() {
     }));
     rows.sort((a, b) => b.spend - a.spend);
     return rows;
-  }, [brandSummaries, tickerRows]);
+  }, [tickerRows]);
 
   // Brand options for new-batches filter
   const batchBrandOptions = useMemo(() => {
@@ -268,7 +231,7 @@ export default function DashboardPage() {
 
   // Build ticker text repeated to feel continuous
   const tickerItems = tickerRows.length === 0
-    ? [{ key: 'empty', text: tickerError ? 'Ticker offline — retrying' : 'Loading Melch P&L…' }]
+    ? [{ key: 'empty', text: tickerError ? 'Ticker offline — retrying' : 'Loading live spend…' }]
     : tickerRows.map((r) => ({
         key: `${r.brand_id}-${r.channel}`,
         brand: r.brand_name,
@@ -301,23 +264,12 @@ export default function DashboardPage() {
         >
           <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
             <div>
-              <h2 className="text-base font-semibold tracking-tight">Brand Performance</h2>
-              <p className="text-xs mt-0.5" style={{ color: '#6B6560' }}>
-                Melch daily P&amp;L · net revenue ÷ ad spend · USD (reporting FX) · archived brands excluded
-              </p>
+              <h2 className="text-base font-semibold tracking-tight">Today&apos;s Performance</h2>
+              <p className="text-xs mt-0.5" style={{ color: '#6B6560' }}>Meta + Google combined, by brand · USD</p>
             </div>
-            <div className="flex items-center gap-3">
-              <Link
-                href="/analytics/daily-pnl"
-                className="text-[11px] font-medium px-2.5 py-1 rounded-lg transition-colors"
-                style={{ color: '#C8B89A', backgroundColor: 'rgba(200,184,154,0.08)' }}
-              >
-                Open Daily P&amp;L →
-              </Link>
-              <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider" style={{ color: '#6B6560' }}>
-                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: '#C8B89A' }} />
-                {tickerMeta.as_of_date ? `As of ${tickerMeta.as_of_date}` : 'Melch P&L'}
-              </div>
+            <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider" style={{ color: '#6B6560' }}>
+              <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: '#C8B89A' }} />
+              Live
             </div>
           </div>
 
@@ -327,20 +279,15 @@ export default function DashboardPage() {
                 <th className="text-left px-6 py-3 text-[11px] font-medium uppercase tracking-wider" style={{ color: '#6B6560' }}>Brand</th>
                 <th className="text-left px-4 py-3 text-[11px] font-medium uppercase tracking-wider" style={{ color: '#6B6560' }}>Channels</th>
                 <th className="text-right px-4 py-3 text-[11px] font-medium uppercase tracking-wider" style={{ color: '#6B6560' }}>Spend</th>
-                <th className="text-right px-4 py-3 text-[11px] font-medium uppercase tracking-wider" style={{ color: '#6B6560' }}>Net Revenue</th>
-                <th className="text-right px-4 py-3 text-[11px] font-medium uppercase tracking-wider" style={{ color: '#6B6560' }}>MER</th>
-                <th className="text-right px-6 py-3 text-[11px] font-medium uppercase tracking-wider" style={{ color: '#6B6560' }}>As of</th>
+                <th className="text-right px-4 py-3 text-[11px] font-medium uppercase tracking-wider" style={{ color: '#6B6560' }}>Revenue</th>
+                <th className="text-right px-6 py-3 text-[11px] font-medium uppercase tracking-wider" style={{ color: '#6B6560' }}>ROAS</th>
               </tr>
             </thead>
             <tbody>
               {brandAggs.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-10 text-center text-xs" style={{ color: '#6B6560' }}>
-                    {tickerError
-                      ? 'No data available.'
-                      : tickerMeta.brand_count_active && tickerMeta.brand_count_with_data === 0
-                        ? 'No recent daily P&L rows for active brands — sync from Daily P&L.'
-                        : 'Loading…'}
+                  <td colSpan={5} className="px-6 py-10 text-center text-xs" style={{ color: '#6B6560' }}>
+                    {tickerError ? 'No data available.' : 'Loading…'}
                   </td>
                 </tr>
               ) : (
@@ -365,18 +312,12 @@ export default function DashboardPage() {
                             GOOGLE
                           </span>
                         )}
-                        {b.channels.length === 0 && (
-                          <span className="text-[10px]" style={{ color: '#6B6560' }}>—</span>
-                        )}
                       </div>
                     </td>
                     <td className="px-4 py-4 text-right tabular-nums" style={{ color: '#F5F5F8' }}>{fmtMoney(b.spend)}</td>
                     <td className="px-4 py-4 text-right tabular-nums" style={{ color: '#F5F5F8' }}>{fmtMoney(b.revenue)}</td>
-                    <td className="px-4 py-4 text-right tabular-nums font-semibold" style={{ color: b.roas >= 1 ? '#22C55E' : b.roas > 0 ? '#EF4444' : '#6B6560' }}>
+                    <td className="px-6 py-4 text-right tabular-nums font-semibold" style={{ color: b.roas >= 1 ? '#22C55E' : b.roas > 0 ? '#EF4444' : '#6B6560' }}>
                       {b.spend > 0 ? fmtRoas(b.roas) : '—'}
-                    </td>
-                    <td className="px-6 py-4 text-right tabular-nums text-xs" style={{ color: '#6B6560' }}>
-                      {b.as_of_date || '—'}
                     </td>
                   </tr>
                 ))
@@ -556,7 +497,7 @@ export default function DashboardPage() {
               color: '#0a0a0a',
             }}
           >
-            MELCH P&L
+            LIVE · TODAY
           </div>
           <div className="flex-1 overflow-hidden relative">
             <div className="ticker-track flex items-center gap-12 whitespace-nowrap py-4 px-6">
