@@ -32,6 +32,7 @@ import {
   Grid3X3,
   Zap,
   Globe,
+  Trophy,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
 
@@ -168,6 +169,7 @@ export default function Navbar({ children }: { children?: React.ReactNode }) {
         { label: 'Copy Analysis', href: '/analytics/copy-analysis', icon: Type },
         { label: 'Ad Perspective', href: '/analytics/ad-perspective', icon: TableProperties },
         { label: 'Creative Matrix', href: '/analytics/creative-matrix', icon: Grid3X3, roles: ['admin', 'strategist'] },
+        { label: 'Trybe Program', href: '/analytics/trybe-program', icon: Trophy, roles: ['admin', 'strategist', 'founder'] },
       ]},
     // Hidden — Ad Changelog needs rework before re-enabling
     // {

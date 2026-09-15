@@ -24,6 +24,7 @@ import {
   Rocket,
   Activity,
   Link2,
+  KeyRound,
 } from 'lucide-react';
 import Link from 'next/link';
 import Navbar from '@/components/Navbar';
@@ -370,6 +371,80 @@ function TeamCard({
   const [returnsPct, setReturnsPct] = useState(String(brand.returns_rate_pct ?? '0'));
   const [creativeCostStatic, setCreativeCostStatic] = useState(String(brand.creative_cost_static ?? '50'));
   const [creativeCostVideo, setCreativeCostVideo] = useState(String(brand.creative_cost_video ?? '150'));
+  // Trybe integration
+  const [trybeKey, setTrybeKey] = useState('');
+  const [trybeBrandId, setTrybeBrandId] = useState('');
+  const [trybeProgramId, setTrybeProgramId] = useState('');
+  const [trybeProgramName, setTrybeProgramName] = useState('');
+  const [trybeMasked, setTrybeMasked] = useState<string | null>(null);
+  const [trybeConfigured, setTrybeConfigured] = useState(false);
+  const [trybeSaving, setTrybeSaving] = useState(false);
+  const [trybeMsg, setTrybeMsg] = useState<string | null>(null);
+  const [showTrybeKey, setShowTrybeKey] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const supabase = createClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+        const res = await fetch(`/api/trybe/integration?brand_id=${brand.id}`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        const data = await res.json();
+        if (cancelled || !res.ok) return;
+        setTrybeConfigured(!!data.configured);
+        setTrybeMasked(data.api_key_masked || null);
+        const meta = data.metadata || {};
+        setTrybeBrandId(meta.trybe_brand_id || '');
+        setTrybeProgramId(meta.trybe_program_id || '');
+        setTrybeProgramName(meta.trybe_program_name || '');
+      } catch {
+        // ignore — settings still usable
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [brand.id]);
+
+  const saveTrybeIntegration = async () => {
+    setTrybeSaving(true);
+    setTrybeMsg(null);
+    try {
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) { setTrybeMsg('Not authenticated'); setTrybeSaving(false); return; }
+      const body: Record<string, string> = {
+        brand_id: brand.id,
+        trybe_brand_id: trybeBrandId.trim(),
+        trybe_program_id: trybeProgramId.trim(),
+        trybe_program_name: trybeProgramName.trim(),
+      };
+      if (trybeKey.trim()) body.api_key = trybeKey.trim();
+      const res = await fetch('/api/trybe/integration', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setTrybeMsg(data.error || 'Save failed');
+      } else {
+        setTrybeConfigured(!!data.configured);
+        setTrybeMasked(data.api_key_masked || trybeMasked);
+        setTrybeKey('');
+        setTrybeMsg(data.warning || 'Trybe settings saved');
+      }
+    } catch {
+      setTrybeMsg('Something went wrong');
+    } finally {
+      setTrybeSaving(false);
+    }
+  };
+
 
   const unassignedUsers = allUsers.filter(
     (u) => !u.brand_id && u.role !== 'admin'
@@ -779,6 +854,75 @@ function TeamCard({
               {twSyncResult && (
                 <span className={`text-[11px] ${twSyncResult.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
                   {twSyncResult}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Trybe */}
+          <div className="pt-3 mt-3" style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+            <div className="flex items-center gap-2 mb-2.5">
+              <KeyRound size={12} style={{ color: '#A78BFA' }} />
+              <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#A78BFA' }}>
+                Trybe Program
+              </p>
+              {trybeConfigured && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(34,197,94,0.12)', color: '#22C55E' }}>
+                  Connected{trybeMasked ? ` · ${trybeMasked}` : ''}
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="md:col-span-2">
+                <label className="text-[10px] text-gray-500 font-medium block mb-1.5 uppercase tracking-wider">
+                  API Key {trybeConfigured ? '(leave blank to keep existing)' : ''}
+                </label>
+                <div className="relative">
+                  <input
+                    type={showTrybeKey ? 'text' : 'password'}
+                    value={trybeKey}
+                    onChange={(e) => setTrybeKey(e.target.value)}
+                    placeholder={trybeConfigured ? '•••••••• (unchanged)' : 'tk_live_…'}
+                    className="w-full px-3 py-1.5 rounded-lg text-xs outline-none pr-8"
+                    style={{ backgroundColor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#F5F5F8' }}
+                    autoComplete="off"
+                  />
+                  <button type="button" onClick={() => setShowTrybeKey(!showTrybeKey)} className="absolute right-2 top-1/2 -translate-y-1/2" style={{ color: '#555' }}>
+                    {showTrybeKey ? <EyeOff size={12} /> : <Eye size={12} />}
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 font-medium block mb-1.5 uppercase tracking-wider">Trybe Brand ID</label>
+                <input type="text" value={trybeBrandId} onChange={(e) => setTrybeBrandId(e.target.value)} placeholder="uuid from Trybe CDN path"
+                  className="w-full px-3 py-1.5 rounded-lg text-xs outline-none"
+                  style={{ backgroundColor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#F5F5F8' }} />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 font-medium block mb-1.5 uppercase tracking-wider">Program ID</label>
+                <input type="text" value={trybeProgramId} onChange={(e) => setTrybeProgramId(e.target.value)} placeholder="creator_program_…"
+                  className="w-full px-3 py-1.5 rounded-lg text-xs outline-none"
+                  style={{ backgroundColor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#F5F5F8' }} />
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-[10px] text-gray-500 font-medium block mb-1.5 uppercase tracking-wider">Program Name</label>
+                <input type="text" value={trybeProgramName} onChange={(e) => setTrybeProgramName(e.target.value)} placeholder="e.g. 10% Ad Spend"
+                  className="w-full px-3 py-1.5 rounded-lg text-xs outline-none"
+                  style={{ backgroundColor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#F5F5F8' }} />
+              </div>
+            </div>
+            <div className="mt-3 flex items-center gap-3">
+              <button
+                onClick={saveTrybeIntegration}
+                disabled={trybeSaving}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all disabled:opacity-50"
+                style={{ backgroundColor: 'rgba(167,139,250,0.15)', color: '#A78BFA', border: '1px solid rgba(167,139,250,0.25)' }}
+              >
+                {trybeSaving ? 'Saving…' : 'Save Trybe'}
+              </button>
+              {trybeMsg && (
+                <span className={`text-[11px] ${trybeMsg.toLowerCase().includes('fail') || trybeMsg.toLowerCase().includes('error') || trybeMsg.toLowerCase().includes('wrong') ? 'text-red-400' : 'text-green-400'}`}>
+                  {trybeMsg}
                 </span>
               )}
             </div>
