@@ -32,7 +32,7 @@ Row: `creator{id,name,avatar_url,joined_at}`, `programs[{id,name}]`, `activity{l
 ## Melch.Cloud product mapping (Alysha / Winks 3 tabs)
 1. **Program overview** — aggregate `/v1/submissions` by day + status + media_type (pipeline + format mix + volume)
 2. **Creator leaderboard** — `/v1/creator-performance?sort_by=spend&active_only=true` (or earnings)
-3. **Top ads by spend** — Trybe submissions only expose `ads.count` / date range, **not per-ad spend**. v1: list submissions with `ads.count>0` + thumbnail; join Melch Meta spend when possible. Do not invent spend.
+3. **Top ads by spend** — Trybe submissions only expose `ads.count` / date range, **not per-ad spend**. Cards are **one creative per `trybe_id`** (dedupe asset/thumb fallback). Join Melch Meta ad insights when `ad_name` contains `trybe=<trybe_id>` — sum spend/impressions/purchases across campaign copies of the same creative. Do not invent spend; show n/a until Meta join.
 
 ## Melch constraints
 - All Melch.Cloud brands except FOND; exclude `archived_at`
