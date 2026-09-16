@@ -228,6 +228,7 @@ function finalizeMetaMetrics(agg: MetaAgg | null) {
       landing_page_views: null as number | null,
       meta_ad_ids: [] as string[],
       meta_ad_names: [] as string[],
+      meta_ad_id: null as string | null,
       meta_campaign_count: 0,
       ad_name: null as string | null,
     };
@@ -250,6 +251,15 @@ function finalizeMetaMetrics(agg: MetaAgg | null) {
   const adName =
     agg.ad_names.slice().sort((a, b) => b.length - a.length)[0] || null;
 
+  const uniqueIds = Array.from(new Set(agg.ad_ids.filter(Boolean)));
+  const uniqueNames = Array.from(new Set(agg.ad_names.filter(Boolean)));
+  // Prefer ad_id paired with the chosen ad name when lengths align; else first id
+  let primaryAdId: string | null = uniqueIds[0] || null;
+  if (adName && agg.ad_names.length === agg.ad_ids.length) {
+    const idx = agg.ad_names.findIndex((n) => n === adName);
+    if (idx >= 0 && agg.ad_ids[idx]) primaryAdId = agg.ad_ids[idx];
+  }
+
   return {
     meta_joined: true as const,
     spend,
@@ -261,11 +271,25 @@ function finalizeMetaMetrics(agg: MetaAgg | null) {
     thumbstop_rate: thumbstop,
     hold_rate: hold,
     landing_page_views: agg.landing_page_views,
-    meta_ad_ids: Array.from(new Set(agg.ad_ids)),
-    meta_ad_names: Array.from(new Set(agg.ad_names)),
+    meta_ad_ids: uniqueIds,
+    meta_ad_names: uniqueNames,
+    meta_ad_id: primaryAdId,
     meta_campaign_count: agg.campaigns.size,
     ad_name: adName,
   };
+}
+
+
+function normalizeMetaActId(accountId: string): string {
+  return accountId.replace(/^act_/i, '');
+}
+
+/** Ads Manager deep link for a single Meta ad id. */
+function facebookAdManagerUrl(accountId: string | null | undefined, adId: string | null | undefined): string | null {
+  if (!accountId || !adId) return null;
+  const act = normalizeMetaActId(accountId);
+  if (!act || !adId) return null;
+  return `https://adsmanager.facebook.com/adsmanager/manage/ads?act=${encodeURIComponent(act)}&selected_ad_ids=${encodeURIComponent(adId)}`;
 }
 
 async function loadMetaInsightsForBrand(
@@ -331,6 +355,7 @@ function mapTopAds(
   submissions: TrybeSubmission[],
   metaByTrybe: Map<string, MetaAgg>,
   endDate: string,
+  metaAdAccountId: string | null,
 ) {
   type Acc = {
     key: string;
@@ -425,6 +450,10 @@ function mapTopAds(
       created_at: acc.created_at,
       asset_url: acc.asset_url,
       ...metrics,
+      facebook_ad_url: facebookAdManagerUrl(
+        metaAdAccountId,
+        (metrics as { meta_ad_id?: string | null }).meta_ad_id || null,
+      ),
       spend_note: metrics.meta_joined
         ? null
         : 'Spend n/a until Meta join (ad name must include trybe=<id>)',
@@ -476,7 +505,7 @@ export async function GET(request: NextRequest) {
 
   const { data: brand, error: brandErr } = await supabase
     .from('brands')
-    .select('id, name, slug, archived_at')
+    .select('id, name, slug, archived_at, meta_ad_account_id')
     .eq('id', brandId)
     .maybeSingle();
 
@@ -582,7 +611,12 @@ export async function GET(request: NextRequest) {
       payload.leaderboard = mapLeaderboard(leaderboard);
     }
     if (wantTopAds) {
-      payload.top_ads = mapTopAds(filteredSubs, metaByTrybe, endDate);
+      payload.top_ads = mapTopAds(
+        filteredSubs,
+        metaByTrybe,
+        endDate,
+        (brand as { meta_ad_account_id?: string | null }).meta_ad_account_id || null,
+      );
     }
 
     return NextResponse.json(payload);
