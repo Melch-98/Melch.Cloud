@@ -234,9 +234,11 @@ export default function TrybeProgramPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: '#0A0A0A' }}>
-        <Loader className="animate-spin" style={{ color: G }} />
-      </div>
+      <Navbar>
+        <div className="min-h-screen flex items-center justify-center" style={{ background: '#0A0A0A' }}>
+          <Loader className="animate-spin" style={{ color: G }} />
+        </div>
+      </Navbar>
     );
   }
 
@@ -247,9 +249,8 @@ export default function TrybeProgramPage() {
   ];
 
   return (
-    <div className="min-h-screen" style={{ background: '#0A0A0A', color: W }}>
-      <Navbar />
-      <main className="md:ml-64 px-4 md:px-8 py-6 max-w-[1400px]">
+    <Navbar>
+      <div className="min-h-screen px-4 md:px-8 py-6 max-w-[1400px]" style={{ background: '#0A0A0A', color: W }}>
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4 mb-6">
           <div>
@@ -712,7 +713,7 @@ export default function TrybeProgramPage() {
             )}
           </div>
         )}
-      </main>
-    </div>
+      </div>
+    </Navbar>
   );
 }
