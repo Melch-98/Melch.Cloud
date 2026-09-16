@@ -99,6 +99,9 @@ interface TopAdRow {
   hold_rate: number | null;
   landing_page_views: number | null;
   ad_name: string | null;
+  meta_ad_id: string | null;
+  meta_ad_ids?: string[];
+  facebook_ad_url: string | null;
   meta_campaign_count: number;
   spend_note: string | null;
 }
@@ -962,7 +965,30 @@ export default function TrybeProgramPage() {
                         </span>
                       </div>
 
-                      <p className="text-xs font-semibold truncate" style={{ color: W }}>
+                      {ad.facebook_ad_url && ad.ad_name ? (
+                        <a
+                          href={ad.facebook_ad_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs font-semibold leading-snug hover:underline"
+                          style={{ color: W }}
+                          title={ad.ad_name}
+                        >
+                          <span className="line-clamp-2">{ad.ad_name}</span>
+                          <span className="inline-flex items-center gap-1 mt-0.5 text-[10px] font-medium" style={{ color: Pr }}>
+                            <ExternalLink size={10} /> Open in Ads Manager
+                          </span>
+                        </a>
+                      ) : ad.ad_name ? (
+                        <p className="text-xs font-semibold leading-snug line-clamp-2" style={{ color: W }} title={ad.ad_name}>
+                          {ad.ad_name}
+                        </p>
+                      ) : (
+                        <p className="text-xs font-semibold truncate" style={{ color: Gy }} title="Meta ad name unavailable until join">
+                          Ad name pending Meta join
+                        </p>
+                      )}
+                      <p className="text-[10px] truncate" style={{ color: Gy }}>
                         {ad.creator_name}
                       </p>
 
@@ -1022,18 +1048,9 @@ export default function TrybeProgramPage() {
                               ? ` · ${ad.placements} placements`
                               : ''}
                         </p>
-                        {ad.ad_name ? (
-                          <p
-                            className="text-[10px] font-medium truncate flex items-center gap-1"
-                            style={{ color: Pr }}
-                            title={ad.ad_name}
-                          >
-                            <ExternalLink size={10} />
-                            {ad.ad_name}
-                          </p>
-                        ) : (
-                          <p className="text-[10px] truncate" style={{ color: Gy }}>
-                            Ad name pending Meta join
+                        {!ad.facebook_ad_url && ad.meta_ad_id && (
+                          <p className="text-[9px] truncate" style={{ color: Gy }}>
+                            Meta ad {ad.meta_ad_id}
                           </p>
                         )}
                         {!ad.meta_joined && ad.spend_note && (
