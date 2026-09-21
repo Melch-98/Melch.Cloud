@@ -455,14 +455,25 @@ interface OrderHist {
 
 // ─── Fetch Shopify by country with NC/RC ───────────────────────
 //
-// A new-customer order is that customer's first non-voided order ever.
+// A new-customer order is that customer's first non-voided order ever,
+// which is Shopify Analytics `new_or_returning_customer = New` on the sales
+// dataset (the order is the customer's very first purchase), grouped by
+// shipping country, in the shop timezone.
+//
 // shopify_orders does not hold full store history (Mintier order names are
 // ~#27000 while the table starts 2026-06-28), so "earliest row we stored"
-// marks returning customers as new. Match daily_pnl instead:
+// marks returning customers as new. Rule, same one daily_pnl uses:
 //   NC iff this is the earliest stored non-voided order
 //      AND stored non-voided count >= Shopify Customer.numberOfOrders
 // When lifetime > stored, orders before the sync window exist and every
 // stored order is returning.
+//
+// Checked against Nick's 2026-09-21 screenshot. Production "This Month" was
+// UTC (Canada 601 orders / 475 NC, United States 314 / 264). Shopify
+// month-to-date New + shipping country was Canada 346, United States 213.
+// This rule on America/Toronto 2026-09-01..21 matches those two figures.
+// Nine Canada orders on the evening of Aug 31 Toronto sit inside UTC
+// September and are not part of Shopify's month.
 
 async function fetchShopifyByCountry(
   supabase: any,
