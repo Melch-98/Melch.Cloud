@@ -453,6 +453,133 @@ interface OrderHist {
   count: number;
 }
 
+// Client-credentials brands (Tallow, Mintier) have no shopify_stores row, so
+// orders/create webhooks are not registered. shopify_orders only moves when
+// someone runs /api/shopify-sync, which on Tallow lands in multi-day batches.
+// Nick's 2026-09-21 Tallow screenshot (Canada 1,304 orders / 948 NC, United
+// States 462 / 382) is this same lifetime gate on the rows stored before the
+// 23:22 UTC batch. The rows that batch added bring the gate to Canada 1,499
+// NC and United States 624 NC, which is Shopify "New" by shipping country.
+// Pull the gap from Shopify before counting so a stale table cannot undercount.
+async function catchUpShopifyOrders(
+  supabase: any,
+  brandId: string,
+  domain: string,
+  token: string,
+  since: string,
+  until: string,
+  timeZone: string,
+): Promise<string | null> {
+  const utcSince = `${addCalendarDays(since, -2)}T00:00:00Z`;
+  const utcUntil = `${addCalendarDays(until, 2)}T23:59:59.999Z`;
+
+  const { data: latestRow, error: latestErr } = await supabase
+    .from('shopify_orders')
+    .select('shopify_created_at')
+    .eq('brand_id', brandId)
+    .order('shopify_created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (latestErr) throw new Error(latestErr.message);
+
+  const latestAt = latestRow?.shopify_created_at as string | undefined;
+  if (latestAt) {
+    const latestDay = orderStoreDate(latestAt, timeZone);
+    const ageMs = Date.now() - new Date(latestAt).getTime();
+    // Already have orders past this window, or the newest row is from the
+    // window's last shop-day and only a couple of minutes old.
+    if (latestDay > until || (latestDay === until && ageMs >= 0 && ageMs < 2 * 60 * 1000)) {
+      return null;
+    }
+  }
+
+  const windowStartMs = new Date(utcSince).getTime();
+  const overlapMs = latestAt ? new Date(latestAt).getTime() - 2 * 60 * 60 * 1000 : windowStartMs;
+  const createdMin = new Date(Math.max(windowStartMs, overlapMs)).toISOString();
+
+  const { count: beforeCount, error: beforeErr } = await supabase
+    .from('shopify_orders')
+    .select('id', { count: 'exact', head: true })
+    .eq('brand_id', brandId)
+    .gte('shopify_created_at', utcSince)
+    .lte('shopify_created_at', utcUntil);
+  if (beforeErr) throw new Error(beforeErr.message);
+
+  const orders: any[] = [];
+  let nextUrl: string | null = null;
+  let truncated = false;
+  const firstUrl =
+    `https://${domain}/admin/api/2024-01/orders.json?status=any&limit=250` +
+    `&created_at_min=${encodeURIComponent(createdMin)}` +
+    `&created_at_max=${encodeURIComponent(new Date().toISOString())}`;
+
+  for (let page = 0; page < 40; page++) {
+    const res: any = await fetch(nextUrl || firstUrl, {
+      headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) {
+      throw new Error(`Shopify order catch-up failed (${res.status})`);
+    }
+    const body: any = await res.json();
+    const batch: any[] = Array.isArray(body?.orders) ? body.orders : [];
+    orders.push(...batch);
+    const link: string = res.headers.get('Link') || '';
+    const next: RegExpMatchArray | null = link.match(/<([^>]+)>;\s*rel="next"/);
+    nextUrl = next ? next[1] : null;
+    if (!nextUrl || batch.length < 250) break;
+    if (page === 39) truncated = true;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  if (orders.length === 0) return null;
+
+  const CHUNK = 200;
+  for (let i = 0; i < orders.length; i += CHUNK) {
+    const rows = orders.slice(i, i + CHUNK).map((o) => ({
+      shop_domain: domain,
+      brand_id: brandId,
+      shopify_order_id: o.id,
+      order_number: o.name ?? null,
+      email: o.email ?? null,
+      total_price: o.total_price ?? null,
+      subtotal_price: o.subtotal_price ?? null,
+      total_tax: o.total_tax ?? null,
+      total_discounts: o.total_discounts ?? null,
+      currency: o.currency ?? null,
+      financial_status: o.financial_status ?? null,
+      fulfillment_status: o.fulfillment_status ?? null,
+      customer_id: o.customer?.id ?? null,
+      line_items: o.line_items ?? [],
+      shipping_address: o.shipping_address ?? null,
+      billing_address: o.billing_address ?? null,
+      source_name: o.source_name ?? null,
+      landing_site: o.landing_site ?? null,
+      referring_site: o.referring_site ?? null,
+      shopify_created_at: o.created_at,
+      shopify_updated_at: o.updated_at,
+      raw: o,
+      updated_at: new Date().toISOString(),
+    }));
+    const { error } = await supabase
+      .from('shopify_orders')
+      .upsert(rows, { onConflict: 'shop_domain,shopify_order_id' });
+    if (error) throw new Error(error.message);
+  }
+
+  const { count: afterCount, error: afterErr } = await supabase
+    .from('shopify_orders')
+    .select('id', { count: 'exact', head: true })
+    .eq('brand_id', brandId)
+    .gte('shopify_created_at', utcSince)
+    .lte('shopify_created_at', utcUntil);
+  if (afterErr) throw new Error(afterErr.message);
+  const added = (afterCount ?? 0) - (beforeCount ?? 0);
+  if (truncated) {
+    throw new Error(`stored ${added > 0 ? added : 0} orders, then stopped before the store history was current`);
+  }
+  if (added <= 0) return null;
+  return `Pulled ${added} Shopify orders that had not synced into Melch yet. New-customer counts include them.`;
+}
+
 // ─── Fetch Shopify by country with NC/RC ───────────────────────
 //
 // A new-customer order is that customer's first non-voided order ever,
@@ -468,12 +595,14 @@ interface OrderHist {
 // When lifetime > stored, orders before the sync window exist and every
 // stored order is returning.
 //
-// Checked against Nick's 2026-09-21 screenshot. Production "This Month" was
-// UTC (Canada 601 orders / 475 NC, United States 314 / 264). Shopify
-// month-to-date New + shipping country was Canada 346, United States 213.
-// This rule on America/Toronto 2026-09-01..21 matches those two figures.
-// Nine Canada orders on the evening of Aug 31 Toronto sit inside UTC
-// September and are not part of Shopify's month.
+// Checked against Nick's screenshots for September 2026 month-to-date.
+// Mintier shop zone is America/Toronto; Tallow is America/New_York. Both are
+// EDT that month, so the calendar dates match. Mintier Shopify New + shipping
+// country: Canada 346, United States 213. Tallow, once shopify_orders includes
+// the store's orders: Canada 1,499, United States 624 (2,123, same as
+// daily_pnl nc_orders). The lifetime gate is not what made Tallow short — on
+// the rows stored before the 2026-09-21 23:22 UTC sync it reproduces the
+// screenshot exactly (Canada 1,304 / 948 NC, United States 462 / 382).
 
 async function fetchShopifyByCountry(
   supabase: any,
@@ -488,6 +617,17 @@ async function fetchShopifyByCountry(
   const utcSince = `${addCalendarDays(since, -2)}T00:00:00Z`;
   const utcUntil = `${addCalendarDays(until, 2)}T23:59:59.999Z`;
 
+  if (shopify) {
+    try {
+      const caughtUp = await catchUpShopifyOrders(
+        supabase, brandId, shopify.domain, shopify.token, since, until, timeZone,
+      );
+      if (caughtUp) warnings.push(caughtUp);
+    } catch (e: any) {
+      warnings.push(`Shopify order catch-up failed (${e?.message || 'request failed'}). Counts use stored orders and can sit below Shopify until the next sync.`);
+    }
+  }
+
   interface WindowOrder {
     shopify_order_id: number;
     customer_id: number | null;
@@ -501,22 +641,29 @@ async function fetchShopifyByCountry(
   }
 
   const windowOrders: WindowOrder[] = [];
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await supabase
+  // Keyset on shopify_order_id. Offset pages stop early when a short page is
+  // returned before the filter is exhausted, which drops the tail of a month.
+  let afterOrderId: number | string | null = null;
+  for (;;) {
+    let query = supabase
       .from('shopify_orders')
       .select('shopify_order_id, customer_id, shipping_address, billing_address, subtotal_price, total_discounts, currency, financial_status, shopify_created_at')
       .eq('brand_id', brandId)
       .gte('shopify_created_at', utcSince)
       .lte('shopify_created_at', utcUntil)
       .order('shopify_order_id', { ascending: true })
-      .order('id', { ascending: true })
-      .range(from, from + PAGE - 1);
+      .limit(PAGE);
+    if (afterOrderId != null) query = query.gt('shopify_order_id', afterOrderId);
+    const { data, error } = await query;
     if (error) throw new Error(error.message);
     if (!data || data.length === 0) break;
     for (const row of data as WindowOrder[]) {
       const storeDate = orderStoreDate(row.shopify_created_at, timeZone);
       if (storeDate >= since && storeDate <= until) windowOrders.push(row);
     }
+    const nextCursor = data[data.length - 1].shopify_order_id;
+    if (nextCursor === afterOrderId) break;
+    afterOrderId = nextCursor;
     if (data.length < PAGE) break;
   }
 
@@ -552,15 +699,17 @@ async function fetchShopifyByCountry(
 
   for (let i = 0; i < customerIds.length; i += 50) {
     const chunk = customerIds.slice(i, i + 50);
-    for (let from = 0; ; from += PAGE) {
-      const { data, error } = await supabase
+    let afterHistId: number | string | null = null;
+    for (;;) {
+      let query = supabase
         .from('shopify_orders')
         .select('customer_id, shopify_order_id, shopify_created_at, financial_status')
         .eq('brand_id', brandId)
         .in('customer_id', chunk)
         .order('shopify_order_id', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, from + PAGE - 1);
+        .limit(PAGE);
+      if (afterHistId != null) query = query.gt('shopify_order_id', afterHistId);
+      const { data, error } = await query;
       if (error) throw new Error(error.message);
       if (!data || data.length === 0) break;
       for (const row of data) {
@@ -569,6 +718,9 @@ async function fetchShopifyByCountry(
         if (cid == null || oid == null) continue;
         consider(cid, oid, row.shopify_created_at as string, row.financial_status as string | null);
       }
+      const nextCursor = data[data.length - 1].shopify_order_id;
+      if (nextCursor === afterHistId) break;
+      afterHistId = nextCursor;
       if (data.length < PAGE) break;
     }
   }
