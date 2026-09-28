@@ -1,7 +1,9 @@
+import { classifyShopifyConnection } from './brand-connection';
 import { exchangeClientCredentials } from './client-credentials';
 import { isValidShopDomain, normalizeShopDomain } from './config';
 import { shopifyOrderToRow } from './order-row';
 import { safetyNetSince } from './order-window';
+import { fetchTripleWhaleOrders, tripleWhaleOrderRows } from './triple-whale-orders';
 
 /** Same Admin API version shopify-sync and Geo catch-up already call. */
 const ORDERS_API_VERSION = '2024-01';
@@ -20,6 +22,7 @@ export type BrandSyncResult = {
   truncated: boolean;
   warning: string | null;
   error: string | null;
+  source: 'shopify_admin' | 'triple_whale' | null;
 };
 
 type BrandRow = {
@@ -135,6 +138,7 @@ async function syncBrand(
     truncated: false,
     warning: null,
     error: null,
+    source: null,
   };
 
   const brandDomain = normalizeShopDomain(brand.shopify_store_domain);
@@ -149,6 +153,7 @@ async function syncBrand(
     return base;
   }
   base.shop_domain = domain;
+  base.source = 'shopify_admin';
 
   const pull = async (token: string) => {
     const newest = await newestCreatedAt(supabase, domain);
@@ -195,10 +200,59 @@ async function syncBrand(
   }
 }
 
+async function syncTripleWhaleBrand(
+  supabase: SupabaseLike,
+  brand: BrandRow,
+  domain: string
+): Promise<BrandSyncResult> {
+  const base: BrandSyncResult = {
+    brand_id: brand.id,
+    name: brand.name,
+    shop_domain: domain,
+    since: null,
+    fetched: 0,
+    upserted: 0,
+    truncated: false,
+    warning: null,
+    error: null,
+    source: 'triple_whale',
+  };
+
+  const apiKey = process.env.TRIPLEWHALE_API_KEY;
+  if (!apiKey) {
+    base.error = 'TRIPLEWHALE_API_KEY is not configured';
+    return base;
+  }
+
+  try {
+    const newest = await newestCreatedAt(supabase, domain);
+    const since = safetyNetSince(newest, Date.now());
+    base.since = since;
+    const startDate = since.slice(0, 10);
+    const endDate = new Date().toISOString().slice(0, 10);
+    const orders = await fetchTripleWhaleOrders(apiKey, domain, startDate, endDate);
+    const rows = tripleWhaleOrderRows(domain, brand.id, orders);
+    base.fetched = rows.length;
+    for (let i = 0; i < rows.length; i += UPSERT_CHUNK) {
+      const chunk = rows.slice(i, i + UPSERT_CHUNK);
+      const { error } = await supabase
+        .from('shopify_orders')
+        .upsert(chunk, { onConflict: 'shop_domain,shopify_order_id' });
+      if (error) throw new Error(error.message);
+      base.upserted += chunk.length;
+    }
+    return base;
+  } catch (err) {
+    base.error = err instanceof Error ? err.message : 'Triple Whale order sync failed';
+    return base;
+  }
+}
+
 /**
- * Pulls recent Shopify orders for every connected brand into shopify_orders.
- * A brand is connected when it has a live Melch.Cloud install token or
- * custom-app client credentials plus a myshopify domain.
+ * Pulls recent orders for every active brand that has a Shopify shop.
+ * Custom-app credentials or a live install token use the Admin API.
+ * A shop domain with neither (Organic Jaguar) uses Triple Whale, which is
+ * the only credential that has ever written that brand's orders.
  */
 export async function syncConnectedBrandOrders(supabase: SupabaseLike): Promise<BrandSyncResult[]> {
   const { data: brands, error: brandError } = await supabase
@@ -227,12 +281,27 @@ export async function syncConnectedBrandOrders(supabase: SupabaseLike): Promise<
     const domain = normalizeShopDomain(brand.shopify_store_domain);
     const store =
       (domain && storeByDomain.get(domain)) || storeByBrand.get(brand.id);
-    const connected =
-      !!liveOauthToken(store) ||
-      !!(brand.shopify_client_id && brand.shopify_client_secret && domain);
-    if (!connected) continue;
-    results.push(await syncBrand(supabase, brand, store));
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    const storeDomain = normalizeShopDomain(store?.shop_domain);
+    const tokenDomain = domain || storeDomain;
+    const liveToken =
+      tokenDomain && storeDomain === tokenDomain ? liveOauthToken(store) : null;
+    const connection = classifyShopifyConnection({
+      domain: tokenDomain,
+      hasClientCredentials: !!(
+        brand.shopify_client_id &&
+        brand.shopify_client_secret &&
+        domain
+      ),
+      hasLiveAdminToken: !!liveToken,
+    });
+    if (connection === 'shopify_admin') {
+      results.push(await syncBrand(supabase, brand, store));
+    } else if (connection === 'triple_whale' && domain) {
+      results.push(await syncTripleWhaleBrand(supabase, brand, domain));
+    }
+    if (connection !== 'none') {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
   }
   return results;
 }
