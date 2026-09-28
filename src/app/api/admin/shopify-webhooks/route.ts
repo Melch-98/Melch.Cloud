@@ -55,7 +55,7 @@ async function requireAdmin(request: NextRequest) {
     .eq('id', user.id)
     .single();
   if (!profile || profile.role !== 'admin') {
-    return { error: NextResponse.json({ error: 'Forbidden \u2014 admin only' }, { status: 403 }) };
+    return { error: NextResponse.json({ error: 'Forbidden — admin only' }, { status: 403 }) };
   }
   return { supabase };
 }
@@ -92,13 +92,13 @@ async function findBrand(
   if (error) return { error: NextResponse.json({ error: error.message }, { status: 400 }) };
   const rows = (data || []) as BrandRow[];
   if (rows.length === 0) {
-    return { error: NextResponse.json({ error: `No brand named \"${brandName}\"` }, { status: 404 }) };
+    return { error: NextResponse.json({ error: `No brand named "${brandName}"` }, { status: 404 }) };
   }
   if (rows.length > 1) {
     return {
       error: NextResponse.json(
         {
-          error: `More than one brand matches \"${brandName}\". Pass brandId.`,
+          error: `More than one brand matches "${brandName}". Pass brandId.`,
           matches: rows.map((row) => ({ id: row.id, name: row.name })),
         },
         { status: 409 }
