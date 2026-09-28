@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyWebhookHmac } from '@/lib/shopify/crypto';
+import { SHOPIFY_CONFIG } from '@/lib/shopify/config';
+import { loadBrandClientSecrets } from '@/lib/shopify/brand-secrets';
+import { authorizeShopifyWebhook } from '@/lib/shopify/webhook-hmac';
 import { inngest } from '@/lib/inngest/client';
 import { createServiceClient } from '@/lib/supabase-server';
 
@@ -11,7 +13,9 @@ import { createServiceClient } from '@/lib/supabase-server';
  *
  * Steps:
  *   1. Read raw body (required for HMAC verification)
- *   2. Verify the X-Shopify-Hmac-Sha256 header
+ *   2. Verify X-Shopify-Hmac-Sha256 with the Melch.Cloud app secret, or with the
+ *      custom-app secret stored on brands for X-Shopify-Shop-Domain.
+ *      Unsigned or unverified payloads are rejected.
  *   3. Hand off to Inngest as an event (so the response is fast and retries are handled)
  *   4. For app/uninstalled, mark the store inactive immediately
  *   5. Return 200 ASAP — Shopify retries on non-2xx
@@ -25,7 +29,18 @@ export async function POST(
   const shop = req.headers.get('x-shopify-shop-domain') || '';
   const topicHeader = req.headers.get('x-shopify-topic') || params.topic.replace('-', '/');
 
-  if (!verifyWebhookHmac(rawBody, hmacHeader)) {
+  const auth = await authorizeShopifyWebhook({
+    rawBody,
+    hmacHeader,
+    shopDomain: shop,
+    appSecret: SHOPIFY_CONFIG.apiSecret,
+    loadBrandSecrets: loadBrandClientSecrets,
+  });
+  if (!auth.ok) {
+    if (auth.reason === 'lookup_failed') {
+      console.error('[shopify-webhook] brand secret lookup failed', shop);
+      return NextResponse.json({ error: 'Webhook verification failed' }, { status: 500 });
+    }
     return NextResponse.json({ error: 'Invalid HMAC' }, { status: 401 });
   }
 

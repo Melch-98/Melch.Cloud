@@ -27,3 +27,13 @@ export function assertShopifyConfig() {
 export function isValidShopDomain(shop: string): boolean {
   return /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(shop);
 }
+
+/**
+ * Turns a stored shop value into a bare `handle.myshopify.com` domain.
+ * Accepts an optional http(s) scheme and a trailing slash.
+ */
+export function normalizeShopDomain(input: string | null | undefined): string | null {
+  if (!input) return null;
+  const bare = input.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  return isValidShopDomain(bare) ? bare : null;
+}

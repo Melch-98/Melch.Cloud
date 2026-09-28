@@ -1,5 +1,7 @@
 import { inngest } from './client';
 import { createServiceClient } from '@/lib/supabase-server';
+import { shopifyOrderToRow } from '@/lib/shopify/order-row';
+import { resolveBrandIdForShop } from '@/lib/shopify/order-sync';
 
 /**
  * Shopify order events → upsert into shopify_orders.
@@ -9,48 +11,17 @@ import { createServiceClient } from '@/lib/supabase-server';
  */
 const upsertOrder = async (shop: string, order: Record<string, unknown>) => {
   const supabase = createServiceClient();
-
-  // Look up the brand_id for this shop (if installed).
-  const { data: store } = await supabase
-    .from('shopify_stores')
-    .select('brand_id')
-    .eq('shop_domain', shop)
-    .maybeSingle();
-
-  const o = order as any;
-
-  const row = {
-    shop_domain: shop,
-    brand_id: store?.brand_id ?? null,
-    shopify_order_id: o.id,
-    order_number: o.name ?? o.order_number?.toString(),
-    email: o.email,
-    total_price: o.total_price ? Number(o.total_price) : null,
-    subtotal_price: o.subtotal_price ? Number(o.subtotal_price) : null,
-    total_tax: o.total_tax ? Number(o.total_tax) : null,
-    total_discounts: o.total_discounts ? Number(o.total_discounts) : null,
-    currency: o.currency,
-    financial_status: o.financial_status,
-    fulfillment_status: o.fulfillment_status,
-    customer_id: o.customer?.id ?? null,
-    line_items: o.line_items ?? null,
-    shipping_address: o.shipping_address ?? null,
-    billing_address: o.billing_address ?? null,
-    source_name: o.source_name,
-    landing_site: o.landing_site,
-    referring_site: o.referring_site,
-    shopify_created_at: o.created_at,
-    shopify_updated_at: o.updated_at,
-    raw: order,
-    updated_at: new Date().toISOString(),
-  };
+  // Installed Melch.Cloud shops resolve through shopify_stores. Custom-app
+  // brands (no install row) resolve through brands.shopify_store_domain.
+  const brandId = await resolveBrandIdForShop(supabase, shop);
+  const row = shopifyOrderToRow(shop, brandId, order);
 
   const { error } = await supabase
     .from('shopify_orders')
     .upsert(row, { onConflict: 'shop_domain,shopify_order_id' });
 
   if (error) throw new Error(`Failed to upsert order: ${error.message}`);
-  return { upserted: o.id };
+  return { upserted: (order as { id?: unknown }).id ?? null, brand_id: brandId };
 };
 
 export const handleOrderCreated = inngest.createFunction(
@@ -87,7 +58,9 @@ export const handleRefundCreated = inngest.createFunction(
   { id: 'shopify-refund-created', name: 'Shopify: Refund Created', retries: 3 },
   { event: 'shopify/refund.created' },
   async ({ event }) => {
-    // Refund payloads include order_id — we just log for now and re-fetch later.
+    // Refund payloads are not a full order. orders/updated upserts the order
+    // (including its refunds array) and is what custom-app registration subscribes
+    // to. This handler stays a log until a refund row is actually persisted.
     console.log('[shopify-refund]', event.data.shop_domain, event.data.refund);
     return { ok: true };
   }
