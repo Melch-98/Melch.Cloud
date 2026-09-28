@@ -8,10 +8,11 @@ export const maxDuration = 300;
 /**
  * Daily safety net for shopify_orders.
  *
- * Webhooks are the fast path. This job pulls orders updated since the newest
- * stored row, and at least the last 48 hours, for every brand with Shopify
- * connected. The overlap means a missed webhook cannot leave shopify_orders
- * stale for more than a day between successful runs.
+ * Webhooks are the fast path for brands with a Shopify Admin token.
+ * This job covers every active brand with a shop domain: Admin API when the
+ * brand has custom-app credentials or a live install token, Triple Whale when
+ * the domain is the only Shopify identifier (Organic Jaguar). It pulls since
+ * the newest stored order and at least the last 48 hours.
  *
  * GET is the Vercel cron (Authorization: Bearer CRON_SECRET).
  * POST accepts the same cron secret or an admin session.
