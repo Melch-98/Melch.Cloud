@@ -55,7 +55,7 @@ async function requireAdmin(request: NextRequest) {
     .eq('id', user.id)
     .single();
   if (!profile || profile.role !== 'admin') {
-    return { error: NextResponse.json({ error: 'Forbidden — admin only' }, { status: 403 }) };
+    return { error: NextResponse.json({ error: 'Forbidden \u2014 admin only' }, { status: 403 }) };
   }
   return { supabase };
 }
@@ -92,13 +92,13 @@ async function findBrand(
   if (error) return { error: NextResponse.json({ error: error.message }, { status: 400 }) };
   const rows = (data || []) as BrandRow[];
   if (rows.length === 0) {
-    return { error: NextResponse.json({ error: `No brand named "${brandName}"` }, { status: 404 }) };
+    return { error: NextResponse.json({ error: `No brand named \"${brandName}\"` }, { status: 404 }) };
   }
   if (rows.length > 1) {
     return {
       error: NextResponse.json(
         {
-          error: `More than one brand matches "${brandName}". Pass brandId.`,
+          error: `More than one brand matches \"${brandName}\". Pass brandId.`,
           matches: rows.map((row) => ({ id: row.id, name: row.name })),
         },
         { status: 409 }
@@ -139,42 +139,82 @@ async function manage(request: NextRequest, action: 'list' | 'register') {
   if ('error' in found) return found.error;
   const brand = found.brand;
 
-  if (!brand.shopify_client_id || !brand.shopify_client_secret) {
-    return NextResponse.json(
-      {
-        error:
-          'This brand has no Shopify custom-app client id and secret. Melch.Cloud app installs register webhooks during token exchange.',
-      },
-      { status: 400 }
-    );
-  }
-
   const domain = normalizeShopDomain(brand.shopify_store_domain);
-  if (!domain) {
+  let accessToken: string | null = null;
+  let grantedScopes = '';
+
+  if (brand.shopify_client_id && brand.shopify_client_secret) {
+    if (!domain) {
+      return NextResponse.json(
+        {
+          error: `Brand shop domain is missing or not a *.myshopify.com host (stored value: ${brand.shopify_store_domain || 'empty'}).`,
+        },
+        { status: 400 }
+      );
+    }
+    try {
+      const exchanged = await exchangeClientCredentials(
+        domain,
+        brand.shopify_client_id,
+        brand.shopify_client_secret
+      );
+      accessToken = exchanged.accessToken;
+      grantedScopes = exchanged.scope;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Shopify token exchange failed';
+      return NextResponse.json(
+        { error: redact(message, brand.shopify_client_secret) },
+        { status: 502 }
+      );
+    }
+  } else if (domain) {
+    const { data: store } = await supabase
+      .from('shopify_stores')
+      .select('access_token, scopes, uninstalled_at')
+      .eq('shop_domain', domain)
+      .maybeSingle();
+    const installToken = store?.access_token as string | undefined;
+    if (installToken && installToken !== 'gadget-managed' && !store?.uninstalled_at) {
+      accessToken = installToken;
+      grantedScopes = (store?.scopes as string | null) || '';
+    } else if (installToken === 'gadget-managed' && !store?.uninstalled_at) {
+      return NextResponse.json(
+        {
+          ok: false,
+          connection: 'gadget',
+          brand: { id: brand.id, name: brand.name, shop_domain: domain },
+          error:
+            `${brand.name} is linked to a gadget-managed Shopify install. That row has no Admin API token, so webhooks cannot be registered from it. Add the brand's custom-app client id and secret.`,
+        },
+        { status: 400 }
+      );
+    } else {
+      return NextResponse.json(
+        {
+          ok: false,
+          connection: 'triple_whale',
+          brand: { id: brand.id, name: brand.name, shop_domain: domain },
+          error:
+            `${brand.name} has no Shopify custom-app client id/secret and no usable Melch.Cloud install token. ` +
+            `Its orders are loaded from Triple Whale (shop id ${domain}). That API key cannot register Shopify webhooks. ` +
+            `The daily safety-net sync pulls Triple Whale orders for this brand.`,
+        },
+        { status: 400 }
+      );
+    }
+  } else {
     return NextResponse.json(
       {
-        error: `Brand shop domain is missing or not a *.myshopify.com host (stored value: ${brand.shopify_store_domain || 'empty'}).`,
+        ok: false,
+        connection: 'none',
+        error: `${brand.name} has no Shopify shop domain and no custom-app credentials.`,
       },
       { status: 400 }
     );
   }
 
-  let accessToken: string;
-  let grantedScopes: string;
-  try {
-    const exchanged = await exchangeClientCredentials(
-      domain,
-      brand.shopify_client_id,
-      brand.shopify_client_secret
-    );
-    accessToken = exchanged.accessToken;
-    grantedScopes = exchanged.scope;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Shopify token exchange failed';
-    return NextResponse.json(
-      { error: redact(message, brand.shopify_client_secret) },
-      { status: 502 }
-    );
+  if (!accessToken || !domain) {
+    return NextResponse.json({ error: 'Shopify is not connected for this brand' }, { status: 400 });
   }
 
   try {
