@@ -292,6 +292,10 @@ export default function AdChangelogPage() {
     if (!grouped.has(day)) grouped.set(day, []);
     grouped.get(day)!.push(e);
   }
+  const groupedDays: { day: string; dayEntries: ChangeEntry[] }[] = [];
+  grouped.forEach((dayEntries, day) => {
+    groupedDays.push({ day, dayEntries });
+  });
 
   const brandName = brands.find((b) => b.id === selectedBrandId)?.name || '';
 
@@ -478,7 +482,7 @@ export default function AdChangelogPage() {
           </div>
         ) : (
           <div className="space-y-6">
-            {[...grouped.entries()].map(([day, dayEntries]) => (
+            {groupedDays.map(({ day, dayEntries }) => (
               <div key={day}>
                 <h3 className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: TEXT_MUTED }}>
                   {day}
