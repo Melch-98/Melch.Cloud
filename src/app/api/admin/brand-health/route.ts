@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { currencyFromShopInfo, resolveReportingCurrency } from '@/lib/currency';
 import { resolvePipeboardToken } from '@/lib/pipeboard-google';
+import { loadWebhookStatuses } from '@/lib/shopify/webhook-status';
 
 export const dynamic = 'force-dynamic';
 
@@ -74,11 +75,12 @@ export async function GET(request: NextRequest) {
   }
 
   const brandIds = brands.map((b) => b.id);
+  const webhookStatusByBrand = await loadWebhookStatuses(supabase);
 
   // Shopify OAuth installs (no tokens returned)
   const { data: stores } = await supabase
     .from('shopify_stores')
-    .select('brand_id, shop_domain, uninstalled_at, shop_info')
+    .select('brand_id, shop_domain, uninstalled_at, shop_info, registered_webhooks, access_token')
     .in('brand_id', brandIds);
 
   const storesByBrand = new Map<string, any[]>();
@@ -133,7 +135,7 @@ export async function GET(request: NextRequest) {
 
     // Shopify
     const brandStores = (storesByBrand.get(brand.id) || []).filter(
-      (s) => !s.uninstalled_at
+      (s) => !s.uninstalled_at && s.access_token && s.access_token !== 'gadget-managed'
     );
     const hasOauth = brandStores.length > 0;
     const hasCustom =
@@ -166,6 +168,80 @@ export async function GET(request: NextRequest) {
         label: 'Shopify',
         status: 'red',
         detail: 'Not connected',
+      });
+    }
+
+    const webhookStatus = webhookStatusByBrand.get(brand.id);
+    const hasCustomCreds = !!(brand.shopify_client_id && brand.shopify_client_secret);
+    if (!hasOauth && !hasCustomCreds && brand.shopify_store_domain) {
+      chips.push({
+        key: 'shopify_webhooks',
+        label: 'Webhooks',
+        status: 'yellow',
+        detail:
+          'No Shopify app token — orders sync from Triple Whale. Shopify webhooks cannot be registered.',
+      });
+    } else if (webhookStatus?.missing_scope) {
+      chips.push({
+        key: 'shopify_webhooks',
+        label: 'Webhooks',
+        status: 'red',
+        detail: `Missing ${webhookStatus.missing_scope} scope — order webhooks were not registered`,
+      });
+    } else if (webhookStatus?.ok) {
+      const when = webhookStatus.updated_at
+        ? `${webhookStatus.updated_at.replace('T', ' ').slice(0, 16)}Z`
+        : '';
+      chips.push({
+        key: 'shopify_webhooks',
+        label: 'Webhooks',
+        status: 'green',
+        detail: `orders/create, orders/updated, orders/cancelled${when ? ` · ${when}` : ''}`,
+      });
+    } else if (webhookStatus) {
+      const missing = (webhookStatus.topics || [])
+        .filter((topic) => topic.status !== 'already_registered' && topic.status !== 'created')
+        .map((topic) => topic.topic);
+      chips.push({
+        key: 'shopify_webhooks',
+        label: 'Webhooks',
+        status: 'yellow',
+        detail: missing.length
+          ? `Not registered: ${missing.join(', ')}`
+          : 'Order webhooks incomplete',
+      });
+    } else if (hasOauth) {
+      const wanted = ['orders/create', 'orders/updated', 'orders/cancelled'];
+      const recorded = brandStores.flatMap((store) =>
+        Array.isArray(store.registered_webhooks) ? store.registered_webhooks : []
+      );
+      const present = wanted.filter((topic) =>
+        recorded.some((row: { topic?: string; id?: number | null }) => row?.topic === topic && row.id)
+      );
+      chips.push(
+        present.length === wanted.length
+          ? {
+              key: 'shopify_webhooks',
+              label: 'Webhooks',
+              status: 'green',
+              detail: 'Registered by the Melch.Cloud app install',
+            }
+          : {
+              key: 'shopify_webhooks',
+              label: 'Webhooks',
+              status: 'yellow',
+              detail:
+                present.length === 0
+                  ? 'Melch.Cloud app installed — order webhook registration was not recorded'
+                  : `Install is missing ${wanted.filter((topic) => !present.includes(topic)).join(', ')}`,
+            }
+      );
+    } else if (hasCustomCreds) {
+      chips.push({
+        key: 'shopify_webhooks',
+        label: 'Webhooks',
+        status: 'yellow',
+        detail: 'Custom app connected — order webhooks not registered yet',
       });
     }
 

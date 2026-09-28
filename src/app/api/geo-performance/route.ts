@@ -453,9 +453,9 @@ interface OrderHist {
   count: number;
 }
 
-// Client-credentials brands (Tallow, Mintier) have no shopify_stores row, so
-// orders/create webhooks are not registered. shopify_orders only moves when
-// someone runs /api/shopify-sync, which on Tallow lands in multi-day batches.
+// Catch-up still runs before counting. Order webhooks and the daily safety-net
+// sync keep shopify_orders warm, and this pull fills any hole in the requested
+// window so a missed webhook cannot undercount. New-customer rules are unchanged.
 // Nick's 2026-09-21 Tallow screenshot (Canada 1,304 orders / 948 NC, United
 // States 462 / 382) is this same lifetime gate on the rows stored before the
 // 23:22 UTC batch. The rows that batch added bring the gate to Canada 1,499

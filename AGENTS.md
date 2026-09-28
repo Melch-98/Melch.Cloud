@@ -97,11 +97,23 @@ Resolution (`src/lib/currency.ts` `resolveReportingCurrency`): explicit override
 
 - **Brand assignment.** `POST /api/admin/update-user` (admin only): `update_role` and `update_brand`. Team calls this; do not write `users_profile.brand_id` from the browser.
 - **Invites.** `src/lib/invite.ts` `ensureUserWithInviteLink` (Supabase `generateLink` invite, or recovery if the auth user already exists). Used by `POST /api/admin/create-user` and onboard `create_users`. Welcome email (Resend, `src/lib/email/templates/welcome.ts`) carries the one-time set-password link. If email does not send, the admin UI gets the action link. Default `user_permissions` by role: `src/lib/role-defaults.ts`.
-- **Connection health.** `GET /api/admin/brand-health` (admin only, optional `brandId`). Read-only chips on Team brand cards: Shopify, Meta, Google, Dropbox, Triple Whale, currency, last `daily_pnl` sync. No secrets in the response. Shopify OAuth install (live `shopify_stores` row) is green. Client-credentials (`shopify_client_id` + `shopify_client_secret`) or a domain without OAuth is yellow (“no OAuth install”), not green. Triple Whale is green only when `shopify_store_domain` is set, there is no OAuth install and no custom-app creds, and `TRIPLEWHALE_API_KEY` is set. A domain alone is not “healthy TW”.
+- **Connection health.** `GET /api/admin/brand-health` (admin only, optional `brandId`). Read-only chips on Team brand cards: Shopify, Webhooks, Meta, Google, Dropbox, Triple Whale, currency, last `daily_pnl` sync. No secrets in the response. A live `shopify_stores` token (not `gadget-managed`) is green Shopify. Client-credentials without that token are yellow. A shop domain with no Shopify token is the Triple Whale path (Organic Jaguar): the Webhooks chip says webhooks cannot be registered. A custom app that lacks a webhook scope turns the Webhooks chip red and names `missing_scope`. Triple Whale is green only when `shopify_store_domain` is set, there is no live install and no custom-app creds, and `TRIPLEWHALE_API_KEY` is set.
 
-## Known gap — Tallow Twins and Mintier Shopify
+## Shopify orders
 
-Tallow Twins and Mintier connect through **per-brand Shopify client-credentials apps** (`brands.shopify_client_id` / `shopify_client_secret`). They have **no `shopify_stores` row**, so `orders/create` webhooks are not registered. `shopify_orders` moves when someone runs `/api/shopify-sync`, or when Geo Performance’s catch-up pull succeeds. This is being fixed separately. Do not invent `shopify_stores` rows or webhook registration in unrelated PRs.
+No active customer brand has a `shopify_stores` row. FOND Regenerative, Mintier, and Tallow Twins use per-brand custom-app credentials (`shopify_client_id` / `shopify_client_secret` + `shopify_store_domain`). Organic Jaguar has `organicjaguar.myshopify.com` and no Shopify token; its orders are `source_name = triplewhale-sync`. Party Patch has no shop domain.
+
+Webhook HMAC accepts `SHOPIFY_API_SECRET` or the brand's `shopify_client_secret`, looked up by `X-Shopify-Shop-Domain`. Unsigned payloads are rejected. Brand resolution uses `shopify_stores.brand_id`, then `brands.shopify_store_domain`.
+
+`GET /api/cron/shopify-orders` runs every 2 hours at minute 20 (`20 */2 * * *`). Each run, for every active non-archived brand:
+
+1. Ensures `orders/create`, `orders/updated`, and `orders/cancelled` for brands with custom-app credentials. `already_registered` is success. A missing scope is logged and stored on the Team Webhooks chip; it does not fail the run. Organic Jaguar is not included — Triple Whale cannot sign Shopify webhooks. `POST /api/admin/shopify-webhooks` remains for a manual retry.
+2. Refreshes `daily_pnl` by calling `runShopifyBrandSync` (same function as `POST /api/shopify-sync`) or `runTripleWhaleBrandSync` (same function as `POST /api/triplewhale-sync`). The window starts at the earlier of (today minus 3) and (that brand's newest `daily_pnl` date minus 1), and is capped at 45 days. A gap longer than 10 days syncs the oldest 10 only; the next run continues at that chunk's end. Reporting currency is unchanged. A domain with no Admin token uses Triple Whale. A brand with no shop domain is skipped. Brands not started before the time budget are deferred, not failed.
+3. Pulls `shopify_orders` since the newest stored row, at least the last 48 hours, and never further back than 45 days. A gap longer than 10 days pulls the oldest 10 (`created_at` ascending) and the next run continues. Admin API for credentialed brands, Triple Whale for domain-only brands.
+
+`refunds/create` is not registered. That handler only logs. `orders/updated` upserts the order, including refunds on `raw`.
+
+Do not invent `shopify_stores` rows. Do not register Shopify webhooks for a brand with no Admin token. A `gadget-managed` install token is not an Admin API token; custom-app credentials are used instead.
 
 ## Ship / ops footguns
 
@@ -112,11 +124,11 @@ Tallow Twins and Mintier connect through **per-brand Shopify client-credentials 
 5. **Google Ads** = Pipeboard (`src/lib/pipeboard-google.ts`). Normalize customer IDs with `normalizeCustomerId` (digits only). Windsor is retired.
 6. **Meta token** expires; refresh manually into env / `app_settings`. Use `/api/token-health` when diagnosing.
 7. **Ad Changelog** scans on demand (POST `/api/ad-changelog`). There is **no** Vercel weekly cron; operators click **Refresh Now**. Missing Meta token → `Meta: META_ACCESS_TOKEN not configured`. Missing Pipeboard token → `Google: PIPEBOARD_API_TOKEN not configured`. The page shows those strings in the error banner (`scanError`). First scan seeds snapshots (many `new_entity` rows); later scans emit status/budget/removed diffs. Google budgets are not returned by Pipeboard (status-only for Google). Founder requests for another brand are 403.
-8. Don’t expand Triple Whale onboarding, paper over the Tallow/Mintier webhook gap, or “fix the TS build” as drive-by scope unless that is the task.
+8. Don’t expand Triple Whale onboarding or “fix the TS build” as drive-by scope unless that is the task. Organic Jaguar’s orders and Daily P&L come from the scheduled Triple Whale pull, not a Shopify webhook.
 
 ## Working here
 
 - Path alias: `@/*` → `src/*`.
 - Local: `npm install` then `npm run dev` (needs env mirroring Vercel for real data).
-- Cron today: `vercel.json` → `/api/cron/sync-pending` every 5 minutes (Dropbox resume), auth via `CRON_SECRET`.
+- Cron: `vercel.json` → `/api/cron/sync-pending` every 5 minutes (Dropbox resume) and `/api/cron/shopify-orders` every 2 hours at minute 20 UTC. Both use `CRON_SECRET`. The 5-minute Dropbox cron is already running in production, so this project accepts sub-daily schedules.
 - Agents: prefer this file over archived Hermes. Update **this** file when product truth changes.

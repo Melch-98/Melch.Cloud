@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "node --experimental-strip-types --test src/lib/shopify/webhook-hmac.test.ts src/lib/shopify/webhook-scope.test.ts src/lib/shopify/order-window.test.ts src/lib/shopify/brand-connection.test.ts src/lib/shopify/triple-whale-orders.test.ts src/lib/shopify/pnl-targets.test.ts src/lib/shopify/webhook-ensure.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",
