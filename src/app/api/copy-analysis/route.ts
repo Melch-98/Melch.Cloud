@@ -114,20 +114,22 @@ export async function GET(request: NextRequest) {
     if (cached) {
       return NextResponse.json({
         inputs: cached.data.inputs,
+        ads: cached.data.ads || [],
         currency: cached.data.currency ?? 'USD',
         cached: true,
         cached_at: new Date(cached.timestamp).toISOString(),
       });
     }
 
-    const [copyInputs, currency] = await Promise.all([
+    const [copyResult, currency] = await Promise.all([
       fetchCopyAnalysis(metaToken, adAccountId, dateFrom, dateTo, limit),
       fetchAccountCurrency(metaToken, adAccountId),
     ]);
-    setCached(cacheKey, { inputs: copyInputs, currency });
+    setCached(cacheKey, { inputs: copyResult.inputs, ads: copyResult.ads, currency });
 
     return NextResponse.json({
-      inputs: copyInputs,
+      inputs: copyResult.inputs,
+      ads: copyResult.ads,
       currency,
       cached: false,
       cached_at: new Date().toISOString(),

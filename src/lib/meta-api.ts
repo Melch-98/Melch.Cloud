@@ -2,6 +2,15 @@
 // Standalone creative analytics — no connection to the upload pipeline.
 // Fetches ad-level insights directly from Meta's Marketing API.
 import { put, list } from '@vercel/blob';
+import {
+  classifyCreative,
+  emptyIdentity,
+  reliableIdentity,
+  type AdFormat,
+  type AdSource,
+  type BrandIdentity,
+  type CopyAdMetrics,
+} from '@/lib/ad-classification';
 
 export interface MetaAdInsight {
   ad_id: string;
@@ -14,6 +23,10 @@ export interface MetaAdInsight {
   thumbnail_url: string;
   video_url: string | null;
   creative_type: 'VIDEO' | 'IMAGE' | 'CAROUSEL' | 'UNKNOWN';
+  // Who the ad runs as, and the creative format. Computed from Meta creative
+  // fields (see src/lib/ad-classification.ts). Not inferred from the ad name.
+  ad_source: AdSource;
+  ad_format: AdFormat;
   // Financial
   spend: number;
   purchase_value: number;
@@ -321,6 +334,77 @@ export async function fetchAdAccounts(accessToken: string): Promise<MetaAdAccoun
   return accounts;
 }
 
+// Pages and Instagram accounts connected to this ad account. Used only to
+// spot a legacy whitelist ad whose page isn't the brand's. Empty results are
+// normal for this token (promote_pages comes back empty) and are ignored.
+async function fetchAccountIdentities(accessToken: string, accountId: string): Promise<BrandIdentity> {
+  const identity = emptyIdentity();
+  try {
+    const pages = await fetchAllPages(
+      `${META_API_BASE}/${accountId}/promote_pages?fields=id&limit=100&access_token=${accessToken}`,
+    );
+    for (const page of pages) {
+      if (page?.id) identity.pageIds.add(String(page.id));
+    }
+  } catch { /* edge is often empty or unavailable */ }
+  try {
+    const igs = await fetchAllPages(
+      `${META_API_BASE}/${accountId}/instagram_accounts?fields=id&limit=100&access_token=${accessToken}`,
+    );
+    for (const ig of igs) {
+      if (ig?.id) identity.instagramIds.add(String(ig.id));
+    }
+  } catch { /* continue */ }
+  return identity;
+}
+
+async function fetchAdsetFormatFlags(
+  accessToken: string,
+  adsetIds: string[],
+): Promise<Record<string, { dynamic: boolean; productSetId: string }>> {
+  const out: Record<string, { dynamic: boolean; productSetId: string }> = {};
+  const unique: string[] = [];
+  const seenIds = new Set<string>();
+  for (const id of adsetIds) {
+    if (!id || seenIds.has(id)) continue;
+    seenIds.add(id);
+    unique.push(id);
+  }
+  for (let i = 0; i < unique.length; i += 50) {
+    const chunk = unique.slice(i, i + 50);
+    try {
+      const res = await fetch(
+        `${META_API_BASE}/?ids=${chunk.join(',')}&fields=is_dynamic_creative,promoted_object&access_token=${accessToken}`,
+      );
+      if (!res.ok) continue;
+      const data = await res.json();
+      for (const [id, info] of Object.entries(data as Record<string, any>)) {
+        if (!info || (info as any).error) continue;
+        out[id] = {
+          dynamic: (info as any).is_dynamic_creative === true,
+          productSetId: (info as any).promoted_object?.product_set_id
+            ? String((info as any).promoted_object.product_set_id)
+            : '',
+        };
+      }
+    } catch { /* classification still works from the creative */ }
+  }
+  return out;
+}
+
+const CREATIVE_CLASS_FIELDS = [
+  'actor_id',
+  'object_id',
+  'object_story_id',
+  'effective_object_story_id',
+  'instagram_user_id',
+  'product_set_id',
+  'branded_content_sponsor_page_id',
+  'facebook_branded_content',
+  'instagram_branded_content',
+  'branded_content',
+].join(',');
+
 // ─── Fetch Creative Insights ────────────────────────────────────
 
 export async function fetchCreativeInsights(
@@ -404,11 +488,18 @@ export async function fetchCreativeInsights(
   // This makes the call ~10x faster for analytics-only use cases (Perspective Table, etc.)
   let thumbnails: Record<string, { url: string; type: string; videoId: string | null }> = {};
   let videoSources: Record<string, string> = {};
+  const creativeRecords: Record<string, any> = {};
+  const adToCreativeId: Record<string, string> = {};
+  // Identity + ad set flags run alongside the creative fetch. skipMedia callers
+  // (Trybe join) don't need source/format and shouldn't pay for the extra calls.
+  const identitiesPromise = skipMedia ? null : fetchAccountIdentities(accessToken, accountId);
+  const adsetFlagsPromise = skipMedia
+    ? null
+    : fetchAdsetFormatFlags(accessToken, rawInsights.map((row: any) => row.adset_id));
 
   if (!skipMedia) {
   // Step 2a: Get creative IDs from ads
   const adIds = [...new Set(rawInsights.map((r: any) => r.ad_id))];
-  const adToCreativeId: Record<string, string> = {};
 
   for (let i = 0; i < adIds.length; i += 50) {
     const chunk = adIds.slice(i, i + 50);
@@ -435,12 +526,27 @@ export async function fetchCreativeInsights(
     try {
       const cRes = await fetch(
         `${META_API_BASE}/?ids=${chunk.join(',')}` +
-        `&fields=thumbnail_url,image_url,object_type,object_story_spec,asset_feed_spec` +
+        `&fields=thumbnail_url,image_url,object_type,object_story_spec,asset_feed_spec,${CREATIVE_CLASS_FIELDS}` +
         `&access_token=${accessToken}`
       );
+      let cData: Record<string, any> | null = null;
+      const extendedOk = cRes.ok;
       if (cRes.ok) {
-        const cData = await cRes.json();
-        for (const [cId, cInfo] of Object.entries(cData as Record<string, any>)) {
+        cData = await cRes.json();
+      } else {
+        // Partnership fields must not take thumbnails down with them.
+        const retry = await fetch(
+          `${META_API_BASE}/?ids=${chunk.join(',')}` +
+          `&fields=thumbnail_url,image_url,object_type,object_story_spec,asset_feed_spec` +
+          `&access_token=${accessToken}`
+        );
+        if (retry.ok) cData = await retry.json();
+      }
+      if (cData) {
+        for (const [cId, cInfo] of Object.entries(cData)) {
+          if ((cInfo as any)?.error) continue;
+          if (extendedOk) (cInfo as any)._classFields = true;
+          creativeRecords[cId] = cInfo;
           const ot = (cInfo as any).object_type?.toUpperCase() || '';
           const videoData = (cInfo as any).object_story_spec?.video_data;
           const linkData = (cInfo as any).object_story_spec?.link_data;
@@ -483,6 +589,23 @@ export async function fetchCreativeInsights(
         }
       }
     } catch { /* continue */ }
+  }
+
+  // If the combined creative call was too heavy, classification fields are fetched on their own.
+  const missingClassIds = creativeIds.filter((id) => creativeRecords[id] && !creativeRecords[id]._classFields);
+  for (let i = 0; i < missingClassIds.length; i += 50) {
+    const chunk = missingClassIds.slice(i, i + 50);
+    try {
+      const res = await fetch(
+        `${META_API_BASE}/?ids=${chunk.join(',')}&fields=${CREATIVE_CLASS_FIELDS},object_type&access_token=${accessToken}`,
+      );
+      if (!res.ok) continue;
+      const data = await res.json();
+      for (const [cId, info] of Object.entries(data as Record<string, any>)) {
+        if ((info as any)?.error || !creativeRecords[cId]) continue;
+        creativeRecords[cId] = { ...creativeRecords[cId], ...info, _classFields: true };
+      }
+    } catch { /* sponsor fields stay missing for this chunk */ }
   }
 
   // Step 2b-hash: Resolve image hashes from asset_feed_spec.images via adimages endpoint
@@ -755,6 +878,18 @@ export async function fetchCreativeInsights(
   }
   } // end if (!skipMedia)
 
+  const classByAd: Record<string, { ad_source: AdSource; ad_format: AdFormat }> = {};
+  if (!skipMedia && identitiesPromise && adsetFlagsPromise) {
+    const [rawIdentity, adsetFlags] = await Promise.all([identitiesPromise, adsetFlagsPromise]);
+    const identity = reliableIdentity(rawIdentity, Object.values(creativeRecords));
+    const adsetByAd: Record<string, string> = {};
+    for (const row of rawInsights) adsetByAd[row.ad_id] = row.adset_id;
+    for (const [adId, cId] of Object.entries(adToCreativeId)) {
+      const flags = adsetFlags[adsetByAd[adId]] || { dynamic: false, productSetId: '' };
+      classByAd[adId] = classifyCreative(creativeRecords[cId], identity, flags);
+    }
+  }
+
   // Step 3: Map to our interface
   return rawInsights.map((row: any) => {
     const spend = safeNum(row.spend);
@@ -811,6 +946,8 @@ export async function fetchCreativeInsights(
       thumbnail_url: info.url,
       video_url: videoUrl,
       creative_type: info.type as MetaAdInsight['creative_type'],
+      ad_source: classByAd[row.ad_id]?.ad_source || 'unknown',
+      ad_format: classByAd[row.ad_id]?.ad_format || 'other',
       spend,
       purchase_value: purchaseValue,
       roas,
@@ -853,12 +990,12 @@ export async function fetchCopyAnalysis(
   dateFrom: string,
   dateTo: string,
   limit = 100
-): Promise<CopyInput[]> {
+): Promise<{ inputs: CopyInput[]; ads: CopyAdMetrics[] }> {
   const accountId = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
 
   // Step 1: Fetch ad-level insights (same as creative insights but more ads)
   const insightsFields = [
-    'ad_id', 'ad_name', 'spend', 'impressions', 'reach', 'frequency',
+    'ad_id', 'ad_name', 'adset_id', 'spend', 'impressions', 'reach', 'frequency',
     'clicks', 'ctr', 'inline_link_click_ctr', 'cpm', 'cpc',
     'actions', 'action_values', 'cost_per_action_type',
     'video_play_actions', 'video_p25_watched_actions',
@@ -880,6 +1017,8 @@ export async function fetchCopyAnalysis(
   }
   const insightsData = await res.json();
   const rawInsights = insightsData.data || [];
+  const identitiesPromise = fetchAccountIdentities(accessToken, accountId);
+  const adsetFlagsPromise = fetchAdsetFormatFlags(accessToken, rawInsights.map((row: any) => row.adset_id));
 
   // Build metrics map per ad
   const adMetrics: Record<string, {
@@ -951,18 +1090,30 @@ export async function fetchCopyAnalysis(
 
   // Collect copy inputs: key = "type::text", value = set of ad IDs
   const copyMap: Record<string, Set<string>> = {};
+  const creativeRecords: Record<string, any> = {};
 
   for (let i = 0; i < creativeIds.length; i += 50) {
     const chunk = creativeIds.slice(i, i + 50);
     try {
-      const cRes = await fetch(
+      let cRes = await fetch(
         `${META_API_BASE}/?ids=${chunk.join(',')}` +
-        `&fields=asset_feed_spec,object_story_spec` +
+        `&fields=asset_feed_spec,object_story_spec,object_type,${CREATIVE_CLASS_FIELDS}` +
         `&access_token=${accessToken}`
       );
+      const extendedOk = cRes.ok;
+      if (!cRes.ok) {
+        cRes = await fetch(
+          `${META_API_BASE}/?ids=${chunk.join(',')}` +
+          `&fields=asset_feed_spec,object_story_spec` +
+          `&access_token=${accessToken}`
+        );
+      }
       if (cRes.ok) {
         const cData = await cRes.json();
         for (const [cId, cInfo] of Object.entries(cData as Record<string, any>)) {
+          if ((cInfo as any)?.error) continue;
+          if (extendedOk) (cInfo as any)._classFields = true;
+          creativeRecords[cId] = cInfo;
           const relatedAdIds = creativeToAdIds[cId] || [];
           const assetFeed = (cInfo as any).asset_feed_spec;
           const storySpec = (cInfo as any).object_story_spec;
@@ -1081,6 +1232,22 @@ export async function fetchCopyAnalysis(
     } catch { /* continue */ }
   }
 
+  const missingClassIds = creativeIds.filter((id) => creativeRecords[id] && !creativeRecords[id]._classFields);
+  for (let i = 0; i < missingClassIds.length; i += 50) {
+    const chunk = missingClassIds.slice(i, i + 50);
+    try {
+      const classRes = await fetch(
+        `${META_API_BASE}/?ids=${chunk.join(',')}&fields=${CREATIVE_CLASS_FIELDS},object_type&access_token=${accessToken}`,
+      );
+      if (!classRes.ok) continue;
+      const classData = await classRes.json();
+      for (const [cId, info] of Object.entries(classData as Record<string, any>)) {
+        if ((info as any)?.error || !creativeRecords[cId]) continue;
+        creativeRecords[cId] = { ...creativeRecords[cId], ...info, _classFields: true };
+      }
+    } catch { /* sponsor fields stay missing for this chunk */ }
+  }
+
   // Step 4: Aggregate metrics per unique copy input
   const results: CopyInput[] = [];
 
@@ -1150,5 +1317,36 @@ export async function fetchCopyAnalysis(
   // Sort by spend descending by default
   results.sort((a, b) => b.spend - a.spend);
 
-  return results;
+  const [rawIdentity, adsetFlags] = await Promise.all([identitiesPromise, adsetFlagsPromise]);
+  const identity = reliableIdentity(rawIdentity, Object.values(creativeRecords));
+  const adsetByAd: Record<string, string> = {};
+  for (const row of rawInsights) adsetByAd[row.ad_id] = row.adset_id || '';
+  const ads: CopyAdMetrics[] = [];
+  for (const [adId, metrics] of Object.entries(adMetrics)) {
+    const creative = creativeRecords[adToCreativeId[adId]];
+    const flags = adsetFlags[adsetByAd[adId]] || { dynamic: false, productSetId: '' };
+    const classified = classifyCreative(creative, identity, flags);
+    ads.push({
+      ad_id: adId,
+      ad_name: metrics.ad_name,
+      ad_source: classified.ad_source,
+      ad_format: classified.ad_format,
+      spend: metrics.spend,
+      purchase_value: metrics.purchase_value,
+      purchases: metrics.purchases,
+      impressions: metrics.impressions,
+      clicks: metrics.clicks,
+      ctr: metrics.ctr,
+      link_ctr: metrics.link_ctr,
+      cpm: metrics.cpm,
+      cpc: metrics.cpc,
+      add_to_cart: metrics.add_to_cart,
+      initiate_checkout: metrics.initiate_checkout,
+      thumbstop_rate: metrics.thumbstop_rate,
+      reach: metrics.reach,
+      frequency: metrics.frequency,
+    });
+  }
+
+  return { inputs: results, ads };
 }

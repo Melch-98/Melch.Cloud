@@ -30,6 +30,8 @@ import DataFreshness, { friendlyError } from '@/components/DataFreshness';
 import { createClient } from '@/lib/supabase';
 import type { CopyInput } from '@/lib/meta-api';
 import { makeFmt, DEFAULT_FMT, type Fmt } from '@/lib/format';
+import { AdSliceFilters } from '@/components/AdSliceFilters';
+import { sliceCopyInputs, type AdFormat, type AdSource, type CopyAdMetrics } from '@/lib/ad-classification';
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -123,6 +125,9 @@ export default function CopyAnalysisPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [inputs, setInputs] = useState<CopyInput[]>([]);
+  const [ads, setAds] = useState<CopyAdMetrics[]>([]);
+  const [sourceFilter, setSourceFilter] = useState<AdSource | 'all'>('all');
+  const [formatFilter, setFormatFilter] = useState<AdFormat | 'all'>('all');
   const [accounts, setAccounts] = useState<{ id: string; name: string; brand_id?: string }[]>([]);
   const [selectedAccount, setSelectedAccount] = useState('');
   const [datePreset, setDatePreset] = useState('30d');
@@ -192,6 +197,7 @@ export default function CopyAnalysisPage() {
 
       const data = await res.json();
       setInputs(data.inputs || []);
+      setAds(data.ads || []);
       if (data.currency) setCurrency(data.currency);
       setCachedAt(data.cached_at || null);
       setIsCached(!!data.cached);
@@ -206,9 +212,20 @@ export default function CopyAnalysisPage() {
     if (selectedAccount) fetchData();
   }, [selectedAccount, datePreset, fetchData]);
 
+  useEffect(() => {
+    setSourceFilter('all');
+    setFormatFilter('all');
+  }, [selectedAccount]);
+
+  // Source/format narrow every copy row and the summary cards.
+  const slicedInputs = useMemo(
+    () => sliceCopyInputs(inputs, ads, sourceFilter, formatFilter),
+    [inputs, ads, sourceFilter, formatFilter],
+  );
+
   // Filter + sort
   const filtered = useMemo(() => {
-    let list = [...inputs];
+    let list = [...slicedInputs];
 
     // Type filter
     if (typeFilter !== 'all') {
@@ -248,35 +265,35 @@ export default function CopyAnalysisPage() {
     });
 
     return list;
-  }, [inputs, typeFilter, searchQuery, minSpend, minAdCount, sortField, sortDir]);
+  }, [slicedInputs, typeFilter, searchQuery, minSpend, minAdCount, sortField, sortDir]);
 
   // Summary stats
   const summary = useMemo(() => {
-    const total = inputs.length;
-    const headlines = inputs.filter((i) => i.type === 'headline').length;
-    const bodies = inputs.filter((i) => i.type === 'body').length;
-    const descriptions = inputs.filter((i) => i.type === 'description').length;
-    const ctas = inputs.filter((i) => i.type === 'cta').length;
-    const shared = inputs.filter((i) => i.ad_count > 1).length;
+    const total = slicedInputs.length;
+    const headlines = slicedInputs.filter((i) => i.type === 'headline').length;
+    const bodies = slicedInputs.filter((i) => i.type === 'body').length;
+    const descriptions = slicedInputs.filter((i) => i.type === 'description').length;
+    const ctas = slicedInputs.filter((i) => i.type === 'cta').length;
+    const shared = slicedInputs.filter((i) => i.ad_count > 1).length;
     return { total, headlines, bodies, descriptions, ctas, shared };
-  }, [inputs]);
+  }, [slicedInputs]);
 
   // Winner detection: a copy input is a "winner" when it beats the
   // spend-weighted account ROAS on meaningful spend (>= 5% of total or
   // $100+). Previously only the top sorted row got flagged, which was
   // sort-order dependent and meaningless.
   const winnerKeys = useMemo(() => {
-    const totalSpend = inputs.reduce((s, i) => s + i.spend, 0);
-    const totalRevenue = inputs.reduce((s, i) => s + i.purchase_value, 0);
+    const totalSpend = slicedInputs.reduce((s, i) => s + i.spend, 0);
+    const totalRevenue = slicedInputs.reduce((s, i) => s + i.purchase_value, 0);
     const accountRoas = totalSpend > 0 ? totalRevenue / totalSpend : 0;
     if (accountRoas <= 0) return new Set<string>();
     const minSpendSig = Math.max(100, totalSpend * 0.05);
     return new Set(
-      inputs
+      slicedInputs
         .filter((i) => i.spend >= minSpendSig && i.roas > accountRoas)
         .map((i) => `${i.type}::${i.text}`)
     );
-  }, [inputs]);
+  }, [slicedInputs]);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -412,6 +429,14 @@ export default function CopyAnalysisPage() {
                     style={{ color: '#666' }}
                   />
                 </div>
+
+                <AdSliceFilters
+                  ads={ads}
+                  source={sourceFilter}
+                  format={formatFilter}
+                  onSource={setSourceFilter}
+                  onFormat={setFormatFilter}
+                />
 
                 {/* Refresh */}
                 <button
@@ -664,6 +689,15 @@ export default function CopyAnalysisPage() {
             >
               <AlertCircle size={18} style={{ color: '#dc2626' }} />
               <span className="text-sm" style={{ color: '#dc2626' }}>{friendlyError(error)}</span>
+            </div>
+          )}
+
+          {!loading && !error && inputs.length > 0 && slicedInputs.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-16">
+              <Type size={48} style={{ color: '#333' }} />
+              <p className="mt-4 text-sm" style={{ color: '#666' }}>
+                No copy inputs match this source or format.
+              </p>
             </div>
           )}
 
@@ -948,7 +982,7 @@ export default function CopyAnalysisPage() {
                 }}
               >
                 <span className="text-xs" style={{ color: '#666' }}>
-                  {filtered.length} of {inputs.length} inputs
+                  {filtered.length} of {slicedInputs.length} inputs
                   {typeFilter !== 'all' && ` (${typeFilter})`}
                 </span>
                 <span className="text-xs" style={{ color: '#555' }}>

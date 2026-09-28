@@ -27,6 +27,8 @@ import {
   Play,
   Pause,
   Maximize2,
+  ShoppingBag,
+  Wand2,
 } from 'lucide-react';
 import { useRef } from 'react';
 import Navbar from '@/components/Navbar';
@@ -34,6 +36,8 @@ import { createClient } from '@/lib/supabase';
 import type { MetaAdInsight, MetaAdAccount } from '@/lib/meta-api';
 import DataFreshness, { friendlyError } from '@/components/DataFreshness';
 import { makeFmt, DEFAULT_FMT, type Fmt } from '@/lib/format';
+import { AdSliceFilters, PartnerPill } from '@/components/AdSliceFilters';
+import { formatBadgeKey, matchesAdSlice, type AdFormat, type AdSource } from '@/lib/ad-classification';
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -122,6 +126,8 @@ function TypeBadge({ type, size = 'sm' }: { type: string; size?: 'sm' | 'lg' }) 
     VIDEO: { bg: 'rgba(200,184,154,0.08)', border: 'rgba(200,184,154,0.2)', text: '#C8B89A', icon: Video },
     IMAGE: { bg: 'rgba(200,184,154,0.06)', border: 'rgba(200,184,154,0.15)', text: '#a89878', icon: ImageIcon },
     CAROUSEL: { bg: 'rgba(200,184,154,0.06)', border: 'rgba(200,184,154,0.15)', text: '#a89878', icon: Layers },
+    CATALOG: { bg: 'rgba(200,184,154,0.06)', border: 'rgba(200,184,154,0.15)', text: '#a89878', icon: ShoppingBag },
+    FLEXIBLE: { bg: 'rgba(200,184,154,0.08)', border: 'rgba(200,184,154,0.2)', text: '#C8B89A', icon: Wand2 },
     UNKNOWN: { bg: 'rgba(255,255,255,0.04)', border: 'rgba(255,255,255,0.08)', text: '#666', icon: BarChart3 },
   };
   const c = config[type] || config.UNKNOWN;
@@ -411,7 +417,8 @@ function CreativeDetailPanel({
         {/* Ad info header */}
         <div className="px-6 pt-6 pb-4">
           <div className="flex items-center gap-2.5 mb-3">
-            <TypeBadge type={ad.creative_type} size="lg" />
+            <TypeBadge type={ad.ad_format ? formatBadgeKey(ad.ad_format) : ad.creative_type} size="lg" />
+            <PartnerPill source={ad.ad_source} />
           </div>
           <h3 className="text-[15px] font-semibold mb-1.5" style={{ color: '#f0f0f0', letterSpacing: '-0.01em' }}>
             {ad.ad_name}
@@ -629,6 +636,8 @@ export default function AnalyticsPage() {
   const [selectedAccount, setSelectedAccount] = useState<string>('');
   const [datePreset, setDatePreset] = useState('14d');
   const [searchQuery, setSearchQuery] = useState('');
+  const [sourceFilter, setSourceFilter] = useState<AdSource | 'all'>('all');
+  const [formatFilter, setFormatFilter] = useState<AdFormat | 'all'>('all');
 
   // View state
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
@@ -805,6 +814,11 @@ export default function AnalyticsPage() {
     }
   }, [selectedAccount, datePreset, loadInsights]);
 
+  useEffect(() => {
+    setSourceFilter('all');
+    setFormatFilter('all');
+  }, [selectedAccount]);
+
   // ─── Save Token ────────────────────────────────────────────
 
   const handleSaveToken = async (token: string) => {
@@ -830,6 +844,8 @@ export default function AnalyticsPage() {
   const filteredInsights = useMemo(() => {
     let list = [...insights];
 
+    list = list.filter((i) => matchesAdSlice(i, sourceFilter, formatFilter));
+
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       list = list.filter(
@@ -849,7 +865,7 @@ export default function AnalyticsPage() {
     });
 
     return list;
-  }, [insights, searchQuery, sortField, sortDir]);
+  }, [insights, searchQuery, sortField, sortDir, sourceFilter, formatFilter]);
 
   // ─── Toggle metric in card view ────────────────────────────
 
@@ -1113,6 +1129,14 @@ export default function AnalyticsPage() {
             )}
           </div>
 
+          <AdSliceFilters
+            ads={insights}
+            source={sourceFilter}
+            format={formatFilter}
+            onSource={setSourceFilter}
+            onFormat={setFormatFilter}
+          />
+
           {/* Search */}
           <div
             className="flex items-center gap-2 px-3 py-2 rounded-lg flex-1 min-w-[200px] max-w-sm"
@@ -1279,6 +1303,15 @@ export default function AnalyticsPage() {
         )}
 
         {/* ─── Empty State ─────────────────────────────────── */}
+        {!fetchingInsights && insights.length > 0 && filteredInsights.length === 0 && !error && (
+          <div className="flex flex-col items-center justify-center py-20">
+            <BarChart3 size={48} style={{ color: '#333' }} />
+            <p className="text-sm mt-3" style={{ color: '#666' }}>
+              No ads match these filters.
+            </p>
+          </div>
+        )}
+
         {!fetchingInsights && insights.length === 0 && !error && selectedAccount && (
           <div className="flex flex-col items-center justify-center py-20">
             <BarChart3 size={48} style={{ color: '#333' }} />
@@ -1359,8 +1392,9 @@ export default function AnalyticsPage() {
                     </div>
                   )}
                   {/* Type badge */}
-                  <div className="absolute top-3 left-3">
-                    <TypeBadge type={ad.creative_type} />
+                  <div className="absolute top-3 left-3 flex items-center gap-1.5">
+                    <TypeBadge type={ad.ad_format ? formatBadgeKey(ad.ad_format) : ad.creative_type} />
+                    <PartnerPill source={ad.ad_source} />
                   </div>
                   {/* ROAS / fatigue pill overlay */}
                   <div className="absolute top-3 right-3 flex flex-col items-end gap-1.5">
@@ -1531,8 +1565,9 @@ export default function AnalyticsPage() {
                             <p className="text-xs font-medium truncate" style={{ color: '#DDD', maxWidth: '200px' }}>
                               {ad.ad_name}
                             </p>
-                            <p className="text-[10px] truncate" style={{ color: '#555', maxWidth: '200px' }}>
-                              {ad.campaign_name}
+                            <p className="text-[10px] truncate flex items-center gap-1.5" style={{ color: '#555', maxWidth: '220px' }}>
+                              <span className="truncate">{ad.campaign_name}</span>
+                              <PartnerPill source={ad.ad_source} />
                             </p>
                           </div>
                         </div>
@@ -1570,7 +1605,7 @@ export default function AnalyticsPage() {
         {!fetchingInsights && filteredInsights.length > 0 && (
           <p className="text-xs mt-4 text-center" style={{ color: '#555' }}>
             {filteredInsights.length} ad{filteredInsights.length !== 1 ? 's' : ''} shown
-            {searchQuery && ` (filtered from ${insights.length})`}
+            {(searchQuery || sourceFilter !== 'all' || formatFilter !== 'all') && ` (filtered from ${insights.length})`}
           </p>
         )}
       </div>

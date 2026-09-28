@@ -33,6 +33,8 @@ import { createClient } from '@/lib/supabase';
 import DataFreshness, { friendlyError } from '@/components/DataFreshness';
 import type { MetaAdInsight } from '@/lib/meta-api';
 import { makeFmt, DEFAULT_FMT, type Fmt } from '@/lib/format';
+import { AdSliceFilters, PartnerPill } from '@/components/AdSliceFilters';
+import { formatLabel, matchesAdSlice, type AdFormat, type AdSource } from '@/lib/ad-classification';
 
 // ─── Types & Config ─────────────────────────────────────────────
 
@@ -374,8 +376,9 @@ function AdDetailPanel({ ad, onClose, roasFloor, fmt }: { ad: MetaAdInsight; onC
                 border: '1px solid rgba(255,255,255,0.06)',
               }}
             >
-              {ad.creative_type}
+              {ad.ad_format ? formatLabel(ad.ad_format) : ad.creative_type}
             </span>
+            <PartnerPill source={ad.ad_source} />
           </div>
 
           <h3 className="text-[15px] font-semibold mb-1.5" style={{ color: '#f0f0f0', letterSpacing: '-0.01em' }}>
@@ -508,6 +511,8 @@ export default function AdPerspectivePage() {
   const [merData, setMerData] = useState<{ revenue: number; spend: number; grossMarginPct?: number } | null>(null);
   // Campaign filter
   const [campaignFilter, setCampaignFilter] = useState<string>('all');
+  const [sourceFilter, setSourceFilter] = useState<AdSource | 'all'>('all');
+  const [formatFilter, setFormatFilter] = useState<AdFormat | 'all'>('all');
 
   // Auth check + fetch accounts
   useEffect(() => {
@@ -619,6 +624,11 @@ export default function AdPerspectivePage() {
     if (selectedAccount) fetchData();
   }, [selectedAccount, datePreset, fetchData]);
 
+  useEffect(() => {
+    setSourceFilter('all');
+    setFormatFilter('all');
+  }, [selectedAccount]);
+
   // ─── Computed Analysis ──────────────────────────────────────
 
   // Unique campaign names for filter dropdown
@@ -627,13 +637,20 @@ export default function AdPerspectivePage() {
     return names.sort();
   }, [ads]);
 
-  // Sort ads by spend descending, with optional campaign filter
-  const sortedAds = useMemo(() =>
-    [...ads]
+  // Ads in the current campaign, before source/format, so filter counts stay stable.
+  const campaignAds = useMemo(() =>
+    ads
       .filter(a => a.spend > 0)
-      .filter(a => campaignFilter === 'all' || a.campaign_name === campaignFilter)
-      .sort((a, b) => b.spend - a.spend),
+      .filter(a => campaignFilter === 'all' || a.campaign_name === campaignFilter),
     [ads, campaignFilter]
+  );
+
+  // Sort ads by spend descending. Source and format apply to every total below.
+  const sortedAds = useMemo(() =>
+    [...campaignAds]
+      .filter(a => matchesAdSlice(a, sourceFilter, formatFilter))
+      .sort((a, b) => b.spend - a.spend),
+    [campaignAds, sourceFilter, formatFilter]
   );
 
   // Export CSV
@@ -1000,6 +1017,14 @@ export default function AdPerspectivePage() {
                   <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: '#666' }} />
                 </div>
 
+                <AdSliceFilters
+                  ads={campaignAds}
+                  source={sourceFilter}
+                  format={formatFilter}
+                  onSource={setSourceFilter}
+                  onFormat={setFormatFilter}
+                />
+
                 {/* Campaign filter */}
                 {campaignNames.length > 1 && (
                   <div className="relative">
@@ -1070,6 +1095,13 @@ export default function AdPerspectivePage() {
             <div className="rounded-xl p-6 flex items-center gap-3" style={{ backgroundColor: 'rgba(220,38,38,0.06)', border: '1px solid rgba(220,38,38,0.15)' }}>
               <AlertCircle size={18} style={{ color: '#dc2626' }} />
               <span className="text-sm" style={{ color: '#dc2626' }}>{friendlyError(error)}</span>
+            </div>
+          )}
+
+          {!loading && !error && ads.length > 0 && sortedAds.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-24">
+              <TableProperties size={48} style={{ color: '#333' }} />
+              <p className="mt-4 text-sm" style={{ color: '#666' }}>No ads match these filters.</p>
             </div>
           )}
 
