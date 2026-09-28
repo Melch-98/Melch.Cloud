@@ -171,13 +171,13 @@ export default function Navbar({ children }: { children?: React.ReactNode }) {
         { label: 'Creative Matrix', href: '/analytics/creative-matrix', icon: Grid3X3, roles: ['admin', 'strategist'] },
         { label: 'Trybe Program', href: '/analytics/trybe-program', icon: Trophy, roles: ['admin', 'strategist', 'founder'] },
       ]},
-    // Hidden — Ad Changelog needs rework before re-enabling
-    // {
-    //   label: 'Ad Changelog',
-    //   href: '/ad-changelog',
-    //   icon: Activity,
-    //   roles: ['admin', 'founder'],
-    // },
+    {
+      label: 'Ad Changelog',
+      href: '/ad-changelog',
+      icon: Activity,
+      roles: ['admin', 'founder'],
+      badge: 'Beta',
+    },
     {
       label: 'Calendar',
       href: '/calendar',

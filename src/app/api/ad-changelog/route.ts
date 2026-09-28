@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { getCampaigns, resolvePipeboardToken } from '@/lib/pipeboard-google';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -127,6 +128,9 @@ export async function POST(request: NextRequest) {
   const errors: string[] = [];
 
   // Meta campaigns
+  if (brand.meta_ad_account_id && !metaToken) {
+    errors.push('Meta: META_ACCESS_TOKEN not configured');
+  }
   if (brand.meta_ad_account_id && metaToken) {
     try {
       const url = `https://graph.facebook.com/v21.0/${brand.meta_ad_account_id}/campaigns?` +
@@ -175,53 +179,44 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Google campaigns via Pipeboard Google MCP
+  // Google campaigns via Pipeboard Google MCP (not Windsor)
   if (brand.google_ads_customer_id) {
     try {
-      let pipeboardToken = process.env.PIPEBOARD_API_TOKEN || '';
+      const pipeboardToken = await resolvePipeboardToken(
+        process.env.PIPEBOARD_API_TOKEN,
+        async (key) => {
+          const { data: settings } = await sb
+            .from('app_settings')
+            .select('value')
+            .eq('key', key)
+            .single();
+          return settings?.value || null;
+        }
+      );
+
       if (!pipeboardToken) {
-        const { data: settings } = await sb
-          .from('app_settings')
-          .select('value')
-          .eq('key', 'pipeboard_api_token')
-          .single();
-        pipeboardToken = settings?.value || '';
-      }
-
-      if (pipeboardToken) {
-        const custId = brand.google_ads_customer_id.replace(/\D/g, '');
-        const res = await fetch(`https://google-ads.mcp.pipeboard.co/?token=${encodeURIComponent(pipeboardToken)}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({
-            jsonrpc: '2.0', id: 1, method: 'tools/call',
-            params: { name: 'get_google_ads_campaigns', arguments: { customer_id: custId } },
-          }),
-        });
-        const j = await res.json();
-        const text = j?.result?.content?.[0]?.text;
-        const parsed = text ? JSON.parse(text) : null;
-        const campaignsList = Array.isArray(parsed) ? parsed : parsed?.campaigns || [];
-
+        errors.push('Google: PIPEBOARD_API_TOKEN not configured');
+      } else {
+        const campaignsList = await getCampaigns(pipeboardToken, brand.google_ads_customer_id);
         const seen = new Map<string, { name: string; status: string }>();
-        campaignsList.forEach((c: any) => {
-          const id = c?.campaign_id?.toString() || c?.id?.toString();
+        for (const c of campaignsList) {
+          const id = c?.campaign_id?.toString() || (c as { id?: string | number })?.id?.toString();
           if (id && !seen.has(id)) {
             seen.set(id, {
-              name: c?.campaign_name || c?.name || '',
-              status: c?.campaign_status || c?.status || '',
+              name: c?.campaign_name || (c as { name?: string })?.name || '',
+              status: c?.campaign_status || (c as { status?: string })?.status || '',
             });
           }
-        });
+        }
 
-        seen.forEach((info: { name: string; status: string }, id: string) => {
+        seen.forEach((info, id) => {
           currentState.push({
             platform: 'google',
             entity_type: 'campaign',
             entity_id: id,
             entity_name: info.name,
             status: info.status,
-            daily_budget: 0, // Pipeboard doesn't return budget; will detect status changes
+            daily_budget: 0, // Pipeboard campaign list has no budget; status-only for Google
             lifetime_budget: 0,
           });
         });
@@ -277,7 +272,7 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      // Check budget change (Meta only, Google doesn't return budget via Windsor)
+      // Check budget change (Meta only — Pipeboard campaign list has no budget)
       if (entity.platform === 'meta') {
         const prevBudget = Number(prev.daily_budget || 0);
         const newBudget = entity.daily_budget;
@@ -304,8 +299,8 @@ export async function POST(request: NextRequest) {
   // (Only flag if we actually got data from that platform)
   const metaFetched = currentState.some((e) => e.platform === 'meta');
   const googleFetched = currentState.some((e) => e.platform === 'google');
-  for (const [, prev] of prevMap) {
-    if ((prev.platform === 'meta' && !metaFetched) || (prev.platform === 'google' && !googleFetched)) continue;
+  prevMap.forEach((prev) => {
+    if ((prev.platform === 'meta' && !metaFetched) || (prev.platform === 'google' && !googleFetched)) return;
     changes.push({
       brand_id: brandId,
       platform: prev.platform as 'meta' | 'google',
@@ -316,7 +311,7 @@ export async function POST(request: NextRequest) {
       old_value: prev.status,
       new_value: null,
     });
-  }
+  });
 
   // ── Write changes to changelog ──
   if (changes.length > 0) {
