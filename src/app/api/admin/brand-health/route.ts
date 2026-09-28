@@ -80,7 +80,7 @@ export async function GET(request: NextRequest) {
   // Shopify OAuth installs (no tokens returned)
   const { data: stores } = await supabase
     .from('shopify_stores')
-    .select('brand_id, shop_domain, uninstalled_at, shop_info, registered_webhooks')
+    .select('brand_id, shop_domain, uninstalled_at, shop_info, registered_webhooks, access_token')
     .in('brand_id', brandIds);
 
   const storesByBrand = new Map<string, any[]>();
@@ -135,7 +135,7 @@ export async function GET(request: NextRequest) {
 
     // Shopify
     const brandStores = (storesByBrand.get(brand.id) || []).filter(
-      (s) => !s.uninstalled_at
+      (s) => !s.uninstalled_at && s.access_token && s.access_token !== 'gadget-managed'
     );
     const hasOauth = brandStores.length > 0;
     const hasCustom =
@@ -173,7 +173,15 @@ export async function GET(request: NextRequest) {
 
     const webhookStatus = webhookStatusByBrand.get(brand.id);
     const hasCustomCreds = !!(brand.shopify_client_id && brand.shopify_client_secret);
-    if (webhookStatus?.missing_scope) {
+    if (!hasOauth && !hasCustomCreds && brand.shopify_store_domain) {
+      chips.push({
+        key: 'shopify_webhooks',
+        label: 'Webhooks',
+        status: 'yellow',
+        detail:
+          'No Shopify app token — orders sync from Triple Whale. Shopify webhooks cannot be registered.',
+      });
+    } else if (webhookStatus?.missing_scope) {
       chips.push({
         key: 'shopify_webhooks',
         label: 'Webhooks',
