@@ -32,6 +32,7 @@ import {
   Grid3X3,
   Zap,
   Globe,
+  Trophy,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
 
@@ -40,6 +41,7 @@ interface NavChild {
   href: string;
   icon: React.ElementType;
   roles?: string[];
+  badge?: string;
 }
 
 interface NavLink {
@@ -167,6 +169,7 @@ export default function Navbar({ children }: { children?: React.ReactNode }) {
         { label: 'Copy Analysis', href: '/analytics/copy-analysis', icon: Type },
         { label: 'Ad Perspective', href: '/analytics/ad-perspective', icon: TableProperties },
         { label: 'Creative Matrix', href: '/analytics/creative-matrix', icon: Grid3X3, roles: ['admin', 'strategist'] },
+        { label: 'Trybe Program', href: '/analytics/trybe-program', icon: Trophy, roles: ['admin', 'strategist', 'founder'] },
       ]},
     {
       label: 'Ad Changelog',
@@ -453,10 +456,21 @@ export default function Navbar({ children }: { children?: React.ReactNode }) {
                             style={{ color: childActive ? '#C8B89A' : undefined }}
                           />
                           <span
-                            className="text-[13px] font-medium transition-colors"
+                            className="text-[13px] font-medium transition-colors flex items-center gap-2"
                             style={{ color: childActive ? '#C8B89A' : undefined }}
                           >
                             {child.label}
+                            {child.badge && (
+                              <span
+                                className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
+                                style={{
+                                  backgroundColor: 'rgba(200,184,154,0.15)',
+                                  color: '#C8B89A',
+                                }}
+                              >
+                                {child.badge}
+                              </span>
+                            )}
                           </span>
                           {!childActive && (
                             <div

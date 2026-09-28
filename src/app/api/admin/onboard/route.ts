@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { ensureDropboxFolder } from '@/lib/dropbox';
+import { sendEmail } from '@/lib/email';
+import { ensureUserWithInviteLink, appUrl } from '@/lib/invite';
+import { rolePermissionDefaults } from '@/lib/role-defaults';
 
 export const dynamic = 'force-dynamic';
 
@@ -137,78 +140,91 @@ export async function POST(request: NextRequest) {
   /*  Create users                                                     */
   /* ---------------------------------------------------------------- */
   if (action === 'create_users') {
-    const { brand_id, users } = body;
+    const { brand_id, users, sendWelcomeEmail } = body;
     if (!brand_id) return NextResponse.json({ error: 'brand_id required' }, { status: 400 });
     if (!Array.isArray(users) || users.length === 0) {
       return NextResponse.json({ error: 'users array required' }, { status: 400 });
     }
 
+    let brandName: string | undefined;
+    {
+      const { data: brand } = await supabase
+        .from('brands')
+        .select('name')
+        .eq('id', brand_id)
+        .single();
+      brandName = brand?.name;
+    }
+
+    const shouldEmail = sendWelcomeEmail !== false;
     const results: any[] = [];
     for (const u of users) {
-      const { email, full_name, role } = u;
+      const email = String(u.email || '').trim().toLowerCase();
       if (!email) continue;
+      const role = u.role || 'strategist';
+      const full_name = (u.full_name || email.split('@')[0]).trim();
 
-      // Generate a temp password
-      const tempPassword = `Melch-${Math.random().toString(36).slice(2, 10)}!`;
+      try {
+        const invited = await ensureUserWithInviteLink(supabase, email, {
+          fullName: full_name,
+        });
 
-      // Create auth user
-      let userId: string;
-      const { data: newUser, error: createError } = await supabase.auth.admin.createUser({
-        email,
-        password: tempPassword,
-        email_confirm: true,
-      });
+        await supabase.from('users_profile').upsert(
+          {
+            id: invited.userId,
+            email,
+            full_name,
+            role,
+            brand_id,
+          },
+          { onConflict: 'id' }
+        );
 
-      if (createError) {
-        if (
-          createError.message?.includes('already been registered') ||
-          createError.message?.includes('already exists')
-        ) {
-          // Find existing user
-          const { data: listData } = await supabase.auth.admin.listUsers({ perPage: 1000 });
-          const existing = listData?.users.find(
-            (x) => x.email?.toLowerCase() === email.toLowerCase()
-          );
-          if (!existing) {
-            results.push({ email, error: 'User exists but could not be found' });
-            continue;
-          }
-          userId = existing.id;
-        } else {
-          results.push({ email, error: createError.message });
-          continue;
+        const perms = rolePermissionDefaults(role);
+        await supabase.from('user_permissions').upsert(
+          { user_id: invited.userId, ...perms },
+          { onConflict: 'user_id' }
+        );
+
+        let welcomeEmail: { sent: boolean; error?: string; skipped?: string } | null = null;
+        if (shouldEmail) {
+          const result = await sendEmail({
+            to: email,
+            template: {
+              name: 'welcome',
+              data: {
+                name: full_name,
+                role,
+                brandName,
+                loginUrl: appUrl(),
+                inviteLink: invited.actionLink || undefined,
+                invitedBy: user.email || undefined,
+              },
+            },
+          });
+          welcomeEmail = {
+            sent: result.sent,
+            error: result.error,
+            skipped: result.skipped,
+          };
         }
-      } else {
-        userId = newUser.user.id;
-      }
 
-      // Upsert profile
-      await supabase.from('users_profile').upsert(
-        {
-          id: userId,
+        const emailOk = welcomeEmail?.sent === true;
+        const showLink = !shouldEmail || !emailOk;
+
+        results.push({
           email,
-          full_name: full_name || email.split('@')[0],
-          role: role || 'strategist',
-          brand_id,
-        },
-        { onConflict: 'id' }
-      );
-
-      // Upsert permissions
-      const isFounder = role === 'founder';
-      await supabase.from('user_permissions').upsert(
-        {
-          user_id: userId,
-          can_upload: true,
-          can_view_pipeline: isFounder,
-          can_download: isFounder,
-          can_delete: false,
-          is_active: true,
-        },
-        { onConflict: 'user_id' }
-      );
-
-      results.push({ email, userId, ok: true, tempPassword });
+          userId: invited.userId,
+          ok: true,
+          isExisting: invited.isExisting,
+          welcomeEmail,
+          // One-time set-password link for admin UI when email fails / skipped
+          actionLink: showLink ? invited.actionLink : null,
+          linkType: invited.linkType,
+        });
+      } catch (e: any) {
+        results.push({ email, error: e?.message || 'Invite failed' });
+      }
     }
 
     return NextResponse.json({ ok: true, results });

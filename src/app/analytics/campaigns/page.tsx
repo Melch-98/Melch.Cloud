@@ -27,6 +27,7 @@ import {
 } from 'recharts';
 import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
+import { makeFmt, type Fmt } from '@/lib/format';
 
 // ─── Brand Palette ──────────────────────────────────────────────
 const GOLD = '#C8B89A';
@@ -97,10 +98,14 @@ const DATE_RANGES: { value: DateRange; label: string }[] = [
 
 // ─── Formatters ─────────────────────────────────────────────────
 
+let campaignFmt: Fmt = makeFmt('USD');
+function setCampaignReportingCurrency(code?: string | null) {
+  campaignFmt = makeFmt((code || 'USD').toUpperCase());
+}
 const fmtCurrency = (n: number) => {
-  if (Math.abs(n) >= 1000000) return `$${(n / 1000000).toFixed(1)}M`;
-  if (Math.abs(n) >= 10000) return `$${(n / 1000).toFixed(1)}K`;
-  return `$${n.toFixed(2)}`;
+  if (Math.abs(n) >= 1000000) return `${campaignFmt.symbol}${(n / 1000000).toFixed(1)}M`;
+  if (Math.abs(n) >= 10000) return `${campaignFmt.symbol}${(n / 1000).toFixed(1)}K`;
+  return campaignFmt.currencyFull(n);
 };
 const fmtNum = (n: number) => {
   if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
@@ -425,6 +430,7 @@ export default function CampaignPerformancePage() {
         { headers: { Authorization: `Bearer ${session?.access_token}` } }
       );
       const data = await res.json();
+      if (data.reporting_currency) setCampaignReportingCurrency(data.reporting_currency);
       if (data.campaigns) allCampaigns.push(...data.campaigns);
       if (data.errors?.length) {
         console.warn('Campaign fetch warnings:', data.errors);
@@ -1055,7 +1061,7 @@ export default function CampaignPerformancePage() {
                       />
                       <YAxis
                         tick={{ fill: '#444', fontSize: 10 }}
-                        tickFormatter={(v) => `$${(v/1000).toFixed(0)}k`}
+                        tickFormatter={(v) => `${campaignFmt.symbol}${(v/1000).toFixed(0)}k`}
                         axisLine={false}
                         tickLine={false}
                         width={50}
@@ -1103,7 +1109,7 @@ export default function CampaignPerformancePage() {
                       />
                       <YAxis
                         tick={{ fill: '#444', fontSize: 10 }}
-                        tickFormatter={(v) => `$${v.toFixed(0)}`}
+                        tickFormatter={(v) => `${campaignFmt.symbol}${v.toFixed(0)}`}
                         axisLine={false}
                         tickLine={false}
                         width={40}
@@ -1293,7 +1299,7 @@ export default function CampaignPerformancePage() {
                           axisLine={{ stroke: 'rgba(255,255,255,0.04)' }}
                           tickLine={false}
                         />
-                        <YAxis tick={{ fill: '#444', fontSize: 10 }} tickFormatter={(v) => `$${(v/1000).toFixed(0)}k`} axisLine={false} tickLine={false} width={45} />
+                        <YAxis tick={{ fill: '#444', fontSize: 10 }} tickFormatter={(v) => `${campaignFmt.symbol}${(v/1000).toFixed(0)}k`} axisLine={false} tickLine={false} width={45} />
                         <Tooltip content={<ChartTooltip />} />
                         <Legend wrapperStyle={{ fontSize: '10px', color: '#666' }} iconType="circle" iconSize={6} />
                         <Area type="monotone" dataKey="Spend" stroke={GOLD} fill="url(#spendGrad)" strokeWidth={2} />

@@ -72,7 +72,8 @@ interface GeoResponse {
   };
   baseCurrency: string; fxRates: Record<string, number>;
   meta_currency: string; shopify_currency: string; google_currency: string;
-  date_range: { from: string; to: string }; errors?: string[]; warnings?: string[];
+  date_range: { from: string; to: string }; shop_timezone?: string;
+  errors?: string[]; warnings?: string[];
 }
 
 type DateRange = 'last_7d' | 'last_14d' | 'last_30d' | 'last_90d' | 'this_month';
@@ -163,7 +164,7 @@ export default function GeoPerformancePage(){
           <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
             <div>
               <h1 className="text-2xl font-bold text-white flex items-center gap-2"><Globe size={24} style={{color:G}}/>Geo Performance</h1>
-              <p className="text-sm text-gray-400 mt-1">Base {effCurr} (auto) &middot; Shopify {data?.shopify_currency||'?'} &middot; Meta {data?.meta_currency||'?'} &middot; Google {data?.google_currency||'?'} &middot; IF {data?.totals?.if_factor||'…'}×</p>
+              <p className="text-sm text-gray-400 mt-1">{data?.date_range?`${data.date_range.from} – ${data.date_range.to}`:dl}{data?.shop_timezone?` · ${data.shop_timezone}`:''} &middot; Base {effCurr} (auto) &middot; Shopify {data?.shopify_currency||'?'} &middot; Meta {data?.meta_currency||'?'} &middot; Google {data?.google_currency||'?'} &middot; IF {data?.totals?.if_factor||'…'}×</p>
             </div>
             <button onClick={fetchData} disabled={loading} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium" style={{background:Gd,color:G,border:`1px solid rgba(200,184,154,0.2)`}}><RefreshCw size={14} className={loading?'animate-spin':''}/>Refresh</button>
           </div>
@@ -196,8 +197,8 @@ export default function GeoPerformancePage(){
           {/* ── Charts ── */}
           {!loading&&chartData.length>0&&<div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-10">
             <div className="rounded-xl p-5" style={{background:'#111',border:`1px solid ${W2}`}}>
-              <h3 className="text-sm font-semibold text-gray-300 mb-4">Spend vs Revenue ({bc})</h3>
-              <ResponsiveContainer width="100%" height={270}><BarChart data={chartData} margin={{top:5,right:20,left:10,bottom:5}}><CartesianGrid stroke="rgba(255,255,255,0.04)" strokeDasharray="3 3"/><XAxis dataKey="country" tick={{fill:'#888',fontSize:11}} axisLine={{stroke:W2}}/><YAxis tick={{fill:'#888',fontSize:11}} axisLine={{stroke:W2}} tickFormatter={(v:any)=>$k(Number(v),sym)}/><Tooltip contentStyle={{background:'#1a1a1a',border:`1px solid ${W10}`,borderRadius:'8px',fontSize:'13px'}} formatter={(v:any,n:any)=>[$f(Number(v),sym),String(n)]}/><Bar dataKey="spend" name="Spend" fill={G} radius={[4,4,0,0]}/><Bar dataKey="revenue" name="Revenue" fill={Bl} radius={[4,4,0,0]}/></BarChart></ResponsiveContainer>
+              <h3 className="text-sm font-semibold text-gray-300 mb-4">Spend vs Gross Sales ({bc})</h3>
+              <ResponsiveContainer width="100%" height={270}><BarChart data={chartData} margin={{top:5,right:20,left:10,bottom:5}}><CartesianGrid stroke="rgba(255,255,255,0.04)" strokeDasharray="3 3"/><XAxis dataKey="country" tick={{fill:'#888',fontSize:11}} axisLine={{stroke:W2}}/><YAxis tick={{fill:'#888',fontSize:11}} axisLine={{stroke:W2}} tickFormatter={(v:any)=>$k(Number(v),sym)}/><Tooltip contentStyle={{background:'#1a1a1a',border:`1px solid ${W10}`,borderRadius:'8px',fontSize:'13px'}} formatter={(v:any,n:any)=>[$f(Number(v),sym),String(n)]}/><Bar dataKey="spend" name="Spend" fill={G} radius={[4,4,0,0]}/><Bar dataKey="revenue" name="Gross sales" fill={Bl} radius={[4,4,0,0]}/></BarChart></ResponsiveContainer>
             </div>
             <div className="rounded-xl p-5" style={{background:'#111',border:`1px solid ${W2}`}}>
               <h3 className="text-sm font-semibold text-gray-300 mb-4">Spending Power — Spend vs aMER</h3>

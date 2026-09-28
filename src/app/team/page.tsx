@@ -20,9 +20,11 @@ import {
   Eye,
   EyeOff,
   Mail,
-  Lock,
   User,
   Rocket,
+  Activity,
+  Link2,
+  KeyRound,
 } from 'lucide-react';
 import Link from 'next/link';
 import Navbar from '@/components/Navbar';
@@ -257,6 +259,65 @@ function MemberRow({
   );
 }
 
+/* ─── Connection Health ──────────────────────────────────────── */
+
+type HealthChip = {
+  key: string;
+  label: string;
+  status: 'green' | 'yellow' | 'red' | 'gray';
+  detail: string;
+};
+
+const CHIP_COLORS: Record<HealthChip['status'], { bg: string; fg: string; border: string }> = {
+  green: { bg: 'rgba(52,168,83,0.12)', fg: '#34A853', border: 'rgba(52,168,83,0.25)' },
+  yellow: { bg: 'rgba(234,179,8,0.12)', fg: '#EAB308', border: 'rgba(234,179,8,0.25)' },
+  red: { bg: 'rgba(239,68,68,0.12)', fg: '#EF4444', border: 'rgba(239,68,68,0.25)' },
+  gray: { bg: 'rgba(156,163,175,0.10)', fg: '#9CA3AF', border: 'rgba(156,163,175,0.22)' },
+};
+
+function ConnectionHealthPanel({
+  chips,
+  loading,
+}: {
+  chips?: HealthChip[];
+  loading?: boolean;
+}) {
+  if (loading && !chips) {
+    return (
+      <div className="px-5 py-2.5 flex items-center gap-2" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+        <Activity size={12} style={{ color: '#555' }} className="animate-pulse" />
+        <span className="text-[10px] text-gray-500 uppercase tracking-wider">Checking connections…</span>
+      </div>
+    );
+  }
+  if (!chips || chips.length === 0) return null;
+
+  return (
+    <div
+      className="px-5 py-2.5 flex flex-wrap items-center gap-1.5"
+      style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <span className="text-[10px] text-gray-500 uppercase tracking-wider mr-1 flex items-center gap-1">
+        <Activity size={11} /> Health
+      </span>
+      {chips.map((c) => {
+        const col = CHIP_COLORS[c.status];
+        return (
+          <span
+            key={c.key}
+            title={c.detail}
+            className="text-[10px] font-medium px-2 py-0.5 rounded cursor-default"
+            style={{ backgroundColor: col.bg, color: col.fg, border: `1px solid ${col.border}` }}
+          >
+            {c.label}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ─── Team Card ──────────────────────────────────────────────── */
 
 function TeamCard({
@@ -270,17 +331,21 @@ function TeamCard({
   onUpdateBrand,
   onArchiveBrand,
   saving,
+  healthChips,
+  healthLoading,
 }: {
   brand: Brand;
   members: UserProfile[];
   allUsers: UserProfile[];
   onUpdatePermission: (userId: string, field: string, value: boolean) => void;
-  onUpdateRole: (userId: string, role: 'admin' | 'strategist') => void;
+  onUpdateRole: (userId: string, role: 'admin' | 'strategist' | 'founder') => void;
   onAddMember: (userId: string, brandId: string) => void;
   onRemoveMember: (userId: string) => void;
   onUpdateBrand: (brandId: string, field: string, value: string) => void;
   onArchiveBrand: (brand: Brand) => void;
   saving: boolean;
+  healthChips?: HealthChip[];
+  healthLoading?: boolean;
 }) {
   const [expanded, setExpanded] = useState(true);
   const [showAddMenu, setShowAddMenu] = useState(false);
@@ -306,6 +371,80 @@ function TeamCard({
   const [returnsPct, setReturnsPct] = useState(String(brand.returns_rate_pct ?? '0'));
   const [creativeCostStatic, setCreativeCostStatic] = useState(String(brand.creative_cost_static ?? '50'));
   const [creativeCostVideo, setCreativeCostVideo] = useState(String(brand.creative_cost_video ?? '150'));
+  // Trybe integration
+  const [trybeKey, setTrybeKey] = useState('');
+  const [trybeBrandId, setTrybeBrandId] = useState('');
+  const [trybeProgramId, setTrybeProgramId] = useState('');
+  const [trybeProgramName, setTrybeProgramName] = useState('');
+  const [trybeMasked, setTrybeMasked] = useState<string | null>(null);
+  const [trybeConfigured, setTrybeConfigured] = useState(false);
+  const [trybeSaving, setTrybeSaving] = useState(false);
+  const [trybeMsg, setTrybeMsg] = useState<string | null>(null);
+  const [showTrybeKey, setShowTrybeKey] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const supabase = createClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+        const res = await fetch(`/api/trybe/integration?brand_id=${brand.id}`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        const data = await res.json();
+        if (cancelled || !res.ok) return;
+        setTrybeConfigured(!!data.configured);
+        setTrybeMasked(data.api_key_masked || null);
+        const meta = data.metadata || {};
+        setTrybeBrandId(meta.trybe_brand_id || '');
+        setTrybeProgramId(meta.trybe_program_id || '');
+        setTrybeProgramName(meta.trybe_program_name || '');
+      } catch {
+        // ignore — settings still usable
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [brand.id]);
+
+  const saveTrybeIntegration = async () => {
+    setTrybeSaving(true);
+    setTrybeMsg(null);
+    try {
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) { setTrybeMsg('Not authenticated'); setTrybeSaving(false); return; }
+      const body: Record<string, string> = {
+        brand_id: brand.id,
+        trybe_brand_id: trybeBrandId.trim(),
+        trybe_program_id: trybeProgramId.trim(),
+        trybe_program_name: trybeProgramName.trim(),
+      };
+      if (trybeKey.trim()) body.api_key = trybeKey.trim();
+      const res = await fetch('/api/trybe/integration', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setTrybeMsg(data.error || 'Save failed');
+      } else {
+        setTrybeConfigured(!!data.configured);
+        setTrybeMasked(data.api_key_masked || trybeMasked);
+        setTrybeKey('');
+        setTrybeMsg(data.warning || 'Trybe settings saved');
+      }
+    } catch {
+      setTrybeMsg('Something went wrong');
+    } finally {
+      setTrybeSaving(false);
+    }
+  };
+
 
   const unassignedUsers = allUsers.filter(
     (u) => !u.brand_id && u.role !== 'admin'
@@ -485,6 +624,8 @@ function TeamCard({
       </div>
 
       {/* Settings panel */}
+      <ConnectionHealthPanel chips={healthChips} loading={healthLoading} />
+
       {showSettings && (
         <div
           className="px-5 py-4 space-y-3"
@@ -713,6 +854,75 @@ function TeamCard({
               {twSyncResult && (
                 <span className={`text-[11px] ${twSyncResult.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
                   {twSyncResult}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Trybe */}
+          <div className="pt-3 mt-3" style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+            <div className="flex items-center gap-2 mb-2.5">
+              <KeyRound size={12} style={{ color: '#A78BFA' }} />
+              <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#A78BFA' }}>
+                Trybe Program
+              </p>
+              {trybeConfigured && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(34,197,94,0.12)', color: '#22C55E' }}>
+                  Connected{trybeMasked ? ` · ${trybeMasked}` : ''}
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="md:col-span-2">
+                <label className="text-[10px] text-gray-500 font-medium block mb-1.5 uppercase tracking-wider">
+                  API Key {trybeConfigured ? '(leave blank to keep existing)' : ''}
+                </label>
+                <div className="relative">
+                  <input
+                    type={showTrybeKey ? 'text' : 'password'}
+                    value={trybeKey}
+                    onChange={(e) => setTrybeKey(e.target.value)}
+                    placeholder={trybeConfigured ? '•••••••• (unchanged)' : 'tk_live_…'}
+                    className="w-full px-3 py-1.5 rounded-lg text-xs outline-none pr-8"
+                    style={{ backgroundColor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#F5F5F8' }}
+                    autoComplete="off"
+                  />
+                  <button type="button" onClick={() => setShowTrybeKey(!showTrybeKey)} className="absolute right-2 top-1/2 -translate-y-1/2" style={{ color: '#555' }}>
+                    {showTrybeKey ? <EyeOff size={12} /> : <Eye size={12} />}
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 font-medium block mb-1.5 uppercase tracking-wider">Trybe Brand ID</label>
+                <input type="text" value={trybeBrandId} onChange={(e) => setTrybeBrandId(e.target.value)} placeholder="uuid from Trybe CDN path"
+                  className="w-full px-3 py-1.5 rounded-lg text-xs outline-none"
+                  style={{ backgroundColor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#F5F5F8' }} />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 font-medium block mb-1.5 uppercase tracking-wider">Program ID</label>
+                <input type="text" value={trybeProgramId} onChange={(e) => setTrybeProgramId(e.target.value)} placeholder="creator_program_…"
+                  className="w-full px-3 py-1.5 rounded-lg text-xs outline-none"
+                  style={{ backgroundColor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#F5F5F8' }} />
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-[10px] text-gray-500 font-medium block mb-1.5 uppercase tracking-wider">Program Name</label>
+                <input type="text" value={trybeProgramName} onChange={(e) => setTrybeProgramName(e.target.value)} placeholder="e.g. 10% Ad Spend"
+                  className="w-full px-3 py-1.5 rounded-lg text-xs outline-none"
+                  style={{ backgroundColor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#F5F5F8' }} />
+              </div>
+            </div>
+            <div className="mt-3 flex items-center gap-3">
+              <button
+                onClick={saveTrybeIntegration}
+                disabled={trybeSaving}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all disabled:opacity-50"
+                style={{ backgroundColor: 'rgba(167,139,250,0.15)', color: '#A78BFA', border: '1px solid rgba(167,139,250,0.25)' }}
+              >
+                {trybeSaving ? 'Saving…' : 'Save Trybe'}
+              </button>
+              {trybeMsg && (
+                <span className={`text-[11px] ${trybeMsg.toLowerCase().includes('fail') || trybeMsg.toLowerCase().includes('error') || trybeMsg.toLowerCase().includes('wrong') ? 'text-red-400' : 'text-green-400'}`}>
+                  {trybeMsg}
                 </span>
               )}
             </div>
@@ -985,10 +1195,12 @@ const ROLE_CONFIG = {
 
 interface InviteResult {
   email: string;
-  tempPassword: string;
   fullName: string;
   role: string;
   isExisting?: boolean;
+  actionLink?: string | null;
+  emailSent?: boolean;
+  emailError?: string;
 }
 
 function InviteMemberModal({
@@ -1007,16 +1219,12 @@ function InviteMemberModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Form fields
   const [email, setEmail] = useState('');
   const [fullName, setFullName] = useState('');
   const [role, setRole] = useState<'admin' | 'strategist' | 'founder'>('strategist');
   const [brandId, setBrandId] = useState<string>('');
-  const [tempPassword, setTempPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
   const [sendWelcomeEmail, setSendWelcomeEmail] = useState(true);
 
-  // Success state
   const [result, setResult] = useState<InviteResult | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
@@ -1026,8 +1234,6 @@ function InviteMemberModal({
     setFullName('');
     setRole('strategist');
     setBrandId('');
-    setTempPassword('');
-    setShowPassword(false);
     setSendWelcomeEmail(true);
     setError(null);
     setResult(null);
@@ -1037,13 +1243,6 @@ function InviteMemberModal({
   const handleClose = () => {
     resetForm();
     onClose();
-  };
-
-  const generatePassword = () => {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
-    let pw = '';
-    for (let i = 0; i < 12; i++) pw += chars[Math.floor(Math.random() * chars.length)];
-    setTempPassword(pw);
   };
 
   const handleCopy = async (text: string, label: string) => {
@@ -1056,8 +1255,6 @@ function InviteMemberModal({
     setError(null);
 
     if (!email.trim()) { setError('Email is required'); return; }
-    if (!tempPassword) { setError('Set a temporary password'); return; }
-    if (tempPassword.length < 8) { setError('Password must be at least 8 characters'); return; }
 
     setSaving(true);
 
@@ -1076,7 +1273,6 @@ function InviteMemberModal({
           fullName: fullName.trim() || undefined,
           role,
           brandId: brandId || undefined,
-          tempPassword,
           sendWelcomeEmail,
         }),
       });
@@ -1084,17 +1280,19 @@ function InviteMemberModal({
       const data = await res.json();
 
       if (!res.ok) {
-        setError(data.error || 'Failed to create user');
+        setError(data.error || 'Failed to invite user');
         setSaving(false);
         return;
       }
 
       setResult({
         email: email.trim().toLowerCase(),
-        tempPassword,
         fullName: fullName.trim() || email.split('@')[0],
         role,
         isExisting: data.isExisting || false,
+        actionLink: data.invite?.actionLink || null,
+        emailSent: data.invite?.emailSent === true || data.welcomeEmail?.sent === true,
+        emailError: data.welcomeEmail?.error || data.welcomeEmail?.skipped,
       });
       setStep('success');
       onCreated();
@@ -1118,7 +1316,6 @@ function InviteMemberModal({
           boxShadow: '0 25px 50px rgba(0,0,0,0.5)',
         }}
       >
-        {/* Header */}
         <div
           className="px-6 py-5 flex items-center justify-between"
           style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}
@@ -1132,12 +1329,12 @@ function InviteMemberModal({
             </div>
             <div>
               <h3 className="text-base font-bold text-[#F5F5F8]">
-                {step === 'form' ? 'Invite Member' : 'Member Created'}
+                {step === 'form' ? 'Invite Member' : 'Invite Sent'}
               </h3>
               <p className="text-[11px] text-gray-500">
                 {step === 'form'
-                  ? 'Add a new user to the platform'
-                  : 'Share these credentials securely'}
+                  ? 'Email a set-password invite link'
+                  : 'Share the fallback link if email did not arrive'}
               </p>
             </div>
           </div>
@@ -1152,7 +1349,6 @@ function InviteMemberModal({
 
         {step === 'form' ? (
           <div className="px-6 py-5 space-y-4">
-            {/* Error */}
             {error && (
               <div
                 className="px-3 py-2.5 rounded-lg flex items-center gap-2 text-xs"
@@ -1163,7 +1359,6 @@ function InviteMemberModal({
               </div>
             )}
 
-            {/* Email */}
             <div>
               <label className="text-[10px] text-gray-500 font-medium block mb-1.5 uppercase tracking-wider">
                 Email Address
@@ -1185,7 +1380,6 @@ function InviteMemberModal({
               </div>
             </div>
 
-            {/* Full Name */}
             <div>
               <label className="text-[10px] text-gray-500 font-medium block mb-1.5 uppercase tracking-wider">
                 Full Name <span className="text-gray-600 normal-case">(optional)</span>
@@ -1206,7 +1400,6 @@ function InviteMemberModal({
               </div>
             </div>
 
-            {/* Role Selector */}
             <div>
               <label className="text-[10px] text-gray-500 font-medium block mb-2 uppercase tracking-wider">
                 Role
@@ -1246,7 +1439,6 @@ function InviteMemberModal({
               </div>
             </div>
 
-            {/* Brand Assignment */}
             {role !== 'admin' && (
               <div>
                 <label className="text-[10px] text-gray-500 font-medium block mb-1.5 uppercase tracking-wider">
@@ -1272,48 +1464,6 @@ function InviteMemberModal({
               </div>
             )}
 
-            {/* Temp Password */}
-            <div>
-              <label className="text-[10px] text-gray-500 font-medium block mb-1.5 uppercase tracking-wider">
-                Temporary Password
-              </label>
-              <div
-                className="flex items-center gap-2 px-3 py-2.5 rounded-lg"
-                style={{ backgroundColor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}
-              >
-                <Lock size={14} style={{ color: '#555' }} />
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={tempPassword}
-                  onChange={(e) => setTempPassword(e.target.value)}
-                  placeholder="Min 8 characters"
-                  className="flex-1 bg-transparent text-sm outline-none"
-                  style={{ color: '#F5F5F8' }}
-                />
-                <button
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="p-1 rounded transition-colors hover:bg-white/[0.05]"
-                  style={{ color: '#555' }}
-                  type="button"
-                >
-                  {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
-                </button>
-                <div className="w-px h-4" style={{ background: 'rgba(255,255,255,0.08)' }} />
-                <button
-                  onClick={generatePassword}
-                  className="text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md transition-all hover:bg-white/[0.05]"
-                  style={{ color: '#C8B89A' }}
-                  type="button"
-                >
-                  Generate
-                </button>
-              </div>
-              <p className="text-[10px] mt-1.5" style={{ color: '#444' }}>
-                User will change this on their first login via Account Settings
-              </p>
-            </div>
-
-            {/* Welcome Email Toggle */}
             <label
               className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer select-none transition-colors hover:bg-white/[0.03]"
               style={{ backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}
@@ -1329,12 +1479,11 @@ function InviteMemberModal({
                   Send welcome email
                 </p>
                 <p className="text-[10px]" style={{ color: '#555' }}>
-                  Emails the user a branded intro with their sign-in link
+                  Includes a one-time set-password invite link (Resend)
                 </p>
               </div>
             </label>
 
-            {/* Submit */}
             <div className="flex justify-end gap-3 pt-3" style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
               <button
                 onClick={handleClose}
@@ -1345,53 +1494,59 @@ function InviteMemberModal({
               </button>
               <button
                 onClick={handleSubmit}
-                disabled={saving || !email.trim() || !tempPassword}
+                disabled={saving || !email.trim()}
                 className="px-5 py-2.5 rounded-lg text-sm font-bold transition-all flex items-center gap-2"
                 style={{
-                  backgroundColor: email.trim() && tempPassword ? '#C8B89A' : 'rgba(200,184,154,0.2)',
-                  color: email.trim() && tempPassword ? '#0A0A0A' : '#666',
+                  backgroundColor: email.trim() ? '#C8B89A' : 'rgba(200,184,154,0.2)',
+                  color: email.trim() ? '#0A0A0A' : '#666',
                   opacity: saving ? 0.6 : 1,
                 }}
               >
                 {saving ? (
                   <>
                     <Loader size={14} className="animate-spin" />
-                    Creating…
+                    Inviting…
                   </>
                 ) : (
                   <>
                     <UserPlus size={14} />
-                    Create User
+                    Send Invite
                   </>
                 )}
               </button>
             </div>
           </div>
         ) : (
-          /* ── Success State ── */
           <div className="px-6 py-5 space-y-4">
-            {/* Success badge */}
             <div
               className="flex items-center gap-3 px-4 py-3 rounded-xl"
-              style={{ backgroundColor: 'rgba(52,168,83,0.08)', border: '1px solid rgba(52,168,83,0.15)' }}
+              style={{
+                backgroundColor: result?.emailSent ? 'rgba(52,168,83,0.08)' : 'rgba(200,184,154,0.08)',
+                border: `1px solid ${result?.emailSent ? 'rgba(52,168,83,0.15)' : 'rgba(200,184,154,0.2)'}`,
+              }}
             >
               <div
                 className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-                style={{ backgroundColor: 'rgba(52,168,83,0.2)' }}
+                style={{ backgroundColor: result?.emailSent ? 'rgba(52,168,83,0.2)' : 'rgba(200,184,154,0.2)' }}
               >
-                <Check size={16} style={{ color: '#34A853' }} />
+                {result?.emailSent ? (
+                  <Check size={16} style={{ color: '#34A853' }} />
+                ) : (
+                  <Link2 size={16} style={{ color: '#C8B89A' }} />
+                )}
               </div>
               <div>
-                <p className="text-sm font-medium" style={{ color: '#34A853' }}>
-                  {result?.fullName} has been {result?.isExisting ? 'updated' : 'added'}
+                <p className="text-sm font-medium" style={{ color: result?.emailSent ? '#34A853' : '#C8B89A' }}>
+                  {result?.fullName} has been {result?.isExisting ? 'updated' : 'invited'}
                 </p>
                 <p className="text-[11px]" style={{ color: '#555' }}>
-                  {result?.isExisting ? 'Existing account — password reset & profile updated' : `Role: ${ROLE_CONFIG[result?.role as keyof typeof ROLE_CONFIG]?.label || result?.role}`}
+                  {result?.emailSent
+                    ? 'Welcome email sent with set-password link'
+                    : `Email not sent${result?.emailError ? ` (${result.emailError})` : ''} — copy the one-time link below`}
                 </p>
               </div>
             </div>
 
-            {/* Credential card */}
             <div
               className="rounded-xl overflow-hidden"
               style={{ border: '1px solid rgba(200,184,154,0.12)' }}
@@ -1401,29 +1556,10 @@ function InviteMemberModal({
                 style={{ background: 'linear-gradient(135deg, rgba(200,184,154,0.08), rgba(200,184,154,0.02))' }}
               >
                 <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#C8B89A' }}>
-                  Login Credentials
+                  Invite details
                 </span>
-                <button
-                  onClick={() => {
-                    const text = `melch.cloud\nEmail: ${result?.email}\nTemp Password: ${result?.tempPassword}\n\nPlease change your password after first login.`;
-                    handleCopy(text, 'all');
-                  }}
-                  className="flex items-center gap-1.5 text-[10px] font-medium px-2 py-1 rounded-md transition-all hover:bg-white/[0.05]"
-                  style={{ color: copied === 'all' ? '#34A853' : '#C8B89A' }}
-                >
-                  {copied === 'all' ? <Check size={12} /> : <Copy size={12} />}
-                  {copied === 'all' ? 'Copied' : 'Copy All'}
-                </button>
               </div>
               <div className="px-4 py-3 space-y-3" style={{ backgroundColor: 'rgba(255,255,255,0.015)' }}>
-                {/* URL */}
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-0.5">URL</p>
-                    <p className="text-sm font-mono" style={{ color: '#F5F5F8' }}>melch.cloud</p>
-                  </div>
-                </div>
-                {/* Email */}
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-0.5">Email</p>
@@ -1437,28 +1573,40 @@ function InviteMemberModal({
                     {copied === 'email' ? <Check size={14} /> : <Copy size={14} />}
                   </button>
                 </div>
-                {/* Password */}
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-0.5">Temp Password</p>
-                    <p className="text-sm font-mono" style={{ color: '#C8B89A' }}>{result?.tempPassword}</p>
-                  </div>
-                  <button
-                    onClick={() => handleCopy(result?.tempPassword || '', 'pw')}
-                    className="p-1.5 rounded-lg transition-all hover:bg-white/[0.05]"
-                    style={{ color: copied === 'pw' ? '#34A853' : '#555' }}
-                  >
-                    {copied === 'pw' ? <Check size={14} /> : <Copy size={14} />}
-                  </button>
+                <div>
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-0.5">Role</p>
+                  <p className="text-sm" style={{ color: '#F5F5F8' }}>
+                    {ROLE_CONFIG[result?.role as keyof typeof ROLE_CONFIG]?.label || result?.role}
+                  </p>
                 </div>
+                {result?.actionLink && (
+                  <div>
+                    <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">
+                      One-time set-password link
+                    </p>
+                    <div
+                      className="flex items-start gap-2 px-3 py-2 rounded-lg"
+                      style={{ backgroundColor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}
+                    >
+                      <p className="flex-1 text-[11px] font-mono break-all" style={{ color: '#C8B89A' }}>
+                        {result.actionLink}
+                      </p>
+                      <button
+                        onClick={() => handleCopy(result.actionLink || '', 'link')}
+                        className="p-1.5 rounded-lg flex-shrink-0 transition-all hover:bg-white/[0.05]"
+                        style={{ color: copied === 'link' ? '#34A853' : '#555' }}
+                      >
+                        {copied === 'link' ? <Check size={14} /> : <Copy size={14} />}
+                      </button>
+                    </div>
+                    <p className="text-[10px] mt-1.5" style={{ color: '#444' }}>
+                      Share securely. Link expires; do not paste into public channels.
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
 
-            <p className="text-[11px] text-center" style={{ color: '#444' }}>
-              The user should change their password after first login via Account Settings
-            </p>
-
-            {/* Actions */}
             <div className="flex justify-between pt-2" style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
               <button
                 onClick={() => resetForm()}
@@ -1492,6 +1640,8 @@ export default function TeamPage() {
   const [error, setError] = useState<string | null>(null);
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [brands, setBrands] = useState<Brand[]>([]);
+  const [healthByBrand, setHealthByBrand] = useState<Record<string, HealthChip[]>>({});
+  const [healthLoading, setHealthLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
@@ -1581,6 +1731,32 @@ export default function TeamPage() {
     fetchData();
   }, [fetchData]);
 
+  const fetchBrandHealth = useCallback(async () => {
+    setHealthLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) { setHealthLoading(false); return; }
+      const res = await fetch('/api/admin/brand-health', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (!res.ok) { setHealthLoading(false); return; }
+      const data = await res.json();
+      const map: Record<string, HealthChip[]> = {};
+      for (const b of data.brands || []) {
+        map[b.brandId] = b.chips || [];
+      }
+      setHealthByBrand(map);
+    } catch {
+      /* non-fatal */
+    } finally {
+      setHealthLoading(false);
+    }
+  }, [supabase]);
+
+  useEffect(() => {
+    if (!loading && brands.length > 0) fetchBrandHealth();
+  }, [loading, brands.length, fetchBrandHealth]);
+
   /* ── Handlers ── */
 
   const handleUpdatePermission = useCallback(
@@ -1644,18 +1820,29 @@ export default function TeamPage() {
   const handleAddMember = useCallback(
     async (userId: string, brandId: string) => {
       setSaving(true);
-      const { error: err } = await supabase
-        .from('users_profile')
-        .update({ brand_id: brandId })
-        .eq('id', userId);
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) { setError('Not authenticated'); setSaving(false); return; }
 
-      if (err) {
-        setError(err.message);
-      } else {
-        setUsers((prev) =>
-          prev.map((u) => (u.id === userId ? { ...u, brand_id: brandId } : u))
-        );
-        toast('Member added to team');
+        const res = await fetch('/api/admin/update-user', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ action: 'update_brand', userId, brandId }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error || 'Failed to add member — RLS no longer silently no-ops');
+        } else {
+          setUsers((prev) =>
+            prev.map((u) => (u.id === userId ? { ...u, brand_id: brandId } : u))
+          );
+          toast('Member added to team');
+        }
+      } catch {
+        setError('Failed to add member');
       }
       setSaving(false);
     },
@@ -1665,18 +1852,29 @@ export default function TeamPage() {
   const handleRemoveMember = useCallback(
     async (userId: string) => {
       setSaving(true);
-      const { error: err } = await supabase
-        .from('users_profile')
-        .update({ brand_id: null })
-        .eq('id', userId);
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) { setError('Not authenticated'); setSaving(false); return; }
 
-      if (err) {
-        setError(err.message);
-      } else {
-        setUsers((prev) =>
-          prev.map((u) => (u.id === userId ? { ...u, brand_id: null } : u))
-        );
-        toast('Member removed from team');
+        const res = await fetch('/api/admin/update-user', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ action: 'update_brand', userId, brandId: null }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error || 'Failed to remove member — RLS no longer silently no-ops');
+        } else {
+          setUsers((prev) =>
+            prev.map((u) => (u.id === userId ? { ...u, brand_id: null } : u))
+          );
+          toast('Member removed from team');
+        }
+      } catch {
+        setError('Failed to remove member');
       }
       setSaving(false);
     },
@@ -1938,6 +2136,8 @@ export default function TeamPage() {
               onUpdateBrand={handleUpdateBrand}
               onArchiveBrand={handleArchiveBrand}
               saving={saving}
+              healthChips={healthByBrand[brand.id]}
+              healthLoading={healthLoading}
             />
           ))}
         </div>
@@ -1992,7 +2192,7 @@ export default function TeamPage() {
         brands={brands}
         onCreated={() => {
           fetchData();
-          toast('Member created');
+          toast('Invite sent');
         }}
       />
       <Toast message={toastMessage} visible={showToast} />

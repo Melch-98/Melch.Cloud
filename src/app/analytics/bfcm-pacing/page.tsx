@@ -126,7 +126,7 @@ const currencySymbols: Record<string, string> = {
   USD: '$', CAD: 'CA$', GBP: '£', EUR: '€', AUD: 'A$',
 };
 
-const BASE_CURRENCIES = ['USD', 'CAD', 'GBP', 'EUR', 'AUD'];
+const BASE_CURRENCIES = ['AUTO', 'USD', 'CAD', 'GBP', 'EUR', 'AUD'];
 
 function sym(currency: string): string {
   return currencySymbols[currency] || currency + ' ';
@@ -672,7 +672,8 @@ export default function BfcmPacingPage() {
 
   const [targetBudget, setTargetBudget] = useState<number | null>(null);
   const [targetRoas, setTargetRoas] = useState<number | null>(null);
-  const [baseCurrency, setBaseCurrency] = useState<string>('USD');
+  // AUTO → API resolves Shopify settlement currency (CAD for Tallow Twins, etc.)
+  const [baseCurrency, setBaseCurrency] = useState<string>('AUTO');
 
   useEffect(() => {
     const init = async () => {
@@ -734,6 +735,10 @@ export default function BfcmPacingPage() {
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || 'Failed to fetch data');
         setData(json);
+        // After AUTO resolve, pin selector to the brand reporting currency (once).
+        if (baseCurrency === 'AUTO' && json.baseCurrency) {
+          setBaseCurrency(json.baseCurrency);
+        }
       } catch (err: any) {
         setFetchError(err.message || 'Failed to load BFCM pacing data');
         setData(null);

@@ -152,7 +152,7 @@ export default function DashboardPage() {
 
       if (!cancelled && !error && data) {
         const mapped: NewBatch[] = (data as any[])
-          .filter((r) => !r.brands?.archived_at)
+          .filter((r) => r.brands && !r.brands.archived_at)
           .map((r) => ({
             id: r.id,
             batch_name: r.batch_name,

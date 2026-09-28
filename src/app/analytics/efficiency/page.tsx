@@ -15,6 +15,8 @@ import {
 } from 'lucide-react';
 import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
+import { makeFmt, type Fmt } from '@/lib/format';
+import { currencyFromShopInfo } from '@/lib/currency';
 import {
   DailyPoint,
   HillFit,
@@ -34,6 +36,7 @@ interface Brand {
   id: string;
   name: string;
   slug: string;
+  shopify_store_domain: string | null;
   gross_margin_pct: number;
   target_roas: number | null;
   nc_share_pct: number | null;
@@ -67,6 +70,16 @@ const fmt = (n: number, d = 0) => {
   return n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 };
 
+/** Reporting-currency money label (symbol from makeFmt). */
+function money(sym: string, n: number, d = 0) {
+  if (!isFinite(n)) return 'N/A';
+  return sym + fmt(n, d);
+}
+function moneyCompact(sym: string, n: number) {
+  if (!isFinite(n)) return 'N/A';
+  return n >= 1000 ? `${sym}${(n / 1000).toFixed(0)}k` : money(sym, n);
+}
+
 // ─── Component ──────────────────────────────────────────────────
 
 export default function EfficiencyPage() {
@@ -83,6 +96,9 @@ export default function EfficiencyPage() {
 
   // Tunable params — initialized from brand settings, reset on brand switch
   const [params, setParams] = useState<Params>(brandDefaults());
+  const [reportingCurrency, setReportingCurrency] = useState('USD');
+  const moneyFmt: Fmt = useMemo(() => makeFmt(reportingCurrency), [reportingCurrency]);
+  const sym = moneyFmt.symbol;
 
   const updateParam = (key: keyof Params, val: number | string) =>
     setParams(prev => ({ ...prev, [key]: val }));
@@ -101,7 +117,7 @@ export default function EfficiencyPage() {
 
       const { data: brandList } = await supabase
         .from('brands')
-        .select('id, name, slug, gross_margin_pct, target_roas, nc_share_pct, ltv_3m_mult, ltv_6m_mult, ltv_12m_mult')
+        .select('id, name, slug, shopify_store_domain, gross_margin_pct, target_roas, nc_share_pct, ltv_3m_mult, ltv_6m_mult, ltv_12m_mult')
         .is('archived_at', null);
 
       if (brandList) setBrands(brandList);
@@ -139,7 +155,7 @@ export default function EfficiencyPage() {
 
       let query = supabase
         .from('daily_pnl')
-        .select('date, nc_revenue, nc_orders, rc_revenue, gross_sales, meta_spend, google_spend, other_spend')
+        .select('date, nc_revenue, nc_orders, rc_revenue, gross_sales, meta_spend, google_spend, other_spend, currency')
         .eq('brand_id', selectedBrand)
         .order('date', { ascending: true });
 
@@ -147,8 +163,24 @@ export default function EfficiencyPage() {
 
       const { data } = await query;
 
+      // Resolve reporting currency: tagged daily_pnl → Shopify settlement → USD
+      {
+        const tagged = (data || []).find((r: { currency?: string | null }) => r.currency)?.currency as string | undefined;
+        let shopCurrency: string | null = null;
+        const brandRow = brands.find(b => b.id === selectedBrand);
+        if (brandRow?.shopify_store_domain) {
+          const { data: storeRow } = await supabase
+            .from('shopify_stores')
+            .select('shop_info')
+            .eq('shop_domain', brandRow.shopify_store_domain)
+            .maybeSingle();
+          shopCurrency = currencyFromShopInfo(storeRow?.shop_info);
+        }
+        setReportingCurrency((tagged || shopCurrency || 'USD').toUpperCase());
+      }
+
       if (data) {
-        const points: DailyPoint[] = data.map(row => {
+        const points: DailyPoint[] = data.map((row: any) => {
           const d = new Date(row.date);
           const metaSpend = Number(row.meta_spend || 0);
           const googleSpend = Number(row.google_spend || 0);
@@ -161,7 +193,7 @@ export default function EfficiencyPage() {
           const orders = Number(row.nc_orders || 0);
           const daysBack = Math.floor((now.getTime() - d.getTime()) / 86400000);
           return { date: row.date, spend, rev, ncRev, orders, daysBack };
-        }).filter(p => p.spend > 0 && p.rev > 0);
+        }).filter((p: DailyPoint) => p.spend > 0 && p.rev > 0);
 
         setDailyPoints(points);
 
@@ -306,9 +338,18 @@ export default function EfficiencyPage() {
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-2xl font-semibold text-white">Marginal Efficiency Curve</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-semibold text-white">Marginal Efficiency Curve</h1>
+              <span
+                className="text-[10px] font-semibold tracking-wide px-2 py-0.5 rounded border"
+                style={{ color: '#C8B89A', borderColor: 'rgba(200,184,154,0.35)', background: 'rgba(200,184,154,0.08)' }}
+                title="Shopify/store settlement (reporting) currency"
+              >
+                {reportingCurrency}
+              </span>
+            </div>
             <p className="text-sm text-neutral-500 mt-1">
-              Hill saturation model — find optimal daily ad spend for each business goal
+              Hill saturation model — find optimal daily ad spend · amounts in {reportingCurrency}
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -362,7 +403,7 @@ export default function EfficiencyPage() {
               <ParamInput label="LTV 6m ×" value={params.l6} onChange={v => updateParam('l6', v)} step={0.05} />
               <ParamInput label="LTV 12m ×" value={params.l12} onChange={v => updateParam('l12', v)} step={0.05} />
               <ParamInput label="Merchant Fee %" value={params.merchantFeePct} onChange={v => updateParam('merchantFeePct', v)} step={0.1} />
-              <ParamInput label="Fulfillment $/order" value={params.fulfillmentPerOrder} onChange={v => updateParam('fulfillmentPerOrder', v)} step={0.5} />
+              <ParamInput label={`Fulfillment ${sym}/order`} value={params.fulfillmentPerOrder} onChange={v => updateParam('fulfillmentPerOrder', v)} step={0.5} />
             </div>
           </div>
         )}
@@ -431,28 +472,28 @@ export default function EfficiencyPage() {
               <KpiCard
                 label="Optimal Daily Spend"
                 value={analysis.band.bandPct > 0
-                  ? `$${fmt(analysis.band.low)}–$${fmt(analysis.band.high)}`
-                  : '$' + fmt(analysis.optSpend)}
+                  ? `${money(sym, analysis.band.low)}–${money(sym, analysis.band.high)}`
+                  : money(sym, analysis.optSpend)}
                 sub={analysis.band.bandPct > 0
-                  ? `±${fmt(analysis.band.bandPct, 0)}% band · vs current $${fmt(params.curSpend)}`
-                  : `vs current $${fmt(params.curSpend)}`}
+                  ? `±${fmt(analysis.band.bandPct, 0)}% band · vs current ${money(sym, params.curSpend)}`
+                  : `vs current ${money(sym, params.curSpend)}`}
                 color="text-[#C8B89A]"
               />
               <KpiCard
                 label="Expected Revenue"
-                value={'$' + fmt(analysis.optRev)}
+                value={money(sym, analysis.optRev)}
                 sub={`ROAS ${fmt(analysis.optROAS, 2)}×`}
               />
               <KpiCard
                 label="Contribution Margin"
-                value={'$' + fmt(analysis.optCM)}
-                sub={`vs $${fmt(analysis.curCM)} today`}
+                value={money(sym, analysis.optCM)}
+                sub={`vs ${money(sym, analysis.curCM)} today`}
                 color="text-emerald-400"
               />
               <KpiCard
                 label="Current Marginal ROAS"
                 value={fmt(analysis.curMROAS, 2) + '×'}
-                sub="next $ return"
+                sub={`next ${sym} return`}
               />
               <KpiCard
                 label="Spend Change"
@@ -530,7 +571,7 @@ export default function EfficiencyPage() {
                   {chartSvg.revTicks.map((t, i) => (
                     <text key={`rl-${i}`} x={chartSvg.PAD.left - 8} y={t.y + 3}
                       textAnchor="end" fill="#888" fontSize={9}>
-                      ${t.val >= 1000 ? `${(t.val / 1000).toFixed(0)}k` : fmt(t.val)}
+                      {moneyCompact(sym, t.val)}
                     </text>
                   ))}
 
@@ -546,7 +587,7 @@ export default function EfficiencyPage() {
                   {chartSvg.xTicks.map((t, i) => (
                     <text key={`xl-${i}`} x={t.x} y={chartSvg.H - chartSvg.PAD.bottom + 16}
                       textAnchor="middle" fill="#888" fontSize={9}>
-                      ${t.val >= 1000 ? `${(t.val / 1000).toFixed(0)}k` : fmt(t.val)}
+                      {moneyCompact(sym, t.val)}
                     </text>
                   ))}
 
@@ -565,10 +606,10 @@ export default function EfficiencyPage() {
               </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs text-neutral-400">
                 <div title="Maximum possible daily revenue at infinite spend">
-                  V (ceiling) = <span className="text-white font-semibold">${fmt(analysis.fit.V)}</span>
+                  V (ceiling) = <span className="text-white font-semibold">{money(sym, analysis.fit.V)}</span>
                 </div>
                 <div title="The spend level where you achieve half of maximum revenue">
-                  K (half-sat) = <span className="text-white font-semibold">${fmt(analysis.fit.K)}</span>
+                  K (half-sat) = <span className="text-white font-semibold">{money(sym, analysis.fit.K)}</span>
                 </div>
                 <div title="Curve steepness — higher h means a sharper inflection point">
                   h (shape) = <span className="text-white font-semibold">{fmt(analysis.fit.h, 2)}</span>
@@ -604,21 +645,21 @@ export default function EfficiencyPage() {
                       key={i}
                       className={`border-b border-[#1a1a1a] last:border-b-0 ${row.isOpt ? 'bg-[#C8B89A]/[0.06]' : ''}`}
                     >
-                      <td className="px-3 py-2 text-right tabular-nums">${fmt(row.spend)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">${fmt(row.rev)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{money(sym, row.spend)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{money(sym, row.rev)}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{fmt(row.roas, 2)}×</td>
                       <td className={`px-3 py-2 text-right tabular-nums ${row.mr >= 1 ? 'text-emerald-400' : 'text-red-400'}`}>
                         {fmt(row.mr, 2)}×
                       </td>
                       <td className={`px-3 py-2 text-right tabular-nums ${row.cm >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                        ${fmt(row.cm)}
+                        {money(sym, row.cm)}
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums">{fmt(row.cmPct, 1)}%</td>
                       <td className={`px-3 py-2 text-right tabular-nums ${row.cm3m >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                        ${fmt(row.cm3m)}
+                        {money(sym, row.cm3m)}
                       </td>
                       <td className={`px-3 py-2 text-right tabular-nums ${row.cm12m >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                        ${fmt(row.cm12m)}
+                        {money(sym, row.cm12m)}
                       </td>
                       <td className="px-3 py-2 text-left text-xs">
                         {row.isOpt && row.isCur && <span className="text-[#C8B89A] font-medium">● Current & Optimal</span>}

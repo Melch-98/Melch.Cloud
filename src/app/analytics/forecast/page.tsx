@@ -18,6 +18,8 @@ import {
 } from 'lucide-react';
 import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
+import { makeFmt, type Fmt } from '@/lib/format';
+import { currencyFromShopInfo } from '@/lib/currency';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, ComposedChart, Area,
@@ -41,6 +43,7 @@ interface Brand {
   id: string;
   name: string;
   slug: string;
+  shopify_store_domain: string | null;
   gross_margin_pct: number;
   target_roas: number | null;
   nc_share_pct: number | null;
@@ -165,10 +168,19 @@ const SCENARIO_COLORS: Record<Scenario, string> = {
 
 // ─── Helpers ────────────────────────────────────────────────────
 
+// Reporting-currency aware compact money (updated when brand loads).
+let forecastFmt: Fmt = makeFmt('USD');
+let forecastReportingCurrency = 'USD';
+function setForecastReportingCurrency(code: string) {
+  forecastReportingCurrency = (code || 'USD').toUpperCase();
+  forecastFmt = makeFmt(forecastReportingCurrency);
+}
+
 function fmt(n: number): string {
-  if (Math.abs(n) >= 1_000_000) return '$' + (n / 1_000_000).toFixed(2) + 'M';
-  if (Math.abs(n) >= 1_000) return '$' + (n / 1_000).toFixed(1) + 'K';
-  return '$' + n.toFixed(0);
+  const sym = forecastFmt.symbol;
+  if (Math.abs(n) >= 1_000_000) return sym + (n / 1_000_000).toFixed(2) + 'M';
+  if (Math.abs(n) >= 1_000) return sym + (n / 1_000).toFixed(1) + 'K';
+  return sym + n.toFixed(0);
 }
 
 function fmtPct(n: number): string {
@@ -207,6 +219,7 @@ export default function ForecastPage() {
   const [expandedMonth, setExpandedMonth] = useState<string | null>(null);
   const [showCharts, setShowCharts] = useState(true);
   const [selectedModel, setSelectedModel] = useState('maxCM');
+  const [reportingCurrency, setReportingCurrency] = useState('USD');
 
   // Forecast year — start from current year
   const now = new Date();
@@ -241,7 +254,7 @@ export default function ForecastPage() {
 
       const { data: brandList } = await supabase
         .from('brands')
-        .select('id, name, slug, gross_margin_pct, target_roas, nc_share_pct, ltv_3m_mult, ltv_6m_mult, ltv_12m_mult')
+        .select('id, name, slug, shopify_store_domain, gross_margin_pct, target_roas, nc_share_pct, ltv_3m_mult, ltv_6m_mult, ltv_12m_mult')
         .is('archived_at', null);
 
       if (brandList) setBrands(brandList);
@@ -265,12 +278,29 @@ export default function ForecastPage() {
       // Fetch all daily_pnl for the brand
       const { data: pnl } = await supabase
         .from('daily_pnl')
-        .select('date, gross_sales, nc_revenue, rc_revenue, meta_spend, google_spend, other_spend, nc_orders, rc_orders, discounts, refunds')
+        .select('date, gross_sales, nc_revenue, rc_revenue, meta_spend, google_spend, other_spend, nc_orders, rc_orders, discounts, refunds, currency')
         .eq('brand_id', selectedBrand)
         .order('date', { ascending: true });
 
+      {
+        const tagged = (pnl || []).find((r: { currency?: string | null }) => r.currency)?.currency as string | undefined;
+        let shopCurrency: string | null = null;
+        const brandRow = brands.find(b => b.id === selectedBrand);
+        if (brandRow?.shopify_store_domain) {
+          const { data: storeRow } = await supabase
+            .from('shopify_stores')
+            .select('shop_info')
+            .eq('shop_domain', brandRow.shopify_store_domain)
+            .maybeSingle();
+          shopCurrency = currencyFromShopInfo(storeRow?.shop_info);
+        }
+        const code = (tagged || shopCurrency || 'USD').toUpperCase();
+        setForecastReportingCurrency(code);
+        setReportingCurrency(code);
+      }
+
       if (pnl) {
-        setDailyData(pnl.map(r => ({
+        setDailyData(pnl.map((r: any) => ({
           date: r.date,
           gross_sales: Number(r.gross_sales || 0),
           nc_revenue: Number(r.nc_revenue || 0),
@@ -287,7 +317,7 @@ export default function ForecastPage() {
         // Compute DOW weights from historical data
         const dowTotals = [0,0,0,0,0,0,0];
         const dowCounts = [0,0,0,0,0,0,0];
-        pnl.forEach(r => {
+        pnl.forEach((r: any) => {
           const d = new Date(r.date + 'T00:00:00');
           const dow = d.getDay();
           dowTotals[dow] += Number(r.gross_sales || 0);
@@ -749,11 +779,24 @@ export default function ForecastPage() {
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
           <div>
-            <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: '#fff' }}>
-              12-Month Marketing Forecast
-            </h1>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: '#fff' }}>
+                12-Month Marketing Forecast
+              </h1>
+              <span
+                title="Shopify/store settlement (reporting) currency"
+                style={{
+                  fontSize: 10, fontWeight: 600, letterSpacing: '0.04em',
+                  padding: '2px 8px', borderRadius: 6,
+                  color: '#C8B89A', border: '1px solid rgba(200,184,154,0.35)',
+                  background: 'rgba(200,184,154,0.08)',
+                }}
+              >
+                {reportingCurrency}
+              </span>
+            </div>
             <p style={{ fontSize: 13, color: muted, margin: '4px 0 0' }}>
-              Plan spend, aMER targets, and contribution margin across 3 scenarios
+              Plan spend, aMER targets, and contribution margin · amounts in {reportingCurrency}
             </p>
           </div>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>

@@ -110,6 +110,27 @@ export async function gaqlQuery(token: string, customerId: string, query: string
   return [];
 }
 
+
+// Account currency for FX into brand reporting currency (Shopify settlement).
+export async function fetchGoogleAdsCurrency(
+  token: string,
+  customerId: string | null | undefined
+): Promise<string | null> {
+  if (!customerId || !customerId.trim() || !token) return null;
+  try {
+    const rows = await gaqlQuery(
+      token,
+      customerId,
+      'SELECT customer.currency_code, customer.id FROM customer LIMIT 1'
+    );
+    const code = rows?.[0]?.customer?.currencyCode;
+    if (typeof code !== 'string' || !code.trim()) return null;
+    return code.trim().toUpperCase();
+  } catch {
+    return null;
+  }
+}
+
 // Resolve the Pipeboard token from env, falling back to app_settings (same
 // pattern as the old Windsor/meta token lookups).
 export async function resolvePipeboardToken(

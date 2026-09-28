@@ -13,6 +13,8 @@ import {
 } from 'lucide-react';
 import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
+import { makeFmt, type Fmt } from '@/lib/format';
+import { currencyFromShopInfo } from '@/lib/currency';
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -20,6 +22,7 @@ interface Brand {
   id: string;
   name: string;
   slug: string;
+  shopify_store_domain: string | null;
   gross_margin_pct: number;
 }
 
@@ -66,7 +69,6 @@ const fmt = (n: number, d = 0) => {
   if (!isFinite(n)) return 'N/A';
   return n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 };
-const fmtCur = (n: number | null) => (n == null ? '—' : '$' + fmt(n, 2));
 const fmtPct = (n: number) => fmt(n * 100, 1) + '%';
 
 function ltvCacClass(ratio: number) {
@@ -256,6 +258,9 @@ export default function LTVCohortPage() {
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [dailyPnl, setDailyPnl] = useState<DailyPnlRow[]>([]);
   const [showGP, setShowGP] = useState(false);
+  const [reportingCurrency, setReportingCurrency] = useState('USD');
+  const moneyFmt: Fmt = useMemo(() => makeFmt(reportingCurrency), [reportingCurrency]);
+  const fmtCur = (n: number | null) => (n == null ? '—' : moneyFmt.symbol + fmt(n, 2));
 
   // Debounce NC share slider
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
@@ -279,7 +284,7 @@ export default function LTVCohortPage() {
 
       const { data: brandList } = await supabase
         .from('brands')
-        .select('id, name, slug, gross_margin_pct')
+        .select('id, name, slug, shopify_store_domain, gross_margin_pct')
         .is('archived_at', null);
 
       if (brandList) setBrands(brandList);
@@ -327,9 +332,24 @@ export default function LTVCohortPage() {
 
       const { data: pnlData } = await supabase
         .from('daily_pnl')
-        .select('date, nc_orders, rc_orders, nc_revenue, meta_spend, google_spend, other_spend')
+        .select('date, nc_orders, rc_orders, nc_revenue, meta_spend, google_spend, other_spend, currency')
         .eq('brand_id', selectedBrand)
         .order('date', { ascending: true });
+
+      {
+        const tagged = (pnlData || []).find((r: { currency?: string | null }) => r.currency)?.currency as string | undefined;
+        let shopCurrency: string | null = null;
+        const brandRow = brands.find(b => b.id === selectedBrand);
+        if (brandRow?.shopify_store_domain) {
+          const { data: storeRow } = await supabase
+            .from('shopify_stores')
+            .select('shop_info')
+            .eq('shop_domain', brandRow.shopify_store_domain)
+            .maybeSingle();
+          shopCurrency = currencyFromShopInfo(storeRow?.shop_info);
+        }
+        setReportingCurrency((tagged || shopCurrency || 'USD').toUpperCase());
+      }
 
       setOrders(allOrders);
       if (pnlData) setDailyPnl(pnlData);
@@ -399,9 +419,18 @@ export default function LTVCohortPage() {
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-2xl font-semibold text-white">LTV Cohort Report</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-semibold text-white">LTV Cohort Report</h1>
+              <span
+                className="text-[10px] font-semibold tracking-wide px-2 py-0.5 rounded border"
+                style={{ color: '#C8B89A', borderColor: 'rgba(200,184,154,0.35)', background: 'rgba(200,184,154,0.08)' }}
+                title="Shopify/store settlement (reporting) currency"
+              >
+                {reportingCurrency}
+              </span>
+            </div>
             <p className="text-sm text-neutral-500 mt-1">
-              Customer lifetime value by acquisition cohort — cumulative {showGP ? 'gross profit' : 'revenue'} per customer over time
+              Customer lifetime value by acquisition cohort — cumulative {showGP ? 'gross profit' : 'revenue'} per customer · amounts in {reportingCurrency}
             </p>
           </div>
           <div className="flex items-center gap-3">
