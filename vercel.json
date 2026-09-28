@@ -6,7 +6,7 @@
     },
     {
       "path": "/api/cron/shopify-orders",
-      "schedule": "20 8 * * *"
+      "schedule": "20 */2 * * *"
     }
   ]
 }

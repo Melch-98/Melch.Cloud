@@ -1,21 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-server';
+import { ensureCustomAppOrderWebhooks } from '@/lib/shopify/ensure-order-webhooks';
 import { syncConnectedBrandOrders } from '@/lib/shopify/order-sync';
+import { refreshDailyPnl } from '@/lib/shopify/refresh-daily-pnl';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
 /**
- * Daily safety net for shopify_orders.
+ * Scheduled Shopify ingestion.
  *
- * Webhooks are the fast path for brands with a Shopify Admin token.
- * This job covers every active brand with a shop domain: Admin API when the
- * brand has custom-app credentials or a live install token, Triple Whale when
- * the domain is the only Shopify identifier (Organic Jaguar). It pulls since
- * the newest stored order and at least the last 48 hours.
+ * Every 2 hours (Vercel already runs the Dropbox cron every 5 minutes, so
+ * sub-daily crons are allowed on this project):
+ * 1. Idempotently register order webhooks for custom-app brands.
+ * 2. Refresh daily_pnl for the last 3 UTC days plus today, through the same
+ *    functions as /api/shopify-sync and /api/triplewhale-sync.
+ * 3. Pull shopify_orders since the newest stored row (48 hour floor).
  *
- * GET is the Vercel cron (Authorization: Bearer CRON_SECRET).
- * POST accepts the same cron secret or an admin session.
+ * A missing webhook scope or one brand's sync error is logged and does not
+ * fail the rest of the run. GET is the Vercel cron (Bearer CRON_SECRET).
+ * POST accepts the same secret or an admin session.
  */
 
 async function runSync() {
@@ -28,11 +32,16 @@ async function runSync() {
   }
 
   try {
-    const brands = await syncConnectedBrandOrders(supabase);
-    const failed = brands.filter((brand) => brand.error).length;
+    const webhooks = await ensureCustomAppOrderWebhooks(supabase);
+    const pnl = await refreshDailyPnl(supabase);
+    const orders = await syncConnectedBrandOrders(supabase);
+    const orderFailures = orders.filter((brand) => brand.error).length;
+    const pnlFailures = pnl.brands.filter((brand) => !brand.ok && !brand.skipped).length;
     return NextResponse.json({
-      ok: failed === 0,
-      brands,
+      ok: orderFailures === 0 && pnlFailures === 0,
+      webhooks,
+      pnl,
+      orders,
       synced_at: new Date().toISOString(),
     });
   } catch (err) {
