@@ -1,9 +1,12 @@
 import { classifyShopifyConnection } from './brand-connection';
+import { clearCatchUpCursor, loadCatchUpCursors, saveCatchUpCursor } from './catchup-cursor';
 import { exchangeClientCredentials } from './client-credentials';
 import { isValidShopDomain, normalizeShopDomain } from './config';
 import { shopifyOrderToRow } from './order-row';
-import { safetyNetSince } from './order-window';
+import { orderCatchUpPlan, type OrderCatchUpPlan } from './order-window';
 import { fetchTripleWhaleOrders, tripleWhaleOrderRows } from './triple-whale-orders';
+
+const ORDER_CURSOR_PREFIX = 'shopify_order_catchup:';
 
 /** Same Admin API version shopify-sync and Geo catch-up already call. */
 const ORDERS_API_VERSION = '2024-01';
@@ -22,6 +25,7 @@ export type BrandSyncResult = {
   truncated: boolean;
   warning: string | null;
   error: string | null;
+  deferred: boolean;
   source: 'shopify_admin' | 'triple_whale' | null;
 };
 
@@ -63,15 +67,55 @@ async function newestCreatedAt(
   return (data?.shopify_created_at as string | undefined) ?? null;
 }
 
+function latestCreatedAt(orders: Record<string, unknown>[]): string | null {
+  let max = -Infinity;
+  let iso: string | null = null;
+  for (const order of orders) {
+    if (typeof order.created_at !== 'string') continue;
+    const ms = Date.parse(order.created_at);
+    if (Number.isFinite(ms) && ms > max) {
+      max = ms;
+      iso = new Date(ms).toISOString();
+    }
+  }
+  return iso;
+}
+
+async function rememberOrderCursor(
+  supabase: SupabaseLike,
+  brandId: string,
+  plan: OrderCatchUpPlan,
+  orders: Record<string, unknown>[],
+  truncated: boolean
+): Promise<void> {
+  if (!plan.chunked) {
+    await clearCatchUpCursor(supabase, ORDER_CURSOR_PREFIX, brandId);
+    return;
+  }
+  if (truncated) {
+    const advanced = latestCreatedAt(orders);
+    if (advanced) await saveCatchUpCursor(supabase, ORDER_CURSOR_PREFIX, brandId, advanced);
+    return;
+  }
+  if (plan.until) await saveCatchUpCursor(supabase, ORDER_CURSOR_PREFIX, brandId, plan.until);
+}
+
 async function fetchOrdersUpdatedSince(
   domain: string,
   token: string,
-  updatedMin: string
+  plan: OrderCatchUpPlan
 ): Promise<{ orders: Record<string, unknown>[]; truncated: boolean }> {
   const orders: Record<string, unknown>[] = [];
+  const params = new URLSearchParams({ status: 'any', limit: '250' });
+  if (plan.until) {
+    params.set('created_at_min', plan.since);
+    params.set('created_at_max', plan.until);
+    params.set('order', 'created_at asc');
+  } else {
+    params.set('updated_at_min', plan.since);
+  }
   const firstUrl =
-    `https://${domain}/admin/api/${ORDERS_API_VERSION}/orders.json` +
-    `?status=any&limit=250&updated_at_min=${encodeURIComponent(updatedMin)}`;
+    `https://${domain}/admin/api/${ORDERS_API_VERSION}/orders.json?${params.toString()}`;
   let nextUrl: string | null = firstUrl;
 
   for (let page = 0; page < PAGE_CAP && nextUrl; page++) {
@@ -126,7 +170,8 @@ async function upsertOrders(
 async function syncBrand(
   supabase: SupabaseLike,
   brand: BrandRow,
-  store: StoreRow | undefined
+  store: StoreRow | undefined,
+  resumeIso: string | null
 ): Promise<BrandSyncResult> {
   const base: BrandSyncResult = {
     brand_id: brand.id,
@@ -138,6 +183,7 @@ async function syncBrand(
     truncated: false,
     warning: null,
     error: null,
+    deferred: false,
     source: null,
   };
 
@@ -157,14 +203,19 @@ async function syncBrand(
 
   const pull = async (token: string) => {
     const newest = await newestCreatedAt(supabase, domain);
-    const since = safetyNetSince(newest, Date.now());
-    base.since = since;
-    const { orders, truncated } = await fetchOrdersUpdatedSince(domain, token, since);
+    const plan = orderCatchUpPlan(newest, Date.now(), resumeIso);
+    base.since = plan.since;
+    const { orders, truncated } = await fetchOrdersUpdatedSince(domain, token, plan);
     base.fetched = orders.length;
     base.truncated = truncated;
     base.upserted = await upsertOrders(supabase, domain, brand.id, orders);
+    await rememberOrderCursor(supabase, brand.id, plan, orders, truncated);
     if (truncated) {
-      base.warning = `Stopped after ${PAGE_CAP} pages (${orders.length} orders). Newer orders in the window were stored; a full shopify-sync is required for anything older that did not fit.`;
+      base.warning = plan.chunked
+        ? `Stopped after ${PAGE_CAP} pages (${orders.length} orders). Oldest orders in this chunk were stored; the next run continues.`
+        : `Stopped after ${PAGE_CAP} pages (${orders.length} orders). Newer orders in the window were stored; a full shopify-sync is required for anything older that did not fit.`;
+    } else if (plan.chunked) {
+      base.warning = `Caught up through ${plan.until}. The next run continues.`;
     }
   };
 
@@ -203,7 +254,8 @@ async function syncBrand(
 async function syncTripleWhaleBrand(
   supabase: SupabaseLike,
   brand: BrandRow,
-  domain: string
+  domain: string,
+  resumeIso: string | null
 ): Promise<BrandSyncResult> {
   const base: BrandSyncResult = {
     brand_id: brand.id,
@@ -215,6 +267,7 @@ async function syncTripleWhaleBrand(
     truncated: false,
     warning: null,
     error: null,
+    deferred: false,
     source: 'triple_whale',
   };
 
@@ -226,10 +279,10 @@ async function syncTripleWhaleBrand(
 
   try {
     const newest = await newestCreatedAt(supabase, domain);
-    const since = safetyNetSince(newest, Date.now());
-    base.since = since;
-    const startDate = since.slice(0, 10);
-    const endDate = new Date().toISOString().slice(0, 10);
+    const plan = orderCatchUpPlan(newest, Date.now(), resumeIso);
+    base.since = plan.since;
+    const startDate = plan.since.slice(0, 10);
+    const endDate = (plan.until ?? new Date().toISOString()).slice(0, 10);
     const orders = await fetchTripleWhaleOrders(apiKey, domain, startDate, endDate);
     const rows = tripleWhaleOrderRows(domain, brand.id, orders);
     base.fetched = rows.length;
@@ -241,6 +294,11 @@ async function syncTripleWhaleBrand(
       if (error) throw new Error(error.message);
       base.upserted += chunk.length;
     }
+    const stored = orders.map((order) => ({
+      created_at: order.processed_at || (order.event_date ? `${order.event_date}T00:00:00.000Z` : null),
+    }));
+    await rememberOrderCursor(supabase, brand.id, plan, stored, false);
+    if (plan.chunked) base.warning = `Caught up through ${plan.until}. The next run continues.`;
     return base;
   } catch (err) {
     base.error = err instanceof Error ? err.message : 'Triple Whale order sync failed';
@@ -254,7 +312,10 @@ async function syncTripleWhaleBrand(
  * A shop domain with neither (Organic Jaguar) uses Triple Whale, which is
  * the only credential that has ever written that brand's orders.
  */
-export async function syncConnectedBrandOrders(supabase: SupabaseLike): Promise<BrandSyncResult[]> {
+export async function syncConnectedBrandOrders(
+  supabase: SupabaseLike,
+  deadlineMs?: number
+): Promise<BrandSyncResult[]> {
   const { data: brands, error: brandError } = await supabase
     .from('brands')
     .select('id, name, shopify_store_domain, shopify_client_id, shopify_client_secret')
@@ -276,6 +337,7 @@ export async function syncConnectedBrandOrders(supabase: SupabaseLike): Promise<
     }
   }
 
+  const cursors = await loadCatchUpCursors(supabase, ORDER_CURSOR_PREFIX);
   const results: BrandSyncResult[] = [];
   for (const brand of (brands || []) as BrandRow[]) {
     const domain = normalizeShopDomain(brand.shopify_store_domain);
@@ -294,10 +356,27 @@ export async function syncConnectedBrandOrders(supabase: SupabaseLike): Promise<
       ),
       hasLiveAdminToken: !!liveToken,
     });
+    if (connection === 'none' || (connection === 'triple_whale' && !domain)) continue;
+    if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
+      results.push({
+        brand_id: brand.id,
+        name: brand.name,
+        shop_domain: domain,
+        since: null,
+        fetched: 0,
+        upserted: 0,
+        truncated: false,
+        warning: 'Deferred so this run stays inside the 300s limit. The next run continues.',
+        error: null,
+        deferred: true,
+        source: connection === 'triple_whale' ? 'triple_whale' : 'shopify_admin',
+      });
+      continue;
+    }
     if (connection === 'shopify_admin') {
-      results.push(await syncBrand(supabase, brand, store));
+      results.push(await syncBrand(supabase, brand, store, cursors.get(brand.id) ?? null));
     } else if (connection === 'triple_whale' && domain) {
-      results.push(await syncTripleWhaleBrand(supabase, brand, domain));
+      results.push(await syncTripleWhaleBrand(supabase, brand, domain, cursors.get(brand.id) ?? null));
     }
     if (connection !== 'none') {
       await new Promise((resolve) => setTimeout(resolve, 150));

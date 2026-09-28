@@ -108,8 +108,8 @@ Webhook HMAC accepts `SHOPIFY_API_SECRET` or the brand's `shopify_client_secret`
 `GET /api/cron/shopify-orders` runs every 2 hours at minute 20 (`20 */2 * * *`). Each run, for every active non-archived brand:
 
 1. Ensures `orders/create`, `orders/updated`, and `orders/cancelled` for brands with custom-app credentials. `already_registered` is success. A missing scope is logged and stored on the Team Webhooks chip; it does not fail the run. Organic Jaguar is not included — Triple Whale cannot sign Shopify webhooks. `POST /api/admin/shopify-webhooks` remains for a manual retry.
-2. Refreshes `daily_pnl` for the last 3 UTC days plus today by calling `runShopifyBrandSync` (same function as `POST /api/shopify-sync`) or `runTripleWhaleBrandSync` (same function as `POST /api/triplewhale-sync`). Reporting currency is unchanged. A domain with no Admin token uses Triple Whale. A brand with no shop domain is skipped.
-3. Pulls `shopify_orders` since the newest stored row, at least the last 48 hours. Admin API for credentialed brands, Triple Whale for domain-only brands.
+2. Refreshes `daily_pnl` by calling `runShopifyBrandSync` (same function as `POST /api/shopify-sync`) or `runTripleWhaleBrandSync` (same function as `POST /api/triplewhale-sync`). The window starts at the earlier of (today minus 3) and (that brand's newest `daily_pnl` date minus 1), and is capped at 45 days. A gap longer than 10 days syncs the oldest 10 only; the next run continues at that chunk's end. Reporting currency is unchanged. A domain with no Admin token uses Triple Whale. A brand with no shop domain is skipped. Brands not started before the time budget are deferred, not failed.
+3. Pulls `shopify_orders` since the newest stored row, at least the last 48 hours, and never further back than 45 days. A gap longer than 10 days pulls the oldest 10 (`created_at` ascending) and the next run continues. Admin API for credentialed brands, Triple Whale for domain-only brands.
 
 `refunds/create` is not registered. That handler only logs. `orders/updated` upserts the order, including refunds on `raw`.
 
