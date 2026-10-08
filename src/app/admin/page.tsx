@@ -53,6 +53,7 @@ interface BatchSubmission {
 interface BatchFile {
   id: string;
   file_name: string;
+  original_file_name?: string | null;
   file_url: string;
   media_format: string | null;
   aspect_ratio: string | null;
@@ -228,9 +229,15 @@ function BatchCard({
                   btn.textContent = 'Syncing…';
                   btn.disabled = true;
                   try {
+                    const { data: { session } } = await createClient().auth.getSession();
                     const res = await fetch('/api/submissions/sync-drive', {
                       method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
+                      headers: {
+                        'Content-Type': 'application/json',
+                        ...(session?.access_token
+                          ? { Authorization: `Bearer ${session.access_token}` }
+                          : {}),
+                      },
                       body: JSON.stringify({ submission_id: batch.id }),
                     });
                     if (res.ok) {
@@ -465,7 +472,19 @@ function BatchCard({
                     </div>
                     {/* Info */}
                     <div className="p-1.5">
-                      <p className="text-[10px] text-gray-300 truncate">{file.file_name}</p>
+                      <p
+                        className="text-[10px] text-gray-300 truncate"
+                        title={
+                          file.original_file_name && file.original_file_name !== file.file_name
+                            ? `Uploaded as ${file.original_file_name}`
+                            : file.file_name
+                        }
+                      >
+                        {file.file_name}
+                      </p>
+                      {file.original_file_name && file.original_file_name !== file.file_name && (
+                        <p className="text-[9px] text-gray-600 truncate">was {file.original_file_name}</p>
+                      )}
                       <div className="flex gap-1 mt-0.5">
                         {file.media_format && (
                           <span className="text-[9px] text-gray-500 uppercase">{file.media_format}</span>
@@ -691,6 +710,7 @@ export default function AdminPage() {
           submission_files (
             id,
             file_name,
+            original_file_name,
             file_url,
             media_format,
             aspect_ratio,

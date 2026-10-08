@@ -8,6 +8,7 @@ export interface FileMediaInfo {
   aspectRatio: '1x1' | '9x16' | '4x5' | '16x9' | 'OTHER';
   width: number;
   height: number;
+  durationSeconds?: number;
 }
 
 interface FileUploaderProps {
@@ -65,8 +66,15 @@ async function analyzeFile(file: File): Promise<FileMediaInfo> {
       video.preload = 'metadata';
       video.onloadedmetadata = () => {
         const ratio = detectAspectRatio(video.videoWidth, video.videoHeight);
+        const durationSeconds = Number.isFinite(video.duration) ? video.duration : undefined;
         URL.revokeObjectURL(video.src);
-        resolve({ format, aspectRatio: ratio, width: video.videoWidth, height: video.videoHeight });
+        resolve({
+          format,
+          aspectRatio: ratio,
+          width: video.videoWidth,
+          height: video.videoHeight,
+          durationSeconds,
+        });
       };
       video.onerror = () => {
         URL.revokeObjectURL(video.src);

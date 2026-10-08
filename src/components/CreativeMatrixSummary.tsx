@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { ChevronDown, ChevronUp, Grid3X3 } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
-import { CREATIVE_TYPES_MAP } from '@/lib/creative-types';
+import { matrixSummaryColumnKey } from '@/lib/creative-matrix';
 
 interface MatrixRow {
   product_name: string;
@@ -21,12 +21,6 @@ const COLUMNS: { key: string; label: string }[] = [
   { key: 'other_static', label: 'Other Static' },
   { key: 'other_video', label: 'Other Video' },
 ];
-
-function columnKeyForType(creativeType: string): string | null {
-  const opt = CREATIVE_TYPES_MAP.get(creativeType);
-  if (!opt) return null;
-  return `${opt.fidelity}_${opt.format}`;
-}
 
 function cellColor(count: number): { bg: string; fg: string } {
   if (count === 0) return { bg: 'rgba(239,68,68,0.08)', fg: '#7f4444' };
@@ -85,7 +79,7 @@ const CreativeMatrixSummary: React.FC<CreativeMatrixSummaryProps> = ({
     const cells = new Map<string, number>(); // `${product}|${colKey}` -> count
 
     for (const row of rows) {
-      const colKey = columnKeyForType(row.creative_type);
+      const colKey = matrixSummaryColumnKey(row.creative_type);
       if (!colKey) continue;
       productTotals.set(
         row.product_name,
@@ -104,7 +98,7 @@ const CreativeMatrixSummary: React.FC<CreativeMatrixSummaryProps> = ({
     const pending = new Map<string, number>();
     for (const tag of pendingTags) {
       if (!tag.creativeType) continue;
-      const colKey = columnKeyForType(tag.creativeType);
+      const colKey = matrixSummaryColumnKey(tag.creativeType);
       if (!colKey) continue;
       const product = tag.productName || 'Unassigned';
       const key = `${product}|${colKey}`;

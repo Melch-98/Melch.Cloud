@@ -11,6 +11,8 @@ interface CreativeTypeSelectorProps {
   isMixed?: boolean;
   /** Media format of the file(s) being tagged — used to dim mismatched groups */
   fileFormat?: 'static' | 'video' | null;
+  /** The current value was filled by auto-tag and has not been edited. */
+  auto?: boolean;
   onChange: (value: string) => void;
 }
 
@@ -36,6 +38,7 @@ const CreativeTypeSelector: React.FC<CreativeTypeSelectorProps> = ({
   value,
   isMixed = false,
   fileFormat = null,
+  auto = false,
   onChange,
 }) => {
   // Which group is expanded. Defaults to the group of the current value.
@@ -63,6 +66,14 @@ const CreativeTypeSelector: React.FC<CreativeTypeSelectorProps> = ({
     <div>
       <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-2">
         Creative Type
+        {auto && !isMixed && (
+          <span
+            className="text-[9px] font-bold px-1.5 py-0.5 rounded normal-case tracking-normal"
+            style={{ backgroundColor: 'rgba(200,184,154,0.16)', color: '#C8B89A' }}
+          >
+            Auto
+          </span>
+        )}
         {isMixed && (
           <span
             className="text-[9px] font-bold px-1.5 py-0.5 rounded normal-case tracking-normal"

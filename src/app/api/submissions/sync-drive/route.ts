@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient, getSignedStorageUrl } from '@/lib/supabase-server';
+import { authenticateRequest } from '@/lib/auth';
 import {
   ensureDropboxFolder,
   saveUrlToDropbox,
@@ -8,6 +9,8 @@ import {
   sanitizeDropboxPathSegment,
   DropboxNotConnectedError,
 } from '@/lib/dropbox';
+import { fileAwaitingDropboxCopy, tagPendingSubmissionFiles, TAG_SYNC_MAX_BUDGET_MS } from '@/lib/creative-tag-sync';
+import { notifySubmissionNamed } from '@/lib/creative-upload-notify';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -26,7 +29,7 @@ export const maxDuration = 300;
  * the destination is now Dropbox (not Google Drive).
  */
 export async function POST(req: NextRequest) {
-  let body: { submission_id?: string };
+  let body: { submission_id?: string; notify?: boolean };
   try {
     body = await req.json();
   } catch {
@@ -38,12 +41,49 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'submission_id required' }, { status: 400 });
   }
 
+  const cronSecret = process.env.CRON_SECRET;
+  const authHeader = req.headers.get('authorization');
+  const cronOk = Boolean(cronSecret) && authHeader === `Bearer ${cronSecret}`;
+  const authResult = cronOk ? null : await authenticateRequest(req);
+  if (!cronOk && !authResult?.auth) {
+    return NextResponse.json(
+      { error: authResult?.error || 'Unauthorized' },
+      { status: authResult?.status || 401 }
+    );
+  }
+
   const supabase = createServiceClient();
   if (!supabase) {
     return NextResponse.json(
       { error: 'Server config error: missing Supabase credentials' },
       { status: 500 }
     );
+  }
+
+  const { data: owner, error: ownerError } = await supabase
+    .from('submissions')
+    .select('id, brand_id')
+    .eq('id', submissionId)
+    .single();
+  if (ownerError || !owner) {
+    return NextResponse.json({ error: 'Submission not found' }, { status: 404 });
+  }
+
+  const auth = authResult?.auth;
+  if (!cronOk && auth && auth.role !== 'admin' && (!auth.brand_id || auth.brand_id !== owner.brand_id)) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+
+  try {
+    await tagPendingSubmissionFiles(supabase, submissionId, { budgetMs: TAG_SYNC_MAX_BUDGET_MS });
+  } catch (err) {
+    console.warn('Auto-tag before Dropbox sync failed:', err instanceof Error ? err.message : err);
+  }
+
+  if (body.notify) {
+    void notifySubmissionNamed(supabase, submissionId).catch((err) => {
+      console.warn('Upload notice failed:', err instanceof Error ? err.message : err);
+    });
   }
 
   // Load submission + brand + files (include dropbox_path for resume check)
@@ -75,7 +115,8 @@ export async function POST(req: NextRequest) {
   const batchPath = `${brandPath}/${batchSegment}`;
 
   const allFiles: any[] = sub.submission_files || [];
-  const pendingFiles = allFiles.filter((f: any) => !f.dropbox_path);
+  // tagging and failed rows still copy, under their current file_name.
+  const pendingFiles = allFiles.filter((f: any) => fileAwaitingDropboxCopy(f));
 
   // If all files already synced (e.g. previous partial run finished them all),
   // just finalize the submission row.

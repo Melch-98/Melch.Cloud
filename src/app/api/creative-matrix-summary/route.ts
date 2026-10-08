@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { authenticateRequest } from '@/lib/auth';
+import { aggregateSummaryRows } from '@/lib/creative-matrix';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,20 +43,13 @@ export async function GET(request: NextRequest) {
 
   if (dbErr) return NextResponse.json({ error: dbErr.message }, { status: 500 });
 
-  // Aggregate: { [product_name]: { [creative_type]: count } } plus fidelity map
-  const counts: Record<string, number> = {};
-  for (const row of data || []) {
-    const product = (row as any).product_name || 'Unassigned';
-    const type = (row as any).creative_type as string;
-    const fidelity = ((row as any).fidelity as string) || 'other';
-    const key = `${product}|||${type}|||${fidelity}`;
-    counts[key] = (counts[key] || 0) + 1;
-  }
-
-  const rows = Object.entries(counts).map(([key, count]) => {
-    const [product_name, creative_type, fidelity] = key.split('|||');
-    return { product_name, creative_type, fidelity, count };
-  });
+  const rows = aggregateSummaryRows(
+    (data || []).map((row) => ({
+      product_name: (row as { product_name: string | null }).product_name,
+      creative_type: (row as { creative_type: string | null }).creative_type,
+      fidelity: (row as { fidelity: string | null }).fidelity,
+    }))
+  );
 
   return NextResponse.json({ rows });
 }

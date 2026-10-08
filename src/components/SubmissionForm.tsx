@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   AlertCircle,
   CheckCircle,
@@ -24,7 +24,16 @@ import AssetDetailPanel from './AssetDetailPanel';
 import CreativeMatrixSummary from './CreativeMatrixSummary';
 import { createClient } from '@/lib/supabase';
 import { FileContext } from '@/lib/types';
-import { CREATIVE_TYPES_MAP } from '@/lib/creative-types';
+import { mergeAutoTagIntoContext, applyUserContextPatch } from '@/lib/creative-tag-merge';
+import { captureCreativeStills } from '@/lib/creative-stills';
+import { storefrontOrigin } from '@/lib/creative-auto-tag';
+import {
+  buildSubmissionFileRow,
+  isMissingColumnError,
+  legacySubmissionFileRow,
+  planCreativeFileNames,
+} from '@/lib/creative-upload-plan';
+import type { AcceptedAutoTag } from '@/lib/creative-auto-tag';
 
 export interface BatchFormData {
   batchName: string;
@@ -53,6 +62,9 @@ interface Brand {
   id: string;
   name: string;
   slug: string;
+  website_url?: string | null;
+  shopify_store_domain?: string | null;
+  file_naming_pattern?: string | null;
 }
 
 interface SubmissionFormProps {
@@ -299,17 +311,26 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) return;
 
-        const { data: files } = await supabase
+        const full = await supabase
           .from('submission_files')
-          .select('file_name, submissions!inner(batch_name, brand_id)')
+          .select('file_name, original_file_name, submissions!inner(batch_name, brand_id)')
           .eq('submissions.brand_id', selectedBrandId);
+        const files = full.error
+          ? (
+              await supabase
+                .from('submission_files')
+                .select('file_name, submissions!inner(batch_name, brand_id)')
+                .eq('submissions.brand_id', selectedBrandId)
+            ).data
+          : full.data;
 
         const map = new Map<string, string>();
         if (files) {
           for (const f of files) {
             const batchName = (f as any).submissions?.batch_name || 'unknown batch';
-            if (!map.has(f.file_name)) {
-              map.set(f.file_name, batchName);
+            const names = [f.file_name, (f as { original_file_name?: string | null }).original_file_name];
+            for (const name of names) {
+              if (name && !map.has(name)) map.set(name, batchName);
             }
           }
         }
@@ -406,21 +427,183 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
     []
   );
 
-  /** Apply a partial FileContext update to a set of file indices in a batch */
+  /** Apply a partial FileContext update to a set of file indices in a batch. User edits lock those fields. */
   const updateFileContexts = useCallback(
-    (batchId: string, indices: number[], updates: Partial<FileContext>) => {
+    (
+      batchId: string,
+      indices: number[],
+      updates: Partial<FileContext>,
+      options?: {
+        lockFields?: Array<'creativeType' | 'productId' | 'hookAngle' | 'landingPageUrl' | 'fileName'>;
+      }
+    ) => {
       setBatches((prev) =>
         prev.map((b) => {
           if (b.id !== batchId) return b;
           const contexts = { ...b.fileContexts };
           for (const i of indices) {
-            contexts[i] = { ...(contexts[i] || {}), ...updates } as FileContext;
+            contexts[i] = applyUserContextPatch(contexts[i], updates, options?.lockFields);
           }
           return { ...b, fileContexts: contexts, errors: {} };
         })
       );
     },
     []
+  );
+
+  const batchesRef = useRef(batches);
+  batchesRef.current = batches;
+  const stillPromises = useRef(new WeakMap<File, Promise<string[]>>());
+  const settledStills = useRef(new WeakMap<File, string[]>());
+  const liveControllers = useRef(new Set<AbortController>());
+  const tagQueue = useRef<Array<() => Promise<void>>>([]);
+  const activeTags = useRef(0);
+  const queuedFiles = useRef(new WeakSet<File>());
+  const visionOff = useRef(false);
+  /** True after the tag endpoint answers as a configured provider. */
+  const visionReady = useRef(false);
+
+  const stillsFor = useCallback((file: File) => {
+    const existing = stillPromises.current.get(file);
+    if (existing) return existing;
+    const promise = captureCreativeStills(file)
+      .catch(() => [] as string[])
+      .then((frames) => {
+        settledStills.current.set(file, frames);
+        return frames;
+      });
+    stillPromises.current.set(file, promise);
+    return promise;
+  }, []);
+
+  const patchFileContext = useCallback((batchId: string, file: File, updates: Partial<FileContext>) => {
+    setBatches((prev) =>
+      prev.map((b) => {
+        if (b.id !== batchId) return b;
+        const index = b.files.indexOf(file);
+        if (index < 0) return b;
+        const contexts = { ...b.fileContexts };
+        contexts[index] = { ...(contexts[index] || {}), ...updates } as FileContext;
+        return { ...b, fileContexts: contexts };
+      })
+    );
+  }, []);
+
+  const runAutoTag = useCallback(
+    async (batchId: string, file: File) => {
+      if (!selectedBrandId || visionOff.current) {
+        patchFileContext(batchId, file, { tagStatus: 'skipped' });
+        return;
+      }
+      const controller = new AbortController();
+      liveControllers.current.add(controller);
+      patchFileContext(batchId, file, { tagStatus: 'running' });
+      try {
+        const frames = await stillsFor(file);
+        if (controller.signal.aborted || visionOff.current) return;
+        if (!frames.length) {
+          patchFileContext(batchId, file, { tagStatus: 'error' });
+          return;
+        }
+        const supabase = createClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session || controller.signal.aborted) {
+          patchFileContext(batchId, file, { tagStatus: 'skipped' });
+          return;
+        }
+        const batch = batchesRef.current.find((b) => b.id === batchId);
+        const index = batch?.files.indexOf(file) ?? -1;
+        const media = index >= 0 ? batch?.fileMediaInfo[index] : undefined;
+        const res = await fetch('/api/creative-auto-tag', {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            brand_id: selectedBrandId,
+            files: [
+              {
+                file_name: file.name,
+                media_format: media?.format || null,
+                aspect_ratio: media?.aspectRatio || null,
+                file_type: file.type,
+                images: frames,
+              },
+            ],
+          }),
+        });
+        if (controller.signal.aborted) return;
+        if (!res.ok) {
+          patchFileContext(batchId, file, { tagStatus: 'error' });
+          return;
+        }
+        const json = await res.json();
+        const result = json.results?.[0];
+        if (result?.skipped === 'unconfigured') {
+          visionOff.current = true;
+          visionReady.current = false;
+          tagQueue.current = [];
+          patchFileContext(batchId, file, { tagStatus: 'skipped', autoTags: null });
+          return;
+        }
+        visionReady.current = true;
+        if (!result?.tags) {
+          patchFileContext(batchId, file, { tagStatus: 'error' });
+          return;
+        }
+        setBatches((prev) =>
+          prev.map((b) => {
+            if (b.id !== batchId) return b;
+            const fileIndex = b.files.indexOf(file);
+            if (fileIndex < 0) return b;
+            const contexts = { ...b.fileContexts };
+            contexts[fileIndex] = mergeAutoTagIntoContext(
+              contexts[fileIndex],
+              result.tags as AcceptedAutoTag,
+              result.auto_tags || null
+            );
+            return { ...b, fileContexts: contexts };
+          })
+        );
+      } catch {
+        if (controller.signal.aborted) return;
+        patchFileContext(batchId, file, { tagStatus: 'error' });
+      } finally {
+        liveControllers.current.delete(controller);
+      }
+    },
+    [patchFileContext, selectedBrandId, stillsFor]
+  );
+
+  const pumpTags = useCallback(() => {
+    while (activeTags.current < 2 && tagQueue.current.length) {
+      const job = tagQueue.current.shift();
+      if (!job) break;
+      activeTags.current += 1;
+      job().finally(() => {
+        activeTags.current -= 1;
+        pumpTags();
+      });
+    }
+  }, []);
+
+  const queueAutoTag = useCallback(
+    (batchId: string, files: File[]) => {
+      for (const file of files) {
+        if (queuedFiles.current.has(file)) continue;
+        queuedFiles.current.add(file);
+        if (visionOff.current) {
+          patchFileContext(batchId, file, { tagStatus: 'skipped' });
+          continue;
+        }
+        void stillsFor(file);
+        tagQueue.current.push(() => runAutoTag(batchId, file));
+      }
+      pumpTags();
+    },
+    [patchFileContext, pumpTags, runAutoTag, stillsFor]
   );
 
   const removeBatch = useCallback((id: string) => {
@@ -554,8 +737,17 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
     setIsSubmitting(true);
     setUploadProgress(null);
     setUploadPct(0);
+    Array.from(liveControllers.current).forEach((controller) => controller.abort());
+    tagQueue.current = [];
 
     try {
+      const filesToFrame = batches.flatMap((b) => b.files);
+      if (visionOff.current === false) {
+        await Promise.race([
+          Promise.all(filesToFrame.map((file) => stillsFor(file))),
+          new Promise((resolve) => setTimeout(resolve, 5000)),
+        ]);
+      }
       const supabase = createClient();
       const totalBatches = batches.length;
       const pendingBatches = batches.filter((b) => !savedBatchIds.has(b.id));
@@ -665,39 +857,41 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
           throw new Error(`Batch ${bIdx + 1} (${batch.batchName}) — submission insert failed: ${submissionError.message}`);
         }
 
-        // Create file records
-        for (let i = 0; i < batch.files.length; i++) {
-          const mediaInfo = batch.fileMediaInfo[i];
-          const fileContext = batch.fileContexts[i];
+        const brandForNames = brands.find((b) => b.id === selectedBrandId);
+        const dropboxNames = planCreativeFileNames({
+          brandName: brandForNames?.name,
+          brandSlug: brandForNames?.slug,
+          pattern: brandForNames?.file_naming_pattern,
+          files: batch.files.map((file, i) => ({
+            name: file.name,
+            context: batch.fileContexts[i],
+            media: batch.fileMediaInfo[i],
+          })),
+        });
 
-          const { error: fileError } = await supabase.from('submission_files').insert({
-            submission_id: submission.id,
-            file_name: batch.files[i].name,
-            file_type: batch.files[i].type || 'application/octet-stream',
-            file_size: batch.files[i].size || 0,
-            file_url: uploadedFiles[i].path,
-            media_format: mediaInfo?.format || null,
-            aspect_ratio: mediaInfo?.aspectRatio || null,
-            width: mediaInfo?.width || null,
-            height: mediaInfo?.height || null,
-            landing_page_url: fileContext?.landingPageUrl || null,
-            copy_headline: fileContext?.copyHeadline || null,
-            copy_body: fileContext?.copyBody || null,
-            copy_cta: fileContext?.copyCta || null,
-            product_id: (fileContext as any)?.productId || null,
-            product_name: (fileContext as any)?.productName || null,
-            creative_type: (fileContext as any)?.creativeType || null,
-            fidelity: (fileContext as any)?.creativeType
-              ? (CREATIVE_TYPES_MAP.get((fileContext as any).creativeType)?.fidelity ?? null)
-              : null,
-            hook_angle: (fileContext as any)?.hookAngle || null,
-            copy_title: (fileContext as any)?.copyTemplate || null,
-            creator_name: (fileContext as any)?.creatorName || null,
-            creator_social_handle: (fileContext as any)?.creatorHandle || null,
+        // Create file records. Storage keeps the uploaded name; Dropbox gets the planned name.
+        for (let i = 0; i < batch.files.length; i++) {
+          const file = batch.files[i];
+          const row = buildSubmissionFileRow({
+            submissionId: submission.id,
+            storagePath: uploadedFiles[i].path,
+            proposedFileName: dropboxNames[i],
+            originalFileName: file.name,
+            fileType: file.type || 'application/octet-stream',
+            fileSize: file.size || 0,
+            context: batch.fileContexts[i],
+            media: batch.fileMediaInfo[i],
+            frames: settledStills.current.get(file) || null,
+            visionConfigured: visionReady.current && !visionOff.current,
           });
+          let { error: fileError } = await supabase.from('submission_files').insert(row);
+          if (fileError && isMissingColumnError(fileError)) {
+            const retry = await supabase.from('submission_files').insert(legacySubmissionFileRow(row));
+            fileError = retry.error;
+          }
           if (fileError) {
-            console.error(`File insert error for ${batch.files[i].name}:`, fileError);
-            throw new Error(`Batch ${bIdx + 1} (${batch.batchName}) — file record insert failed for "${batch.files[i].name}": ${fileError.message}`);
+            console.error(`File insert error for ${file.name}:`, fileError);
+            throw new Error(`Batch ${bIdx + 1} (${batch.batchName}) — file record insert failed for "${file.name}": ${fileError.message}`);
           }
         }
 
@@ -708,53 +902,29 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
           return next;
         });
 
-        // Fire Dropbox sync. Resumable — if it times out on large files,
-        // a second call picks up where it left off (already-synced files are
-        // tracked per-row via submission_files.dropbox_path).
-        const syncOnce = async () => {
-          const res = await fetch('/api/submissions/sync-drive', {
+        // Start Dropbox sync without waiting on server-side tagging.
+        // The request keeps running after this form returns. The cron resumes
+        // anything this call does not finish. Notice email goes out from the
+        // server after names are final.
+        const { data: { session } } = await supabase.auth.getSession();
+        const syncHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (session?.access_token) syncHeaders.Authorization = `Bearer ${session.access_token}`;
+        const syncOnce = (notify: boolean) =>
+          fetch('/api/submissions/sync-drive', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ submission_id: submission.id }),
+            headers: syncHeaders,
+            body: JSON.stringify({ submission_id: submission.id, notify }),
           });
-          return res.ok ? null : res.json().catch(() => null);
-        };
-        try {
-          const result = await syncOnce();
-          // If partial (some files synced, some didn't), auto-retry once
-          if (result?.retryable) {
-            console.info('Dropbox sync partial — auto-retrying...');
-            await syncOnce();
-          }
-        } catch (e) {
-          console.warn('Dropbox sync trigger failed (non-fatal):', e);
-        }
+        void syncOnce(true)
+          .then(async (res) => {
+            if (res.ok) return;
+            const result = await res.json().catch(() => null);
+            if (result?.retryable) await syncOnce(false);
+          })
+          .catch((e) => {
+            console.warn('Dropbox sync trigger failed (non-fatal):', e);
+          });
       }
-
-      // Call notify endpoint
-      setUploadProgress('Sending notification...');
-      setUploadPct(95);
-      const brandName =
-        brands.find((b) => b.id === selectedBrandId)?.name || 'Unknown brand';
-      await fetch('/api/notify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          brandName,
-          brandId: selectedBrandId,
-          batchCount: batches.length,
-          totalFiles: batches.reduce((sum, b) => sum + b.files.length, 0),
-          batches: batches.map((b) => ({
-            batchName: b.batchName,
-            creativeType: b.creativeType,
-            creatorName: b.creatorName || 'Unknown',
-            creatorSocialHandle: b.creatorSocialHandle || null,
-            landingPageUrl: b.landingPageUrl || null,
-            fileCount: b.files.length,
-            fileNames: b.files.map((f) => f.name),
-          })),
-        }),
-      });
 
       setUploadPct(100);
       setUploadProgress(null);
@@ -787,7 +957,26 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
     }
   };
 
-  // Compute duplicate warnings for each file
+  const selectedBrand = brands.find((b) => b.id === selectedBrandId);
+  const proposedByBatch = useMemo(() => {
+    const out: Record<string, string[]> = {};
+    for (const batch of batches) {
+      out[batch.id] = planCreativeFileNames({
+        brandName: selectedBrand?.name,
+        brandSlug: selectedBrand?.slug,
+        pattern: selectedBrand?.file_naming_pattern,
+        files: batch.files.map((file, i) => ({
+          name: file.name,
+          context: batch.fileContexts[i],
+          media: batch.fileMediaInfo[i],
+        })),
+      });
+    }
+    return out;
+  }, [batches, selectedBrand]);
+
+  // Duplicate warnings compare the uploaded filename only. Proposed Dropbox
+  // names repeat across batches on purpose — each batch has its own folder.
   const fileDupeWarnings = useMemo(() => {
     const warnings: Record<string, Record<number, string>> = {};
 
@@ -798,7 +987,6 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
       for (let i = 0; i < batch.files.length; i++) {
         const name = batch.files[i].name;
 
-        // Check same-batch duplicate
         if (seenInBatch.has(name)) {
           batchWarnings[i] = `Duplicate in this batch`;
           const firstIdx = seenInBatch.get(name)!;
@@ -809,10 +997,8 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
           seenInBatch.set(name, i);
         }
 
-        // Check archive duplicate (only if not already flagged as same-batch dupe)
         if (!batchWarnings[i] && existingFiles.has(name)) {
-          const priorBatch = existingFiles.get(name)!;
-          batchWarnings[i] = `Already uploaded in ${priorBatch}`;
+          batchWarnings[i] = `Already uploaded in ${existingFiles.get(name)}`;
         }
       }
 
@@ -1331,6 +1517,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                 // Seed new files' contexts with batch-level defaults
                 const startIdx = batch.files.length;
                 const added = files.length - batch.files.length;
+                const addedFiles = added > 0 ? files.slice(startIdx) : [];
                 updateBatch(batch.id, { files });
                 if (added > 0) {
                   const defaults: Partial<FileContext> = {};
@@ -1340,8 +1527,9 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                     defaults.creatorHandle = batch.creatorSocialHandle;
                   if (Object.keys(defaults).length > 0) {
                     const newIndices = Array.from({ length: added }, (_, i) => startIdx + i);
-                    updateFileContexts(batch.id, newIndices, defaults);
+                    updateFileContexts(batch.id, newIndices, defaults, { lockFields: [] });
                   }
+                  queueAutoTag(batch.id, addedFiles);
                 }
               }}
               onMediaInfoChange={(index: number, info: FileMediaInfo) => {
@@ -1391,6 +1579,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                     mediaInfo={batch.fileMediaInfo[fileIndex]}
                     isSelected={selectedIndices.includes(fileIndex)}
                     isTagged={Boolean((batch.fileContexts[fileIndex] as any)?.creativeType)}
+                    displayName={proposedByBatch[batch.id]?.[fileIndex]}
                     dupeWarning={dupes[fileIndex] || ''}
                     onClick={handleAssetClick}
                     onRemove={(idx) => removeFile(batch.id, idx)}
@@ -1423,8 +1612,17 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
               isCarousel={batch.isCarousel}
               isWhitelist={batch.isWhitelist}
               errors={batch.errors}
-              onContextChange={(indices, updates) =>
-                updateFileContexts(batch.id, indices, updates)
+              proposedName={
+                selectedIndices.length === 1
+                  ? proposedByBatch[batch.id]?.[selectedIndices[0]] || ''
+                  : ''
+              }
+              storefrontOrigin={storefrontOrigin(
+                selectedBrand?.website_url,
+                selectedBrand?.shopify_store_domain
+              )}
+              onContextChange={(indices, updates, options) =>
+                updateFileContexts(batch.id, indices, updates, options)
               }
             />
           )}

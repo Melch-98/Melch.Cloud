@@ -7,6 +7,7 @@ import {
   sanitizeDropboxPathSegment,
   DropboxNotConnectedError,
 } from '@/lib/dropbox';
+import { fileAwaitingDropboxCopy, tagPendingSubmissionFiles, TAG_SYNC_MAX_BUDGET_MS } from '@/lib/creative-tag-sync';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -61,6 +62,17 @@ export async function POST(req: NextRequest) {
   if (!profile || profile.role !== 'admin') {
     return NextResponse.json({ error: 'Forbidden — admin only' }, { status: 403 });
   }
+
+  if (body.submission_id) {
+    try {
+      await tagPendingSubmissionFiles(supabase, body.submission_id, {
+        budgetMs: TAG_SYNC_MAX_BUDGET_MS,
+      });
+    } catch (err) {
+      console.warn('Auto-tag before Dropbox retry failed:', err instanceof Error ? err.message : err);
+    }
+  }
+
   const { data: submission, error: subError } = await supabase
     .from('submissions')
     .select(
@@ -88,7 +100,8 @@ export async function POST(req: NextRequest) {
   const batchPath = `${brand.dropbox_folder_path}/${batchSegment}`;
 
   const allFiles: any[] = sub.submission_files || [];
-  const pendingFiles = allFiles.filter((f: any) => !f.dropbox_path);
+  // tagging and failed rows still copy, under their current file_name.
+  const pendingFiles = allFiles.filter((f: any) => fileAwaitingDropboxCopy(f));
 
   // If all files already synced, just finalize
   if (pendingFiles.length === 0) {
