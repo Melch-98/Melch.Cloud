@@ -11,6 +11,8 @@ export default defineConfig({
       'src/lib/creative-naming.test.ts',
       'src/lib/auto-tag/grok.test.ts',
       'src/lib/creative-tag-sync.test.ts',
+      'src/lib/invite-status.test.ts',
+      'src/lib/set-password-token.test.ts',
     ],
   },
   resolve: {

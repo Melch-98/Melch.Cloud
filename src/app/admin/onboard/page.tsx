@@ -153,9 +153,15 @@ export default function OnboardPage() {
 
   type InviteUserResult = {
     email: string;
+    userId?: string;
     ok?: boolean;
     error?: string;
     actionLink?: string | null;
+    delivery?: {
+      delivered?: boolean;
+      message?: string;
+      showCopyLink?: boolean;
+    } | null;
     welcomeEmail?: { sent?: boolean; error?: string; skipped?: string } | null;
   };
   const [inviteResults, setInviteResults] = useState<InviteUserResult[]>([]);
@@ -350,6 +356,49 @@ export default function OnboardPage() {
     setSaving(false);
     setStep('review');
   }, [createdBrandId, newUsers]);
+
+  const handleResendInvite = useCallback(async (row: InviteUserResult) => {
+    if (!row.userId) return;
+    setSaving(true);
+    setError(null);
+    const { data: session } = await supabase.auth.getSession();
+    const token = session.session?.access_token;
+    const res = await fetch('/api/admin/resend-invite', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ userId: row.userId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setInviteResults((prev) =>
+      prev.map((item) => {
+        if (item.userId !== row.userId && item.email !== row.email) return item;
+        if (!res.ok) {
+          return {
+            ...item,
+            ok: false,
+            error: data.error || 'Could not resend the invite',
+            delivery: {
+              delivered: false,
+              message: data.error || 'Could not resend the invite',
+              showCopyLink: false,
+            },
+            actionLink: null,
+          };
+        }
+        return {
+          ...item,
+          ok: true,
+          error: undefined,
+          delivery: data.delivery,
+          actionLink: data.actionLink || null,
+        };
+      })
+    );
+    setSaving(false);
+  }, [supabase]);
 
   const handleArchive = useCallback(
     async (brandId: string) => {
@@ -904,26 +953,36 @@ export default function OnboardPage() {
             {inviteResults.length > 0 && (
               <div style={{ marginTop: 20, ...card, padding: 16, background: '#0d0d0d' }}>
                 <div style={{ fontSize: 12, color: '#C8B89A', fontWeight: 600, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.06 }}>
-                  Invite fallback links
+                  Invites
                 </div>
-                <p style={{ fontSize: 12, color: '#666', marginBottom: 12 }}>
-                  Welcome emails carry set-password links. If email failed or was skipped, copy the one-time link below.
-                </p>
-                {inviteResults.map((r) => (
-                  <div key={r.email} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid #1a1a1a' }}>
-                    <div style={{ fontSize: 13, color: '#fff' }}>
-                      {r.email}{' '}
-                      <span style={{ color: r.ok ? '#34A853' : '#EF4444', fontSize: 11 }}>
-                        {r.ok ? (r.welcomeEmail?.sent ? 'email sent' : 'ok') : r.error || 'failed'}
-                      </span>
-                    </div>
-                    {r.actionLink && (
-                      <div style={{ marginTop: 6, fontSize: 11, color: '#C8B89A', wordBreak: 'break-all', fontFamily: 'monospace' }}>
-                        {r.actionLink}
+                {inviteResults.map((r) => {
+                  const delivered = r.delivery?.delivered === true;
+                  const message = !r.ok && r.error
+                    ? r.error
+                    : r.delivery?.message || (delivered ? `Invite email delivered to ${r.email}` : r.welcomeEmail?.error || r.error || 'Invite email was not sent');
+                  return (
+                    <div key={r.email} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid #1a1a1a' }}>
+                      <div style={{ fontSize: 13, color: delivered ? '#34A853' : '#EF4444' }}>
+                        {message}
                       </div>
-                    )}
-                  </div>
-                ))}
+                      {r.actionLink && (
+                        <div style={{ marginTop: 6, fontSize: 11, color: '#C8B89A', wordBreak: 'break-all', fontFamily: 'monospace' }}>
+                          {r.actionLink}
+                        </div>
+                      )}
+                      {r.userId && (
+                        <button
+                          type="button"
+                          onClick={() => handleResendInvite(r)}
+                          disabled={saving}
+                          style={{ marginTop: 8, background: 'transparent', border: 'none', color: '#C8B89A', fontSize: 12, cursor: 'pointer', padding: 0 }}
+                        >
+                          Resend invite
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
 

@@ -68,11 +68,9 @@ export async function sendEmail(opts: SendOpts): Promise<SendResult> {
     return { sent: false, error: `template render failed: ${err?.message || err}` };
   }
 
-  // Send via Resend
+  // Send via Resend. A message id is the only proof it was accepted.
   const resend = new Resend(apiKey);
-  const from =
-    opts.from ||
-    `melch.cloud <${process.env.NOTIFICATION_FROM_EMAIL || 'noreply@melch.cloud'}>`;
+  const from = opts.from || defaultFromAddress();
 
   try {
     const { data, error } = await resend.emails.send({
@@ -82,14 +80,44 @@ export async function sendEmail(opts: SendOpts): Promise<SendResult> {
       html: rendered.html,
     });
     if (error) {
-      console.error('[email] resend error:', error);
-      return { sent: false, error: error.message || 'resend error' };
+      const message = resendErrorMessage(error);
+      console.error('[email] resend error:', message);
+      return { sent: false, error: message };
     }
-    return { sent: true, id: data?.id };
+    const id = data?.id?.trim();
+    if (!id) {
+      return { sent: false, error: 'Resend did not return a message id' };
+    }
+    return { sent: true, id };
   } catch (err: any) {
     console.error('[email] resend threw:', err);
     return { sent: false, error: err?.message || 'resend threw' };
   }
+}
+
+function defaultFromAddress(): string {
+  const raw = (process.env.NOTIFICATION_FROM_EMAIL || 'noreply@melch.cloud').trim();
+  if (raw.includes('<') && raw.includes('>')) return raw;
+  return `melch.cloud <${raw}>`;
+}
+
+function resendErrorMessage(error: unknown): string {
+  if (!error) return 'resend error';
+  if (typeof error === 'string' && error.trim()) return error.trim();
+  if (typeof error === 'object') {
+    const record = error as { message?: unknown; error?: unknown };
+    if (typeof record.message === 'string' && record.message.trim()) return record.message.trim();
+    if (record.error && typeof record.error === 'object') {
+      const inner = (record.error as { message?: unknown }).message;
+      if (typeof inner === 'string' && inner.trim()) return inner.trim();
+    }
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return 'resend error';
+    }
+  }
+  return 'resend error';
 }
 
 // ─── Template dispatch ────────────────────────────────────────

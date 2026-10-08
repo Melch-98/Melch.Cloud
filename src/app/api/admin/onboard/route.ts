@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { ensureDropboxFolder } from '@/lib/dropbox';
-import { sendEmail } from '@/lib/email';
-import { ensureUserWithInviteLink, appUrl } from '@/lib/invite';
+import { ensureUserWithInviteLink } from '@/lib/invite';
+import { sendInviteEmail } from '@/lib/invite-mail';
+import { invitePermissionError } from '@/lib/invite-status';
 import { rolePermissionDefaults } from '@/lib/role-defaults';
 
 export const dynamic = 'force-dynamic';
@@ -22,7 +23,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Server config error' }, { status: 500 });
   }
 
-  const supabase = createClient(supabaseUrl, serviceKey);
+  const supabase = createClient(supabaseUrl, serviceKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
 
   // Verify admin auth
   const authHeader = request.headers.get('authorization');
@@ -34,7 +37,7 @@ export async function POST(request: NextRequest) {
 
   const { data: profile } = await supabase
     .from('users_profile')
-    .select('role')
+    .select('role, brand_id')
     .eq('id', user.id)
     .single();
 
@@ -146,6 +149,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'users array required' }, { status: 400 });
     }
 
+    const denied = invitePermissionError(
+      { role: profile.role, brandId: profile.brand_id },
+      brand_id
+    );
+    if (denied) return NextResponse.json({ error: denied }, { status: 403 });
+
     let brandName: string | undefined;
     {
       const { data: brand } = await supabase
@@ -165,11 +174,16 @@ export async function POST(request: NextRequest) {
       const full_name = (u.full_name || email.split('@')[0]).trim();
 
       try {
+        if (role === 'admin' && profile.role !== 'admin') {
+          results.push({ email, error: 'Only an admin can invite another admin' });
+          continue;
+        }
+
         const invited = await ensureUserWithInviteLink(supabase, email, {
           fullName: full_name,
         });
 
-        await supabase.from('users_profile').upsert(
+        const profileResult = await supabase.from('users_profile').upsert(
           {
             id: invited.userId,
             email,
@@ -179,48 +193,68 @@ export async function POST(request: NextRequest) {
           },
           { onConflict: 'id' }
         );
+        if (profileResult.error) {
+          results.push({ email, error: `Profile creation failed: ${profileResult.error.message}` });
+          continue;
+        }
 
         const perms = rolePermissionDefaults(role);
-        await supabase.from('user_permissions').upsert(
+        const permsResult = await supabase.from('user_permissions').upsert(
           { user_id: invited.userId, ...perms },
           { onConflict: 'user_id' }
         );
-
-        let welcomeEmail: { sent: boolean; error?: string; skipped?: string } | null = null;
-        if (shouldEmail) {
-          const result = await sendEmail({
-            to: email,
-            template: {
-              name: 'welcome',
-              data: {
-                name: full_name,
-                role,
-                brandName,
-                loginUrl: appUrl(),
-                inviteLink: invited.actionLink || undefined,
-                invitedBy: user.email || undefined,
-              },
-            },
-          });
-          welcomeEmail = {
-            sent: result.sent,
-            error: result.error,
-            skipped: result.skipped,
-          };
+        if (permsResult.error) {
+          console.error('Permissions upsert failed (non-fatal):', permsResult.error.message);
         }
 
-        const emailOk = welcomeEmail?.sent === true;
-        const showLink = !shouldEmail || !emailOk;
+        if (!shouldEmail) {
+          results.push({
+            email,
+            userId: invited.userId,
+            ok: true,
+            isExisting: invited.isExisting,
+            delivery: {
+              delivered: false,
+              message: 'Welcome email was not requested',
+              showCopyLink: true,
+              resendMessageId: null,
+            },
+            welcomeEmail: null,
+            actionLink: invited.actionLink,
+            linkType: invited.linkType,
+          });
+          continue;
+        }
+
+        const sent = await sendInviteEmail(supabase, {
+          to: email,
+          name: full_name,
+          role,
+          brandName,
+          inviteLink: invited.actionLink,
+          invitedBy: user.email || undefined,
+          userId: invited.userId,
+          brandId: brand_id,
+          invitedById: user.id,
+          linkType: invited.linkType,
+          source: 'onboard',
+        });
 
         results.push({
           email,
           userId: invited.userId,
           ok: true,
           isExisting: invited.isExisting,
-          welcomeEmail,
-          // One-time set-password link for admin UI when email fails / skipped
-          actionLink: showLink ? invited.actionLink : null,
+          delivery: sent.delivery,
+          logError: sent.logError,
+          welcomeEmail: {
+            sent: sent.delivery.delivered,
+            error: sent.delivery.delivered ? undefined : sent.delivery.message,
+            id: sent.delivery.resendMessageId,
+          },
+          actionLink: sent.delivery.showCopyLink ? invited.actionLink : null,
           linkType: invited.linkType,
+          linkError: invited.linkError,
         });
       } catch (e: any) {
         results.push({ email, error: e?.message || 'Invite failed' });
