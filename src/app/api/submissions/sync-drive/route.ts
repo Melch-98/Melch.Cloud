@@ -9,7 +9,7 @@ import {
   sanitizeDropboxPathSegment,
   DropboxNotConnectedError,
 } from '@/lib/dropbox';
-import { tagPendingSubmissionFiles, TAG_SYNC_MAX_BUDGET_MS } from '@/lib/creative-tag-sync';
+import { fileAwaitingDropboxCopy, tagPendingSubmissionFiles, TAG_SYNC_MAX_BUDGET_MS } from '@/lib/creative-tag-sync';
 import { notifySubmissionNamed } from '@/lib/creative-upload-notify';
 
 export const dynamic = 'force-dynamic';
@@ -115,7 +115,8 @@ export async function POST(req: NextRequest) {
   const batchPath = `${brandPath}/${batchSegment}`;
 
   const allFiles: any[] = sub.submission_files || [];
-  const pendingFiles = allFiles.filter((f: any) => !f.dropbox_path);
+  // tagging and failed rows still copy, under their current file_name.
+  const pendingFiles = allFiles.filter((f: any) => fileAwaitingDropboxCopy(f));
 
   // If all files already synced (e.g. previous partial run finished them all),
   // just finalize the submission row.

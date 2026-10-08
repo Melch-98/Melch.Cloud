@@ -8,7 +8,7 @@ import {
   sanitizeDropboxPathSegment,
   DropboxNotConnectedError,
 } from '@/lib/dropbox';
-import { tagPendingSubmissionFiles, tagSyncBudgetMs } from '@/lib/creative-tag-sync';
+import { fileAwaitingDropboxCopy, tagPendingSubmissionFiles, tagSyncBudgetMs } from '@/lib/creative-tag-sync';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -184,10 +184,9 @@ async function syncOneBatch(
   const batchPath = `${brandPath}/${batchSegment}`;
 
   const allFiles: any[] = sub.submission_files || [];
-  // Files still needing sync: no dropbox_path AND no in-progress job
-  const pendingFiles = allFiles.filter((f: any) => !f.dropbox_path && !f.dropbox_job_id);
-  // Files with an in-progress save_url job from a previous run
-  const inProgressFiles = allFiles.filter((f: any) => !f.dropbox_path && f.dropbox_job_id);
+  // tag_source does not gate the copy. tagging and failed rows sync as file_name.
+  const pendingFiles = allFiles.filter((f: any) => fileAwaitingDropboxCopy(f) && !f.dropbox_job_id);
+  const inProgressFiles = allFiles.filter((f: any) => fileAwaitingDropboxCopy(f) && f.dropbox_job_id);
 
   // Check in-progress jobs first
   let completedFromJobs = 0;

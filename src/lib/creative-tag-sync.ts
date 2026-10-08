@@ -26,10 +26,16 @@ export const TAG_SYNC_CALL_TIMEOUT_MS = 20_000;
 export const TAG_SYNC_CONCURRENCY = 4;
 /** Leave the cron enough time to copy files for other brands after tagging. */
 export const TAG_SYNC_CRON_RESERVE_MS = 60_000;
+/**
+ * A process that dies after the claim leaves tag_source='tagging'.
+ * submission_files.updated_at is the claim time (the column and its update
+ * trigger already exist). Older than this, and the row is claimed again.
+ */
+export const TAG_CLAIM_STALE_MS = 10 * 60 * 1000;
 
 const FILE_COLUMNS = `id, file_name, original_file_name, file_url, file_type, media_format, aspect_ratio,
   creative_type, fidelity, product_id, product_name, hook_angle, landing_page_url,
-  creator_name, dropbox_path, dropbox_job_id, auto_tags, tag_source, submission_id`;
+  creator_name, dropbox_path, dropbox_job_id, auto_tags, tag_source, submission_id, updated_at`;
 
 export interface TagPendingOptions {
   /** How long this call may spend. 0 skips without claiming rows. */
@@ -44,6 +50,14 @@ export interface TagPendingOptions {
 export function tagSyncBudgetMs(deadlineMs?: number, now = Date.now()): number {
   if (deadlineMs === undefined) return TAG_SYNC_MAX_BUDGET_MS;
   return Math.max(0, Math.min(TAG_SYNC_MAX_BUDGET_MS, deadlineMs - now - TAG_SYNC_CRON_RESERVE_MS));
+}
+
+/**
+ * Dropbox copy keys off dropbox_path, not tag_source. A row left on tagging
+ * or failed still copies, using its current file_name.
+ */
+export function fileAwaitingDropboxCopy(file: { dropbox_path?: string | null }): boolean {
+  return file.dropbox_path == null || file.dropbox_path === '';
 }
 
 function missingColumn(error: { message?: string; code?: string } | null | undefined): boolean {
@@ -141,8 +155,10 @@ async function saveFile(supabase: ServiceClient, id: string, patch: Record<strin
 /**
  * Fill empty creative tags on files the uploader marked pending, then rename
  * them before Dropbox sync. Rows are claimed with tag_source='tagging' so two
- * workers cannot both pay for the same file. A missing API key returns without
- * writing. A model error or a spent budget does not stop the Dropbox sync.
+ * workers cannot both pay for the same file. updated_at is the claim time.
+ * A tagging row older than 10 minutes is claimed again. A missing API key
+ * returns without writing. A model error or a spent budget does not stop the
+ * Dropbox sync: tagging and failed rows still copy under their current file_name.
  */
 export async function tagPendingSubmissionFiles(
   supabase: ServiceClient,
@@ -157,14 +173,16 @@ export async function tagPendingSubmissionFiles(
   if (budgetMs <= 0) return;
 
   const deadline = now() + budgetMs;
+  const claimedAt = new Date(now()).toISOString();
+  const staleBefore = new Date(now() - TAG_CLAIM_STALE_MS).toISOString();
 
   const claimedResult = await supabase
     .from('submission_files')
-    .update({ tag_source: 'tagging' })
+    .update({ tag_source: 'tagging', updated_at: claimedAt })
     .eq('submission_id', submissionId)
-    .eq('tag_source', 'pending')
     .is('dropbox_path', null)
     .is('dropbox_job_id', null)
+    .or(`tag_source.eq.pending,and(tag_source.eq.tagging,updated_at.lt."${staleBefore}")`)
     .select(FILE_COLUMNS);
 
   if (claimedResult.error || !claimedResult.data) {

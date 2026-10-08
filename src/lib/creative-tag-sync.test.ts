@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { AutoTagProvider } from '@/lib/auto-tag/provider';
-import { tagPendingSubmissionFiles, tagSyncBudgetMs } from '@/lib/creative-tag-sync';
+import {
+  fileAwaitingDropboxCopy,
+  tagPendingSubmissionFiles,
+  tagSyncBudgetMs,
+} from '@/lib/creative-tag-sync';
 
 type Row = Record<string, unknown>;
 
@@ -14,7 +18,8 @@ interface Filter {
   value: unknown;
 }
 
-function matches(row: Row, filters: Filter[]): boolean {
+function matches(row: Row, filters: Filter[], orMatch: ((row: Row) => boolean) | null): boolean {
+  if (orMatch && !orMatch(row)) return false;
   return filters.every((filter) => {
     const value = row[filter.column];
     if (filter.kind === 'eq') return value === filter.value;
@@ -22,6 +27,42 @@ function matches(row: Row, filters: Filter[]): boolean {
     const list = filter.value as unknown[];
     return list.includes(value);
   });
+}
+
+function splitTop(input: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let quoted = false;
+  let current = '';
+  for (const ch of input) {
+    if (ch === '"') quoted = !quoted;
+    if (!quoted && ch === '(') depth += 1;
+    if (!quoted && ch === ')') depth -= 1;
+    if (!quoted && depth === 0 && ch === ',') {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  if (current) parts.push(current);
+  return parts;
+}
+
+function compileClause(clause: string): (row: Row) => boolean {
+  const trimmed = clause.trim();
+  if (trimmed.startsWith('and(') && trimmed.endsWith(')')) {
+    const inner = splitTop(trimmed.slice(4, -1)).map(compileClause);
+    return (row) => inner.every((fn) => fn(row));
+  }
+  const match = trimmed.match(/^([A-Za-z_]+)\.(eq|lt)\.(.+)$/);
+  if (!match) throw new Error(`Unsupported filter: ${trimmed}`);
+  const column = match[1];
+  const op = match[2];
+  const raw = match[3];
+  const value = raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw;
+  if (op === 'eq') return (row) => row[column] === value;
+  return (row) => typeof row[column] === 'string' && (row[column] as string) < value;
 }
 
 function memorySupabase(seed: { files: Row[]; submissions: Row[]; brands: Row[]; products: Row[] }) {
@@ -34,6 +75,7 @@ function memorySupabase(seed: { files: Row[]; submissions: Row[]; brands: Row[];
 
   function from(table: string) {
     const filters: Filter[] = [];
+    let orMatch: ((row: Row) => boolean) | null = null;
     let patch: Row | null = null;
     const api = {
       update(next: Row) {
@@ -55,6 +97,11 @@ function memorySupabase(seed: { files: Row[]; submissions: Row[]; brands: Row[];
         filters.push({ kind: 'in', column, value });
         return api;
       },
+      or(expression: string) {
+        const parts = splitTop(expression).map(compileClause);
+        orMatch = (row) => parts.some((fn) => fn(row));
+        return api;
+      },
       single() {
         return api.exec(true);
       },
@@ -66,7 +113,7 @@ function memorySupabase(seed: { files: Row[]; submissions: Row[]; brands: Row[];
       },
       async exec(one: boolean) {
         const rows = tables[table] || [];
-        const matched = rows.filter((row) => matches(row, filters));
+        const matched = rows.filter((row) => matches(row, filters, orMatch));
         if (patch) {
           const next = cloneRow(patch);
           matched.forEach((row) => {
@@ -305,5 +352,61 @@ describe('tagPendingSubmissionFiles', () => {
       expect(row.tag_source).not.toBe('pending');
       expect(row.tag_source).not.toBe('tagging');
     });
+  });
+
+  it('reclaims a tagging row claimed more than 10 minutes ago', async () => {
+    const now = Date.parse('2026-10-08T12:00:00.000Z');
+    const stale = new Date(now - 11 * 60 * 1000).toISOString();
+    const fresh = new Date(now - 60 * 1000).toISOString();
+    const files = [
+      fileRow('stale', 'stuck.mp4', { tag_source: 'tagging', updated_at: stale }),
+      fileRow('fresh', 'live.mp4', { tag_source: 'tagging', updated_at: fresh }),
+      fileRow('copied', 'done.mp4', {
+        tag_source: 'tagging',
+        updated_at: stale,
+        dropbox_path: '/Brand/Batch/done.mp4',
+      }),
+    ];
+    const db = memorySupabase({ files, submissions: [submission], brands: [brand], products: [] });
+    const seen: string[] = [];
+    const provider: AutoTagProvider = {
+      id: 'fast',
+      isConfigured: () => true,
+      async tag(input) {
+        seen.push(input.fileLabel || '');
+        throw new Error('model down');
+      },
+    };
+
+    await tagPendingSubmissionFiles(db, 'sub-1', { budgetMs: 5_000, provider, now: () => now });
+
+    expect(seen).toEqual(['stuck.mp4']);
+    const reclaimed = db.files.find((row) => row.id === 'stale');
+    expect(reclaimed?.tag_source).toBe('failed');
+    expect(reclaimed?.file_name).toBe('stuck.mp4');
+    expect(reclaimed?.dropbox_path).toBeNull();
+    expect(fileAwaitingDropboxCopy({ dropbox_path: reclaimed?.dropbox_path as string | null })).toBe(true);
+
+    const live = db.files.find((row) => row.id === 'fresh');
+    expect(live?.tag_source).toBe('tagging');
+    expect(live?.updated_at).toBe(fresh);
+    expect(live?.file_name).toBe('live.mp4');
+
+    const copied = db.files.find((row) => row.id === 'copied');
+    expect(copied?.tag_source).toBe('tagging');
+    expect(copied?.file_name).toBe('done.mp4');
+    expect(copied?.dropbox_path).toBe('/Brand/Batch/done.mp4');
+  });
+});
+
+describe('dropbox copy ignores tag state', () => {
+  it('still copies a tagging or failed row under its current file name', () => {
+    const tagging = { dropbox_path: null, tag_source: 'tagging', file_name: 'KeepMe.mp4' };
+    const failed = { dropbox_path: null, tag_source: 'failed', file_name: 'AlsoKeep.mp4' };
+    expect(fileAwaitingDropboxCopy(tagging)).toBe(true);
+    expect(fileAwaitingDropboxCopy(failed)).toBe(true);
+    expect(tagging.file_name).toBe('KeepMe.mp4');
+    expect(failed.file_name).toBe('AlsoKeep.mp4');
+    expect(fileAwaitingDropboxCopy({ dropbox_path: '/Brand/Batch/KeepMe.mp4' })).toBe(false);
   });
 });
