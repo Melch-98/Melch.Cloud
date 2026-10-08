@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MIN_TOTAL_PIXELS, rasterMeetsMinimum, targetFrameSize } from '@/lib/auto-tag/image-size';
 import { aggregateSummaryRows, matrixPageColumnKey, matrixSummaryColumnKey } from '@/lib/creative-matrix';
-import { normalizeAutoTag } from '@/lib/creative-auto-tag';
+import { buildSharedTagPrompt, buildTagPrompt, normalizeAutoTag } from '@/lib/creative-auto-tag';
 import { applyUserContextPatch, mergeAutoTagIntoContext, tagSourceForContext } from '@/lib/creative-tag-merge';
 import { buildSubmissionFileRow, legacySubmissionFileRow, persistedTagSource } from '@/lib/creative-upload-plan';
 
@@ -71,6 +71,63 @@ describe('normalizeAutoTag', () => {
     const mismatch = normalizeAutoTag(raw(), { products, mediaFormat: 'static' });
     expect(mismatch.creative_type).toBeNull();
     expect(mismatch.fidelity).toBeNull();
+  });
+
+  it('rejects a product at 0.7 and keeps the creative type', () => {
+    const tags = normalizeAutoTag(raw({ product_confidence: 0.7 }), {
+      products,
+      mediaFormat: 'video',
+      storefrontOrigin: 'https://shop.example',
+    });
+    expect(tags.creative_type).toBe('grwm');
+    expect(tags.product_id).toBeNull();
+    expect(tags.product_name).toBeNull();
+    expect(tags.landing_page_url).toBeNull();
+
+    const accepted = normalizeAutoTag(raw({ product_confidence: 0.8 }), {
+      products,
+      mediaFormat: 'video',
+      storefrontOrigin: 'https://shop.example',
+    });
+    expect(accepted.product_id).toBe('111');
+    expect(accepted.product_name).toBe('Daily Serum');
+  });
+});
+
+describe('tag prompt cache order', () => {
+  it('puts the brand and catalog before the file name, and tells ties to return null', () => {
+    const catalog = [
+      { id: '1', title: 'Ginger & Cayenne 8 pack FBM', handle: 'ginger-8' },
+      { id: '2', title: 'FOND Beef Bone Broth', handle: 'beef' },
+    ];
+    const shared = buildSharedTagPrompt({
+      brandName: 'FOND',
+      storefront: 'https://fond.example',
+      products: catalog,
+    });
+    const first = buildTagPrompt({
+      brandName: 'FOND',
+      storefront: 'https://fond.example',
+      products: catalog,
+      fileName: 'clip-a.mp4',
+      mediaFormat: 'video',
+      aspectRatio: '9x16',
+    });
+    const second = buildTagPrompt({
+      brandName: 'FOND',
+      storefront: 'https://fond.example',
+      products: catalog,
+      fileName: 'clip-b.jpg',
+      mediaFormat: 'static',
+      aspectRatio: '1x1',
+    });
+    expect(shared.includes('File name:')).toBe(false);
+    expect(first.startsWith(shared)).toBe(true);
+    expect(second.startsWith(shared)).toBe(true);
+    expect(first.indexOf('Ginger & Cayenne 8 pack FBM')).toBeLessThan(first.indexOf('File name:'));
+    expect(shared).toContain('0.8');
+    expect(shared.toLowerCase()).toContain('pack size');
+    expect(shared.toLowerCase()).toContain('variant');
   });
 });
 

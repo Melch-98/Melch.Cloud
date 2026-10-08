@@ -229,9 +229,15 @@ function BatchCard({
                   btn.textContent = 'Syncing…';
                   btn.disabled = true;
                   try {
+                    const { data: { session } } = await createClient().auth.getSession();
                     const res = await fetch('/api/submissions/sync-drive', {
                       method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
+                      headers: {
+                        'Content-Type': 'application/json',
+                        ...(session?.access_token
+                          ? { Authorization: `Bearer ${session.access_token}` }
+                          : {}),
+                      },
                       body: JSON.stringify({ submission_id: batch.id }),
                     });
                     if (res.ok) {

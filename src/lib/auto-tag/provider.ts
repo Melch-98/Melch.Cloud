@@ -26,7 +26,15 @@ export interface AutoTagModelResult {
 export interface AutoTagProvider {
   readonly id: string;
   isConfigured(): boolean;
-  tag(input: { prompt: string; images: AutoTagImage[]; fileLabel?: string }): Promise<AutoTagModelResult>;
+  tag(input: {
+    /** Same for every file of a brand, so the provider can cache the prefix. */
+    sharedPrompt: string;
+    /** File name and other details that change per creative. Frames follow this. */
+    filePrompt: string;
+    images: AutoTagImage[];
+    fileLabel?: string;
+    signal?: AbortSignal;
+  }): Promise<AutoTagModelResult>;
 }
 
 export function getAutoTagProvider(): AutoTagProvider {

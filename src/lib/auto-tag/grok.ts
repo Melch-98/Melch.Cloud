@@ -79,7 +79,8 @@ export const CREATIVE_TAG_JSON_SCHEMA = {
 
 export function buildGrokChatBody(input: {
   model: string;
-  prompt: string;
+  sharedPrompt: string;
+  filePrompt: string;
   images: AutoTagImage[];
 }): Record<string, unknown> {
   return {
@@ -94,11 +95,13 @@ export function buildGrokChatBody(input: {
       {
         role: 'system',
         content:
-          'You only output JSON matching the schema. Never invent products, hooks, creators, or claims that are not visible. When unsure, use null and a confidence under 0.6.',
+          'You only output JSON matching the schema. Never invent products, hooks, creators, or claims that are not visible. When unsure, use null and a confidence under 0.6. For a product, use null unless you are sure of the exact variant and pack size; a tie between variants is null, and product confidence must be at least 0.8.',
       },
       {
         role: 'user',
         content: [
+          { type: 'text', text: input.sharedPrompt },
+          { type: 'text', text: input.filePrompt },
           ...input.images.slice(0, 3).map((image) => ({
             type: 'image_url',
             image_url: {
@@ -106,7 +109,6 @@ export function buildGrokChatBody(input: {
               detail: 'low',
             },
           })),
-          { type: 'text', text: input.prompt },
         ],
       },
     ],
@@ -136,9 +138,11 @@ export function logAutoTagCost(input: {
 }
 
 async function callGrok(input: {
-  prompt: string;
+  sharedPrompt: string;
+  filePrompt: string;
   images: AutoTagImage[];
   fileLabel?: string;
+  signal?: AbortSignal;
 }): Promise<AutoTagModelResult> {
   const apiKey = xaiApiKey();
   if (!apiKey) {
@@ -155,8 +159,17 @@ async function callGrok(input: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify(buildGrokChatBody({ model, prompt: input.prompt, images: input.images })),
-    signal: AbortSignal.timeout(25_000),
+    body: JSON.stringify(
+      buildGrokChatBody({
+        model,
+        sharedPrompt: input.sharedPrompt,
+        filePrompt: input.filePrompt,
+        images: input.images,
+      })
+    ),
+    signal: input.signal
+      ? AbortSignal.any([input.signal, AbortSignal.timeout(25_000)])
+      : AbortSignal.timeout(25_000),
   });
 
   const payload = (await response.json().catch(() => null)) as {

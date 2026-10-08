@@ -5,7 +5,8 @@ import { visionImagesFromUnknown } from '@/lib/auto-tag/frames';
 import { usageRecord } from '@/lib/auto-tag/grok';
 import { getAutoTagProvider } from '@/lib/auto-tag/provider';
 import {
-  buildTagPrompt,
+  buildFileTagPrompt,
+  buildSharedTagPrompt,
   mediaFormatFromHint,
   normalizeAutoTag,
   storefrontOrigin,
@@ -97,6 +98,11 @@ export async function POST(request: NextRequest) {
     .filter((p) => p.id && p.title);
 
   const origin = storefrontOrigin(brand.website_url, brand.shopify_store_domain);
+  const sharedPrompt = buildSharedTagPrompt({
+    brandName: brand.name || 'Brand',
+    storefront: origin,
+    products,
+  });
   const results = [];
 
   for (const file of files) {
@@ -113,13 +119,11 @@ export async function POST(request: NextRequest) {
       const tagged = await provider.tag({
         images,
         fileLabel,
-        prompt: buildTagPrompt({
-          brandName: brand.name || 'Brand',
-          storefront: origin,
+        sharedPrompt,
+        filePrompt: buildFileTagPrompt({
           fileName: fileLabel,
           mediaFormat: format,
           aspectRatio: file.aspect_ratio,
-          products,
         }),
       });
       const tags = normalizeAutoTag(tagged.raw, {

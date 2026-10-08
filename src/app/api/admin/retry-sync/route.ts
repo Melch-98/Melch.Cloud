@@ -7,7 +7,7 @@ import {
   sanitizeDropboxPathSegment,
   DropboxNotConnectedError,
 } from '@/lib/dropbox';
-import { tagPendingSubmissionFiles } from '@/lib/creative-tag-sync';
+import { tagPendingSubmissionFiles, TAG_SYNC_MAX_BUDGET_MS } from '@/lib/creative-tag-sync';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -65,7 +65,9 @@ export async function POST(req: NextRequest) {
 
   if (body.submission_id) {
     try {
-      await tagPendingSubmissionFiles(supabase, body.submission_id);
+      await tagPendingSubmissionFiles(supabase, body.submission_id, {
+        budgetMs: TAG_SYNC_MAX_BUDGET_MS,
+      });
     } catch (err) {
       console.warn('Auto-tag before Dropbox retry failed:', err instanceof Error ? err.message : err);
     }

@@ -3,6 +3,12 @@ import { CREATIVE_TYPE_GROUPS, CREATIVE_TYPES_MAP, type CreativeTypeOption } fro
 /** Below this, the field is treated as unknown and stored as null. */
 export const TAG_CONFIDENCE_MIN = 0.6;
 
+/**
+ * Products need a higher bar. 0.7 was enough for a frame of "FOND Beef Bone Broth"
+ * to land on a different pack size.
+ */
+export const PRODUCT_CONFIDENCE_MIN = 0.8;
+
 export interface CatalogProduct {
   id: string;
   title: string;
@@ -82,6 +88,10 @@ function confident(value: unknown): boolean {
   return readConfidence(value) >= TAG_CONFIDENCE_MIN;
 }
 
+function productConfident(value: unknown): boolean {
+  return readConfidence(value) >= PRODUCT_CONFIDENCE_MIN;
+}
+
 function allowedTypes(mediaFormat?: 'static' | 'video' | null): CreativeTypeOption[] {
   const all = CREATIVE_TYPE_GROUPS.flatMap((g) => g.types);
   if (!mediaFormat) return all;
@@ -131,7 +141,7 @@ export function normalizeAutoTag(raw: unknown, ctx: TagContext): AcceptedAutoTag
     const matches = products.filter((p) => p.title.trim().toLowerCase() === wanted);
     if (matches.length === 1) product = matches[0];
   }
-  if (product && confident(rec.product_confidence ?? rec.product_id_confidence)) {
+  if (product && productConfident(rec.product_confidence ?? rec.product_id_confidence)) {
     result.product_id = product.id;
     result.product_name = product.title;
     result.landing_page_url = landingUrlForProduct(ctx.storefrontOrigin, product.handle);
@@ -149,15 +159,16 @@ export function normalizeAutoTag(raw: unknown, ctx: TagContext): AcceptedAutoTag
   return result;
 }
 
-export function buildTagPrompt(input: {
+/**
+ * Prefix shared by every file of a brand. Kept stable so xAI can cache it.
+ * The file name and frames are appended after this.
+ */
+export function buildSharedTagPrompt(input: {
   brandName: string;
   storefront: string | null;
-  fileName: string;
-  mediaFormat: 'static' | 'video' | null;
-  aspectRatio?: string | null;
   products: CatalogProduct[];
 }): string {
-  const types = allowedTypes(input.mediaFormat).map(
+  const types = allowedTypes(null).map(
     (t) => `- ${t.value} | ${t.label} | fidelity ${t.fidelity} | ${t.format}`
   );
   const products = input.products.slice(0, 200).map(
@@ -170,17 +181,13 @@ export function buildTagPrompt(input: {
     '',
     `Brand: ${input.brandName}`,
     `Storefront: ${input.storefront || 'unknown'}`,
-    `File name: ${input.fileName}`,
-    `Media: ${input.mediaFormat || 'unknown'}`,
-    `Aspect ratio: ${input.aspectRatio || 'unknown'}`,
-    input.mediaFormat === 'video'
-      ? 'Images are frames in order: about 0.5s, about 3s, and the middle of the video.'
-      : 'The image is the creative.',
     '',
-    'creative_type MUST be one of these values, or null:',
+    'creative_type MUST be one of these values, or null. It must match the file media (static or video) given later:',
     types.join('\n') || '(none)',
     '',
-    'product_id MUST be one of these Shopify product ids, or null. Never invent a product:',
+    'product_id MUST be one of these Shopify product ids, or null. Never invent a product.',
+    'Return null when several variants or pack sizes match equally. A frame that only shows the line (for example "Beef Bone Broth") and not the variant or pack size is not a match.',
+    'product_confidence must be at least 0.8 or the product is rejected. Use a number under 0.8 when variants could be confused.',
     products.join('\n') || '(no products synced)',
     '',
     'hook_angle is a short phrase (max 12 words) copied from text on screen or a plain description of the opening visual. Null if neither is clear.',
@@ -199,8 +206,35 @@ export function buildTagPrompt(input: {
     '  "hook_angle": string | null,',
     '  "hook_angle_confidence": number',
     '}',
-    'Confidence is 0 to 1. Use a number under 0.6 when you are guessing.',
+    'Confidence is 0 to 1. Use a number under 0.6 when you are guessing. Product confidence under 0.8 is a null product.',
   ].join('\n');
+}
+
+/** Per-file details. These come after the shared prefix, and the frames come after this text. */
+export function buildFileTagPrompt(input: {
+  fileName: string;
+  mediaFormat: 'static' | 'video' | null;
+  aspectRatio?: string | null;
+}): string {
+  return [
+    `File name: ${input.fileName}`,
+    `Media: ${input.mediaFormat || 'unknown'}`,
+    `Aspect ratio: ${input.aspectRatio || 'unknown'}`,
+    input.mediaFormat === 'video'
+      ? 'Images are frames in order: about 0.5s, about 3s, and the middle of the video.'
+      : 'The image is the creative.',
+  ].join('\n');
+}
+
+export function buildTagPrompt(input: {
+  brandName: string;
+  storefront: string | null;
+  fileName: string;
+  mediaFormat: 'static' | 'video' | null;
+  aspectRatio?: string | null;
+  products: CatalogProduct[];
+}): string {
+  return `${buildSharedTagPrompt(input)}\n\n${buildFileTagPrompt(input)}`;
 }
 
 export function extractJsonObject(text: string): unknown {

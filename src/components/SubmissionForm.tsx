@@ -902,66 +902,29 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
           return next;
         });
 
-        // Fire Dropbox sync. Resumable — if it times out on large files,
-        // a second call picks up where it left off (already-synced files are
-        // tracked per-row via submission_files.dropbox_path).
-        const syncOnce = async () => {
-          const res = await fetch('/api/submissions/sync-drive', {
+        // Start Dropbox sync without waiting on server-side tagging.
+        // The request keeps running after this form returns. The cron resumes
+        // anything this call does not finish. Notice email goes out from the
+        // server after names are final.
+        const { data: { session } } = await supabase.auth.getSession();
+        const syncHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (session?.access_token) syncHeaders.Authorization = `Bearer ${session.access_token}`;
+        const syncOnce = (notify: boolean) =>
+          fetch('/api/submissions/sync-drive', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ submission_id: submission.id }),
+            headers: syncHeaders,
+            body: JSON.stringify({ submission_id: submission.id, notify }),
           });
-          return res.ok ? null : res.json().catch(() => null);
-        };
-        try {
-          const result = await syncOnce();
-          // If partial (some files synced, some didn't), auto-retry once
-          if (result?.retryable) {
-            console.info('Dropbox sync partial — auto-retrying...');
-            await syncOnce();
-          }
-        } catch (e) {
-          console.warn('Dropbox sync trigger failed (non-fatal):', e);
-        }
+        void syncOnce(true)
+          .then(async (res) => {
+            if (res.ok) return;
+            const result = await res.json().catch(() => null);
+            if (result?.retryable) await syncOnce(false);
+          })
+          .catch((e) => {
+            console.warn('Dropbox sync trigger failed (non-fatal):', e);
+          });
       }
-
-      // Call notify endpoint
-      setUploadProgress('Sending notification...');
-      setUploadPct(95);
-      const brandForNotify = brands.find((b) => b.id === selectedBrandId);
-      const brandName = brandForNotify?.name || 'Unknown brand';
-      await fetch('/api/notify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          brandName,
-          brandId: selectedBrandId,
-          batchCount: batches.length,
-          totalFiles: batches.reduce((sum, b) => sum + b.files.length, 0),
-          batches: batches.map((b) => {
-            const names = planCreativeFileNames({
-              brandName: brandForNotify?.name,
-              brandSlug: brandForNotify?.slug,
-              pattern: brandForNotify?.file_naming_pattern,
-              files: b.files.map((file, i) => ({
-                name: file.name,
-                context: b.fileContexts[i],
-                media: b.fileMediaInfo[i],
-              })),
-            });
-            return {
-              batchName: b.batchName,
-              creativeType: b.creativeType,
-              creatorName: b.creatorName || 'Unknown',
-              creatorSocialHandle: b.creatorSocialHandle || null,
-              landingPageUrl: b.landingPageUrl || null,
-              fileCount: b.files.length,
-              fileNames: names,
-              originalFileNames: b.files.map((f) => f.name),
-            };
-          }),
-        }),
-      });
 
       setUploadPct(100);
       setUploadProgress(null);
@@ -1012,18 +975,17 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
     return out;
   }, [batches, selectedBrand]);
 
-  // Compute duplicate warnings for each file (uploaded name and Dropbox name)
+  // Duplicate warnings compare the uploaded filename only. Proposed Dropbox
+  // names repeat across batches on purpose — each batch has its own folder.
   const fileDupeWarnings = useMemo(() => {
     const warnings: Record<string, Record<number, string>> = {};
 
     for (const batch of batches) {
       const batchWarnings: Record<number, string> = {};
       const seenInBatch = new Map<string, number>();
-      const proposed = proposedByBatch[batch.id] || [];
 
       for (let i = 0; i < batch.files.length; i++) {
         const name = batch.files[i].name;
-        const dropboxName = proposed[i];
 
         if (seenInBatch.has(name)) {
           batchWarnings[i] = `Duplicate in this batch`;
@@ -1035,25 +997,15 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
           seenInBatch.set(name, i);
         }
 
-        if (!batchWarnings[i] && dropboxName && dropboxName !== name && seenInBatch.has(dropboxName)) {
-          batchWarnings[i] = `Duplicate in this batch`;
-        } else if (dropboxName) {
-          seenInBatch.set(dropboxName, i);
-        }
-
-        const priorName = !batchWarnings[i] && existingFiles.has(name) ? name : null;
-        const priorDropbox =
-          !batchWarnings[i] && dropboxName && existingFiles.has(dropboxName) ? dropboxName : null;
-        const prior = priorName || priorDropbox;
-        if (prior) {
-          batchWarnings[i] = `Already uploaded in ${existingFiles.get(prior)}`;
+        if (!batchWarnings[i] && existingFiles.has(name)) {
+          batchWarnings[i] = `Already uploaded in ${existingFiles.get(name)}`;
         }
       }
 
       warnings[batch.id] = batchWarnings;
     }
     return warnings;
-  }, [batches, existingFiles, proposedByBatch]);
+  }, [batches, existingFiles]);
 
   const stats = useMemo(() => {
     return {

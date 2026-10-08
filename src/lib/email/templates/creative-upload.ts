@@ -17,13 +17,15 @@ export interface CreativeUploadData {
   batchCount: number;
   totalFiles: number;
   batches: CreativeUploadBatch[];
+  /** True when tagging had not finished, so the names can still change. */
+  namesPlanned?: boolean;
 }
 
 export function renderCreativeUpload(data: CreativeUploadData): {
   subject: string;
   html: string;
 } {
-  const { brandName, batchCount, totalFiles, batches } = data;
+  const { brandName, batchCount, totalFiles, batches, namesPlanned } = data;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://melch.cloud';
 
   const subject =
@@ -81,10 +83,15 @@ export function renderCreativeUpload(data: CreativeUploadData): {
     })
     .join('');
 
+  const plannedNote = namesPlanned
+    ? `<p style="color:#C8B89A;font-size:12px;margin:0 0 12px 0;">File names are planned and can still change after tagging.</p>`
+    : '';
+
   const body = `
     <p style="color:#ABABAB;font-size:13px;margin:0 0 8px 0;">
       ${batchCount === 1 ? 'New creative submission' : `${batchCount} new creative batches`} for <strong style="color:#F5F5F8;">${escapeHtml(brandName)}</strong>
     </p>
+    ${plannedNote}
     ${summary}
     ${batchCards}
   `;

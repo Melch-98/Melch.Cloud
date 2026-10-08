@@ -11,7 +11,8 @@ describe('grok vision request', () => {
   it('defaults to the non-reasoning model and sends jpeg data URLs at low detail', () => {
     const body = buildGrokChatBody({
       model: DEFAULT_XAI_VISION_MODEL,
-      prompt: 'tag this',
+      sharedPrompt: 'Brand catalog and instructions',
+      filePrompt: 'File name: clip.mp4',
       images: [{ mediaType: 'image/jpeg', base64: 'aaaa' }],
     });
     expect(body.model).toBe('grok-4.20-0309-non-reasoning');
@@ -19,9 +20,17 @@ describe('grok vision request', () => {
     const format = body.response_format as { type: string; json_schema: { strict: boolean } };
     expect(format.type).toBe('json_schema');
     expect(format.json_schema.strict).toBe(true);
-    const messages = body.messages as Array<{ content: unknown }>;
-    const user = messages[1].content as Array<{ type: string; image_url?: { url: string; detail: string } }>;
-    expect(user[0]).toEqual({
+    const messages = body.messages as Array<{ role: string; content: unknown }>;
+    expect(String(messages[0].content)).toContain('0.8');
+    const user = messages[1].content as Array<{
+      type: string;
+      text?: string;
+      image_url?: { url: string; detail: string };
+    }>;
+    expect(user.map((part) => part.type)).toEqual(['text', 'text', 'image_url']);
+    expect(user[0].text).toBe('Brand catalog and instructions');
+    expect(user[1].text).toContain('File name:');
+    expect(user[2]).toEqual({
       type: 'image_url',
       image_url: { url: 'data:image/jpeg;base64,aaaa', detail: 'low' },
     });
