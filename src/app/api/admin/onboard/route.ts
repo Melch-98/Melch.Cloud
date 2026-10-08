@@ -1,8 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { ensureDropboxFolder } from '@/lib/dropbox';
-import { sendEmail } from '@/lib/email';
-import { ensureUserWithInviteLink, appUrl } from '@/lib/invite';
+import { ensureUserWithInviteLink } from '@/lib/invite';
+import { sendInviteEmail } from '@/lib/invite-mail';
+import { invitePermissionError } from '@/lib/invite-status';
+import {
+  EXISTING_ACCOUNT_MESSAGE,
+  existingAccountBlock,
+  exposeActionLink,
+  findAccountByEmail,
+  mustSendWelcomeEmail,
+  onboardActionBlock,
+} from '@/lib/invite-access';
 import { rolePermissionDefaults } from '@/lib/role-defaults';
 
 export const dynamic = 'force-dynamic';
@@ -22,7 +31,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Server config error' }, { status: 500 });
   }
 
-  const supabase = createClient(supabaseUrl, serviceKey);
+  const supabase = createClient(supabaseUrl, serviceKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
 
   // Verify admin auth
   const authHeader = request.headers.get('authorization');
@@ -34,7 +45,7 @@ export async function POST(request: NextRequest) {
 
   const { data: profile } = await supabase
     .from('users_profile')
-    .select('role')
+    .select('role, brand_id')
     .eq('id', user.id)
     .single();
 
@@ -49,6 +60,9 @@ export async function POST(request: NextRequest) {
   /*  Create brand                                                     */
   /* ---------------------------------------------------------------- */
   if (action === 'create_brand') {
+    const blocked = onboardActionBlock(profile, action, null);
+    if (blocked) return NextResponse.json({ error: blocked }, { status: 403 });
+
     const { name, slug, website_url, gross_margin_pct } = body;
     if (!name?.trim()) {
       return NextResponse.json({ error: 'Brand name is required' }, { status: 400 });
@@ -89,6 +103,8 @@ export async function POST(request: NextRequest) {
   if (action === 'set_integrations') {
     const { brand_id, meta_ad_account_id, google_ads_customer_id, shopify_store_domain } = body;
     if (!brand_id) return NextResponse.json({ error: 'brand_id required' }, { status: 400 });
+    const blocked = onboardActionBlock(profile, action, brand_id);
+    if (blocked) return NextResponse.json({ error: blocked }, { status: 403 });
 
     const update: Record<string, any> = {};
     if (meta_ad_account_id !== undefined) update.meta_ad_account_id = meta_ad_account_id;
@@ -113,6 +129,8 @@ export async function POST(request: NextRequest) {
   if (action === 'set_dropbox') {
     const { brand_id, dropbox_folder_path } = body;
     if (!brand_id) return NextResponse.json({ error: 'brand_id required' }, { status: 400 });
+    const blocked = onboardActionBlock(profile, action, brand_id);
+    if (blocked) return NextResponse.json({ error: blocked }, { status: 403 });
 
     const folderPath = dropbox_folder_path || null;
 
@@ -146,6 +164,30 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'users array required' }, { status: 400 });
     }
 
+    const denied = invitePermissionError(
+      { role: profile.role, brandId: profile.brand_id },
+      brand_id
+    );
+    if (denied) return NextResponse.json({ error: denied }, { status: 403 });
+
+    const shouldEmail = mustSendWelcomeEmail(profile.role, sendWelcomeEmail);
+    if (profile.role !== 'admin') {
+      for (const u of users) {
+        const email = String(u.email || '').trim().toLowerCase();
+        if (!email) continue;
+        try {
+          const found = await findAccountByEmail(supabase, email);
+          const blocked = existingAccountBlock(profile.role, found);
+          if (blocked) return NextResponse.json({ error: blocked }, { status: 409 });
+        } catch (e: any) {
+          return NextResponse.json(
+            { error: e?.message || 'Could not check that email' },
+            { status: 500 }
+          );
+        }
+      }
+    }
+
     let brandName: string | undefined;
     {
       const { data: brand } = await supabase
@@ -156,7 +198,6 @@ export async function POST(request: NextRequest) {
       brandName = brand?.name;
     }
 
-    const shouldEmail = sendWelcomeEmail !== false;
     const results: any[] = [];
     for (const u of users) {
       const email = String(u.email || '').trim().toLowerCase();
@@ -165,62 +206,93 @@ export async function POST(request: NextRequest) {
       const full_name = (u.full_name || email.split('@')[0]).trim();
 
       try {
+        if (role === 'admin' && profile.role !== 'admin') {
+          results.push({ email, error: 'Only an admin can invite another admin' });
+          continue;
+        }
+
         const invited = await ensureUserWithInviteLink(supabase, email, {
           fullName: full_name,
         });
 
-        await supabase.from('users_profile').upsert(
-          {
-            id: invited.userId,
-            email,
-            full_name,
-            role,
-            brand_id,
-          },
-          { onConflict: 'id' }
-        );
-
-        const perms = rolePermissionDefaults(role);
-        await supabase.from('user_permissions').upsert(
-          { user_id: invited.userId, ...perms },
-          { onConflict: 'user_id' }
-        );
-
-        let welcomeEmail: { sent: boolean; error?: string; skipped?: string } | null = null;
-        if (shouldEmail) {
-          const result = await sendEmail({
-            to: email,
-            template: {
-              name: 'welcome',
-              data: {
-                name: full_name,
-                role,
-                brandName,
-                loginUrl: appUrl(),
-                inviteLink: invited.actionLink || undefined,
-                invitedBy: user.email || undefined,
-              },
-            },
-          });
-          welcomeEmail = {
-            sent: result.sent,
-            error: result.error,
-            skipped: result.skipped,
-          };
+        if (profile.role !== 'admin' && invited.isExisting) {
+          return NextResponse.json({ error: EXISTING_ACCOUNT_MESSAGE }, { status: 409 });
         }
 
-        const emailOk = welcomeEmail?.sent === true;
-        const showLink = !shouldEmail || !emailOk;
+        const profileRow = {
+          id: invited.userId,
+          email,
+          full_name,
+          role,
+          brand_id,
+        };
+        const profileResult =
+          profile.role === 'admin'
+            ? await supabase.from('users_profile').upsert(profileRow, { onConflict: 'id' })
+            : await supabase.from('users_profile').insert(profileRow);
+        if (profileResult.error) {
+          results.push({ email, error: `Profile creation failed: ${profileResult.error.message}` });
+          continue;
+        }
+
+        const perms = rolePermissionDefaults(role);
+        const permsRow = { user_id: invited.userId, ...perms };
+        const permsResult =
+          profile.role === 'admin'
+            ? await supabase.from('user_permissions').upsert(permsRow, { onConflict: 'user_id' })
+            : await supabase.from('user_permissions').insert(permsRow);
+        if (permsResult.error) {
+          console.error('Permissions upsert failed (non-fatal):', permsResult.error.message);
+        }
+
+        if (!shouldEmail) {
+          results.push({
+            email,
+            userId: invited.userId,
+            ok: true,
+            isExisting: invited.isExisting,
+            delivery: {
+              delivered: false,
+              message: 'Welcome email was not requested',
+              showCopyLink: true,
+              resendMessageId: null,
+            },
+            welcomeEmail: null,
+            actionLink: exposeActionLink(profile.role, invited.actionLink, true),
+            linkType: invited.linkType,
+          });
+          continue;
+        }
+
+        const sent = await sendInviteEmail(supabase, {
+          to: email,
+          name: full_name,
+          role,
+          brandName,
+          inviteLink: invited.actionLink,
+          invitedBy: user.email || undefined,
+          userId: invited.userId,
+          brandId: brand_id,
+          invitedById: user.id,
+          linkType: invited.linkType,
+          source: 'onboard',
+        });
 
         results.push({
           email,
           userId: invited.userId,
           ok: true,
           isExisting: invited.isExisting,
-          welcomeEmail,
-          // One-time set-password link for admin UI when email fails / skipped
-          actionLink: showLink ? invited.actionLink : null,
+          delivery: sent.delivery,
+          logError: sent.logError,
+          welcomeEmail: {
+            sent: sent.delivery.delivered,
+            error: sent.delivery.delivered ? undefined : sent.delivery.message,
+            id: sent.delivery.resendMessageId,
+          },
+          actionLink: exposeActionLink(profile.role, invited.actionLink, sent.delivery.showCopyLink),
           linkType: invited.linkType,
+          linkError: invited.linkError,
         });
       } catch (e: any) {
         results.push({ email, error: e?.message || 'Invite failed' });
@@ -236,6 +308,8 @@ export async function POST(request: NextRequest) {
   if (action === 'archive_brand') {
     const { brand_id } = body;
     if (!brand_id) return NextResponse.json({ error: 'brand_id required' }, { status: 400 });
+    const blocked = onboardActionBlock(profile, action, brand_id);
+    if (blocked) return NextResponse.json({ error: blocked }, { status: 403 });
 
     // Set archived_at
     const { error } = await supabase
@@ -268,6 +342,8 @@ export async function POST(request: NextRequest) {
   if (action === 'restore_brand') {
     const { brand_id } = body;
     if (!brand_id) return NextResponse.json({ error: 'brand_id required' }, { status: 400 });
+    const blocked = onboardActionBlock(profile, action, brand_id);
+    if (blocked) return NextResponse.json({ error: blocked }, { status: 403 });
 
     const { error } = await supabase
       .from('brands')

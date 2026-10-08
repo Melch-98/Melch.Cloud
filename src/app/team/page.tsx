@@ -23,7 +23,6 @@ import {
   User,
   Rocket,
   Activity,
-  Link2,
   KeyRound,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -146,15 +145,19 @@ function PermissionToggle({
 
 function MemberRow({
   user,
+  pending,
   onUpdatePermission,
   onUpdateRole,
   onRemoveFromTeam,
+  onResendInvite,
   saving,
 }: {
   user: UserProfile;
+  pending?: boolean;
   onUpdatePermission: (userId: string, field: string, value: boolean) => void;
   onUpdateRole: (userId: string, role: 'admin' | 'strategist' | 'founder') => void;
   onRemoveFromTeam: (userId: string) => void;
+  onResendInvite?: (userId: string) => void;
   saving: boolean;
 }) {
   const [showRoleMenu, setShowRoleMenu] = useState(false);
@@ -171,6 +174,17 @@ function MemberRow({
           {user.full_name || user.email.split('@')[0]}
         </p>
         <p className="text-xs text-gray-500 truncate">{user.email}</p>
+        {pending && (
+          <button
+            type="button"
+            onClick={() => onResendInvite?.(user.id)}
+            disabled={saving}
+            className="text-[10px] font-medium mt-1"
+            style={{ color: '#C8B89A' }}
+          >
+            Resend invite
+          </button>
+        )}
       </div>
 
       {/* Permissions */}
@@ -329,11 +343,13 @@ function TeamCard({
   onUpdateRole,
   onAddMember,
   onRemoveMember,
+  onResendInvite,
   onUpdateBrand,
   onArchiveBrand,
   saving,
   healthChips,
   healthLoading,
+  pendingIds,
 }: {
   brand: Brand;
   members: UserProfile[];
@@ -342,11 +358,13 @@ function TeamCard({
   onUpdateRole: (userId: string, role: 'admin' | 'strategist' | 'founder') => void;
   onAddMember: (userId: string, brandId: string) => void;
   onRemoveMember: (userId: string) => void;
+  onResendInvite: (userId: string) => void;
   onUpdateBrand: (brandId: string, field: string, value: string) => void;
   onArchiveBrand: (brand: Brand) => void;
   saving: boolean;
   healthChips?: HealthChip[];
   healthLoading?: boolean;
+  pendingIds: Set<string>;
 }) {
   const [expanded, setExpanded] = useState(true);
   const [showAddMenu, setShowAddMenu] = useState(false);
@@ -1050,9 +1068,11 @@ function TeamCard({
               <MemberRow
                 key={m.id}
                 user={m}
+                pending={pendingIds.has(m.id)}
                 onUpdatePermission={onUpdatePermission}
                 onUpdateRole={onUpdateRole}
                 onRemoveFromTeam={onRemoveMember}
+                onResendInvite={onResendInvite}
                 saving={saving}
               />
             ))
@@ -1232,8 +1252,8 @@ interface InviteResult {
   role: string;
   isExisting?: boolean;
   actionLink?: string | null;
-  emailSent?: boolean;
-  emailError?: string;
+  delivered: boolean;
+  message: string;
 }
 
 function InviteMemberModal({
@@ -1256,7 +1276,6 @@ function InviteMemberModal({
   const [fullName, setFullName] = useState('');
   const [role, setRole] = useState<'admin' | 'strategist' | 'founder'>('strategist');
   const [brandId, setBrandId] = useState<string>('');
-  const [sendWelcomeEmail, setSendWelcomeEmail] = useState(true);
 
   const [result, setResult] = useState<InviteResult | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
@@ -1267,7 +1286,6 @@ function InviteMemberModal({
     setFullName('');
     setRole('strategist');
     setBrandId('');
-    setSendWelcomeEmail(true);
     setError(null);
     setResult(null);
     setCopied(null);
@@ -1306,7 +1324,6 @@ function InviteMemberModal({
           fullName: fullName.trim() || undefined,
           role,
           brandId: brandId || undefined,
-          sendWelcomeEmail,
         }),
       });
 
@@ -1324,8 +1341,12 @@ function InviteMemberModal({
         role,
         isExisting: data.isExisting || false,
         actionLink: data.invite?.actionLink || null,
-        emailSent: data.invite?.emailSent === true || data.welcomeEmail?.sent === true,
-        emailError: data.welcomeEmail?.error || data.welcomeEmail?.skipped,
+        delivered: data.delivery?.delivered === true,
+        message:
+          data.delivery?.message ||
+          (data.invite?.emailSent
+            ? `Invite email delivered to ${email.trim().toLowerCase()}`
+            : data.welcomeEmail?.error || 'Invite email was not sent'),
       });
       setStep('success');
       onCreated();
@@ -1362,12 +1383,14 @@ function InviteMemberModal({
             </div>
             <div>
               <h3 className="text-base font-bold text-[#F5F5F8]">
-                {step === 'form' ? 'Invite Member' : 'Invite Sent'}
+                {step === 'form' ? 'Invite Member' : result?.delivered ? 'Invite delivered' : 'Invite not delivered'}
               </h3>
               <p className="text-[11px] text-gray-500">
                 {step === 'form'
-                  ? 'Email a set-password invite link'
-                  : 'Share the fallback link if email did not arrive'}
+                  ? 'They’ll get an email to set a password'
+                  : result?.delivered
+                    ? 'The email is in their inbox'
+                    : 'The email did not go out'}
               </p>
             </div>
           </div>
@@ -1497,26 +1520,6 @@ function InviteMemberModal({
               </div>
             )}
 
-            <label
-              className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg cursor-pointer select-none transition-colors hover:bg-white/[0.03]"
-              style={{ backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}
-            >
-              <input
-                type="checkbox"
-                checked={sendWelcomeEmail}
-                onChange={(e) => setSendWelcomeEmail(e.target.checked)}
-                className="w-4 h-4 rounded cursor-pointer accent-[#C8B89A]"
-              />
-              <div className="flex-1">
-                <p className="text-xs font-medium" style={{ color: '#F5F5F8' }}>
-                  Send welcome email
-                </p>
-                <p className="text-[10px]" style={{ color: '#555' }}>
-                  Includes a one-time set-password invite link (Resend)
-                </p>
-              </div>
-            </label>
-
             <div className="flex justify-end gap-3 pt-3" style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
               <button
                 onClick={handleClose}
@@ -1554,28 +1557,27 @@ function InviteMemberModal({
             <div
               className="flex items-center gap-3 px-4 py-3 rounded-xl"
               style={{
-                backgroundColor: result?.emailSent ? 'rgba(52,168,83,0.08)' : 'rgba(200,184,154,0.08)',
-                border: `1px solid ${result?.emailSent ? 'rgba(52,168,83,0.15)' : 'rgba(200,184,154,0.2)'}`,
+                backgroundColor: result?.delivered ? 'rgba(52,168,83,0.08)' : 'rgba(239,68,68,0.08)',
+                border: `1px solid ${result?.delivered ? 'rgba(52,168,83,0.15)' : 'rgba(239,68,68,0.25)'}`,
               }}
             >
               <div
                 className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-                style={{ backgroundColor: result?.emailSent ? 'rgba(52,168,83,0.2)' : 'rgba(200,184,154,0.2)' }}
+                style={{ backgroundColor: result?.delivered ? 'rgba(52,168,83,0.2)' : 'rgba(239,68,68,0.15)' }}
               >
-                {result?.emailSent ? (
+                {result?.delivered ? (
                   <Check size={16} style={{ color: '#34A853' }} />
                 ) : (
-                  <Link2 size={16} style={{ color: '#C8B89A' }} />
+                  <AlertCircle size={16} style={{ color: '#EF4444' }} />
                 )}
               </div>
               <div>
-                <p className="text-sm font-medium" style={{ color: result?.emailSent ? '#34A853' : '#C8B89A' }}>
-                  {result?.fullName} has been {result?.isExisting ? 'updated' : 'invited'}
+                <p className="text-sm font-medium" style={{ color: result?.delivered ? '#34A853' : '#EF4444' }}>
+                  {result?.message}
                 </p>
                 <p className="text-[11px]" style={{ color: '#555' }}>
-                  {result?.emailSent
-                    ? 'Welcome email sent with set-password link'
-                    : `Email not sent${result?.emailError ? ` (${result.emailError})` : ''} — copy the one-time link below`}
+                  {result?.fullName} has been {result?.isExisting ? 'updated' : 'added'}
+                  {result?.delivered ? '' : '. Copy the one-time link below and send it yourself.'}
                 </p>
               </div>
             </div>
@@ -1680,6 +1682,8 @@ export default function TeamPage() {
   const [toastMessage, setToastMessage] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
+  const [resendNotice, setResendNotice] = useState<{ message: string; ok: boolean; actionLink?: string | null } | null>(null);
 
   const toast = (msg: string) => {
     setToastMessage(msg);
@@ -1787,8 +1791,57 @@ export default function TeamPage() {
   }, [supabase]);
 
   useEffect(() => {
-    if (!loading && brands.length > 0) fetchBrandHealth();
+    if (!loading && brands.length >= 0) fetchBrandHealth();
   }, [loading, brands.length, fetchBrandHealth]);
+
+  const fetchPending = useCallback(async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+      const res = await fetch('/api/admin/pending-members', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      setPendingIds(new Set(data.pendingUserIds || []));
+    } catch {
+      /* non-fatal */
+    }
+  }, [supabase]);
+
+  useEffect(() => {
+    if (!loading) fetchPending();
+  }, [loading, fetchPending]);
+
+  const handleResendInvite = useCallback(async (userId: string) => {
+    setSaving(true);
+    setResendNotice(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) { setError('Not authenticated'); setSaving(false); return; }
+      const res = await fetch('/api/admin/resend-invite', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ userId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setResendNotice({ ok: false, message: data.error || 'Could not resend the invite' });
+      } else {
+        setResendNotice({
+          ok: data.delivery?.delivered === true,
+          message: data.delivery?.message || data.error || 'Invite email was not sent',
+          actionLink: data.actionLink || null,
+        });
+      }
+    } catch {
+      setResendNotice({ ok: false, message: 'Could not resend the invite' });
+    }
+    setSaving(false);
+  }, [supabase]);
 
   /* ── Handlers ── */
 
@@ -2093,6 +2146,35 @@ export default function TeamPage() {
           </div>
         </div>
 
+        {resendNotice && (
+          <div
+            className="mb-6 p-4 rounded-lg"
+            style={{
+              backgroundColor: resendNotice.ok ? 'rgba(52,168,83,0.08)' : 'rgba(239,68,68,0.08)',
+              border: `1px solid ${resendNotice.ok ? 'rgba(52,168,83,0.25)' : 'rgba(239,68,68,0.25)'}`,
+            }}
+          >
+            <div className="flex items-start gap-3">
+              {resendNotice.ok ? (
+                <Check className="w-5 h-5 flex-shrink-0" style={{ color: '#34A853' }} />
+              ) : (
+                <AlertCircle className="w-5 h-5 flex-shrink-0" style={{ color: '#EF4444' }} />
+              )}
+              <p className="text-sm flex-1" style={{ color: resendNotice.ok ? '#34A853' : '#EF4444' }}>
+                {resendNotice.message}
+              </p>
+              <button onClick={() => setResendNotice(null)} style={{ color: '#888' }}>
+                <X size={16} />
+              </button>
+            </div>
+            {!resendNotice.ok && resendNotice.actionLink && (
+              <p className="mt-3 text-[11px] font-mono break-all" style={{ color: '#C8B89A' }}>
+                {resendNotice.actionLink}
+              </p>
+            )}
+          </div>
+        )}
+
         {error && (
           <div
             className="mb-6 p-4 rounded-lg flex items-center gap-3"
@@ -2138,6 +2220,17 @@ export default function TeamPage() {
                       </p>
                       <p className="text-xs text-gray-500 truncate">{u.email}</p>
                     </div>
+                    {pendingIds.has(u.id) && (
+                      <button
+                        type="button"
+                        onClick={() => handleResendInvite(u.id)}
+                        disabled={saving}
+                        className="text-[10px] font-medium"
+                        style={{ color: '#C8B89A' }}
+                      >
+                        Resend invite
+                      </button>
+                    )}
                     <span
                       className="px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider"
                       style={{
@@ -2166,6 +2259,8 @@ export default function TeamPage() {
               onUpdateRole={handleUpdateRole}
               onAddMember={handleAddMember}
               onRemoveMember={handleRemoveMember}
+              onResendInvite={handleResendInvite}
+              pendingIds={pendingIds}
               onUpdateBrand={handleUpdateBrand}
               onArchiveBrand={handleArchiveBrand}
               saving={saving}
@@ -2204,6 +2299,17 @@ export default function TeamPage() {
                       </p>
                       <p className="text-xs text-gray-500 truncate">{u.email}</p>
                     </div>
+                    {pendingIds.has(u.id) && (
+                      <button
+                        type="button"
+                        onClick={() => handleResendInvite(u.id)}
+                        disabled={saving}
+                        className="text-[10px] font-medium"
+                        style={{ color: '#C8B89A' }}
+                      >
+                        Resend invite
+                      </button>
+                    )}
                     <span className="text-xs text-gray-500">No team assigned</span>
                   </div>
                 ))}
@@ -2225,7 +2331,7 @@ export default function TeamPage() {
         brands={brands}
         onCreated={() => {
           fetchData();
-          toast('Invite sent');
+          fetchPending();
         }}
       />
       <Toast message={toastMessage} visible={showToast} />
