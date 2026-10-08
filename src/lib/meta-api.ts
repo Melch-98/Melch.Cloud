@@ -95,7 +95,7 @@ export interface CopyInput {
   ad_count: number;
 }
 
-const META_API_BASE = 'https://graph.facebook.com/v21.0';
+export const META_API_BASE = 'https://graph.facebook.com/v21.0';
 
 // In-memory blob list cache (avoids hitting Vercel Blob API on every request)
 const BLOB_LIST_TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -276,14 +276,16 @@ function extractVideoMetric(
 
 // ─── Fetch Ad Accounts ──────────────────────────────────────────
 
-async function fetchAllPages(url: string): Promise<any[]> {
+export async function fetchAllPages(url: string): Promise<any[]> {
   let results: any[] = [];
   let nextUrl: string | null = url;
   while (nextUrl) {
     const res = await fetch(nextUrl);
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error?.message || 'Failed to fetch ad accounts');
+      const err = await res.json().catch(() => ({}));
+      const error = new Error(err?.error?.message || 'Failed to fetch ad accounts') as Error & { code?: number };
+      error.code = Number(err?.error?.code) || 0;
+      throw error;
     }
     const data = await res.json();
     results = results.concat(data.data || []);

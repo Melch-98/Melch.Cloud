@@ -52,6 +52,7 @@ Design: dark `#0a0a0a`, text `#f5f5f8`, gold `#c8b89a` (`brand.*` in Tailwind).
 | `/analytics/efficiency`, `/analytics/ltv-cohorts`, `/analytics/forecast` | admin / founder | Efficiency, LTV, forecast — display via reporting currency |
 | `/analytics/trybe-program` | admin / strategist / founder | Trybe Program Overview (read-only). Nav: Creative Analytics → **Trybe Program**. Excludes FOND. |
 | `/analytics` (+ copy, ad perspective, matrix) | role-gated | Creative analytics. Matrix is admin + strategist. |
+| `/analytics/funnel-viewer` | admin / strategist / founder | Funnel Viewer constellation. Port of Odylic Constellation. One live route, `GET /api/funnel-viewer/ads`. Attribution default is 7-day click only (`FUNNEL_ATTRIBUTION` in `src/lib/meta-funnel.ts`). Non-admins are locked to `users_profile.brand_id`. |
 | `/ad-changelog` | admin + founder | Meta/Google status & budget diffs (snapshot-based; **manual “Refresh Now”** — no weekly cron). Admin brand picker lists non-archived brands; founder is locked to `users_profile.brand_id`. |
 | `/calendar`, `/copy-templates`, `/ad-lab`, `/stats` | role-gated | Calendar, copy library, experiments, file stats |
 | `/releases`, `/feature-requests`, `/account` | role-gated | App releases, FR board, profile |
