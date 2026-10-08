@@ -94,6 +94,10 @@ export default function SetPasswordPage() {
         body: JSON.stringify({ email: requestEmail.trim() }),
       });
       const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setRequestNote(data.error || 'Could not request a new link. Try again in a minute.');
+        return;
+      }
       setRequestNote(
         data.message || 'If that email has an account, a new set-password link is on the way.'
       );
