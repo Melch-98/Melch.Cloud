@@ -3,6 +3,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { ensureUserWithInviteLink } from '@/lib/invite';
 import { sendInviteEmail } from '@/lib/invite-mail';
 import { invitePermissionError } from '@/lib/invite-status';
+import { exposeActionLink, resendInviteBlock } from '@/lib/invite-access';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,6 +35,21 @@ export async function POST(request: NextRequest) {
   const denied = invitePermissionError(caller, target.brand_id);
   if (denied) return NextResponse.json({ error: denied }, { status: 403 });
 
+  let lastSignInAt: string | null = null;
+  if (caller.role !== 'admin') {
+    const { data: authUser, error: authLookupError } = await supabase.auth.admin.getUserById(target.id);
+    if (authLookupError || !authUser?.user) {
+      return NextResponse.json({ error: 'Could not check that member' }, { status: 500 });
+    }
+    lastSignInAt = authUser.user.last_sign_in_at ?? null;
+    const resendDenied = resendInviteBlock(caller, {
+      role: target.role,
+      brandId: target.brand_id,
+      lastSignInAt,
+    });
+    if (resendDenied) return NextResponse.json({ error: resendDenied }, { status: 403 });
+  }
+
   let brandName: string | undefined;
   if (target.brand_id) {
     const { data: brand } = await supabase.from('brands').select('name').eq('id', target.brand_id).maybeSingle();
@@ -63,7 +79,7 @@ export async function POST(request: NextRequest) {
       email: target.email,
       delivery: sent.delivery,
       logError: sent.logError,
-      actionLink: sent.delivery.showCopyLink ? invited.actionLink : null,
+      actionLink: exposeActionLink(caller.role, invited.actionLink, sent.delivery.showCopyLink),
       linkError: invited.linkError,
     });
   } catch (e: any) {

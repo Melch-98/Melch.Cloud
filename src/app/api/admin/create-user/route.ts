@@ -3,6 +3,14 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { ensureUserWithInviteLink } from '@/lib/invite';
 import { sendInviteEmail } from '@/lib/invite-mail';
 import { describeInviteDelivery, invitePermissionError } from '@/lib/invite-status';
+import {
+  EXISTING_ACCOUNT_MESSAGE,
+  existingAccountBlock,
+  exposeActionLink,
+  findAccountByEmail,
+  mustSendWelcomeEmail,
+  tempPasswordAllowed,
+} from '@/lib/invite-access';
 import { rolePermissionDefaults } from '@/lib/role-defaults';
 
 export const dynamic = 'force-dynamic';
@@ -45,6 +53,19 @@ export async function POST(request: NextRequest) {
   const normalizedEmail = String(email).trim().toLowerCase();
   const displayName = (fullName || normalizedEmail.split('@')[0]).trim();
 
+  if (caller.role !== 'admin') {
+    try {
+      const found = await findAccountByEmail(supabase, normalizedEmail);
+      const blocked = existingAccountBlock(caller.role, found);
+      if (blocked) return NextResponse.json({ error: blocked }, { status: 409 });
+    } catch (e: any) {
+      return NextResponse.json(
+        { error: e?.message || 'Could not check that email' },
+        { status: 500 }
+      );
+    }
+  }
+
   let userId: string;
   let isExisting = false;
   let actionLink: string | null = null;
@@ -61,7 +82,7 @@ export async function POST(request: NextRequest) {
     linkType = invited.linkType;
     linkError = invited.linkError;
   } catch (e: any) {
-    if (!tempPassword || String(tempPassword).length < 8) {
+    if (!tempPasswordAllowed(caller.role) || !tempPassword || String(tempPassword).length < 8) {
       return NextResponse.json(
         { error: e?.message || 'Invite link generation failed' },
         { status: 400 }
@@ -74,16 +95,21 @@ export async function POST(request: NextRequest) {
     isExisting = created.isExisting;
   }
 
-  const { error: profileError } = await supabase.from('users_profile').upsert(
-    {
-      id: userId,
-      email: normalizedEmail,
-      full_name: displayName,
-      role,
-      brand_id: targetBrandId,
-    },
-    { onConflict: 'id' }
-  );
+  if (caller.role !== 'admin' && isExisting) {
+    return NextResponse.json({ error: EXISTING_ACCOUNT_MESSAGE }, { status: 409 });
+  }
+
+  const profileRow = {
+    id: userId,
+    email: normalizedEmail,
+    full_name: displayName,
+    role,
+    brand_id: targetBrandId,
+  };
+  const { error: profileError } =
+    caller.role === 'admin'
+      ? await supabase.from('users_profile').upsert(profileRow, { onConflict: 'id' })
+      : await supabase.from('users_profile').insert(profileRow);
 
   if (profileError) {
     if (!isExisting) {
@@ -100,16 +126,17 @@ export async function POST(request: NextRequest) {
   }
 
   const perms = rolePermissionDefaults(role);
-  const { error: permsError } = await supabase.from('user_permissions').upsert(
-    { user_id: userId, ...perms },
-    { onConflict: 'user_id' }
-  );
+  const permsRow = { user_id: userId, ...perms };
+  const { error: permsError } =
+    caller.role === 'admin'
+      ? await supabase.from('user_permissions').upsert(permsRow, { onConflict: 'user_id' })
+      : await supabase.from('user_permissions').insert(permsRow);
 
   if (permsError) {
     console.error('Permissions upsert failed (non-fatal):', permsError.message);
   }
 
-  const shouldEmail = sendWelcomeEmail !== false;
+  const shouldEmail = mustSendWelcomeEmail(caller.role, sendWelcomeEmail);
   let brandName: string | undefined;
   if (targetBrandId) {
     const { data: brand } = await supabase.from('brands').select('name').eq('id', targetBrandId).single();
@@ -125,7 +152,7 @@ export async function POST(request: NextRequest) {
       welcomeEmail: null,
       invite: {
         linkType,
-        actionLink,
+        actionLink: exposeActionLink(caller.role, actionLink, true),
         linkError,
         emailSent: false,
       },
@@ -165,7 +192,7 @@ export async function POST(request: NextRequest) {
     },
     invite: {
       linkType,
-      actionLink: sent.delivery.showCopyLink ? actionLink : null,
+      actionLink: exposeActionLink(caller.role, actionLink, sent.delivery.showCopyLink),
       linkError,
       emailSent: sent.delivery.delivered,
       resendMessageId: sent.delivery.resendMessageId,
@@ -253,33 +280,10 @@ async function createWithTempPassword(
     (createError.message?.includes('already been registered') ||
       createError.message?.includes('already exists'))
   ) {
-    const { data: listData, error: listError } = await supabase.auth.admin.listUsers({ perPage: 1000 });
-    if (listError) {
-      return { ok: false, response: NextResponse.json({ error: listError.message }, { status: 500 }) };
-    }
-    const existingUser = listData.users.find((u) => u.email?.toLowerCase() === email);
-    if (!existingUser) {
-      return {
-        ok: false,
-        response: NextResponse.json(
-          { error: 'User reported as existing but could not be found' },
-          { status: 500 }
-        ),
-      };
-    }
-    const { error: updateError } = await supabase.auth.admin.updateUserById(existingUser.id, {
-      password: tempPassword,
-    });
-    if (updateError) {
-      return {
-        ok: false,
-        response: NextResponse.json(
-          { error: `Password reset failed: ${updateError.message}` },
-          { status: 500 }
-        ),
-      };
-    }
-    return { ok: true, userId: existingUser.id, isExisting: true };
+    return {
+      ok: false,
+      response: NextResponse.json({ error: EXISTING_ACCOUNT_MESSAGE }, { status: 409 }),
+    };
   }
 
   return {

@@ -13,6 +13,8 @@ export default defineConfig({
       'src/lib/creative-tag-sync.test.ts',
       'src/lib/invite-status.test.ts',
       'src/lib/set-password-token.test.ts',
+      'src/lib/set-password-limit.test.ts',
+      'src/app/api/admin/invite-security.test.ts',
     ],
   },
   resolve: {

@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { recoveryLinkForExisting } from '@/lib/invite';
 import { recentSelfServiceSend, sendInviteEmail } from '@/lib/invite-mail';
+import {
+  allowSetPasswordIp,
+  allowSetPasswordOverall,
+  clientIp,
+  countRecentSelfServiceSends,
+} from '@/lib/set-password-limit';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,6 +32,10 @@ export async function POST(request: NextRequest) {
 
   const body = await request.json().catch(() => ({}));
   const email = String(body.email || '').trim().toLowerCase();
+
+  const ipLimit = await allowSetPasswordIp({ ip: clientIp(request.headers) });
+  if (!ipLimit.allowed) return NextResponse.json(GENERIC);
+
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return NextResponse.json(GENERIC);
   }
@@ -33,6 +43,11 @@ export async function POST(request: NextRequest) {
   if (await recentSelfServiceSend(supabase, email, 2 * 60 * 1000)) {
     return NextResponse.json(GENERIC);
   }
+
+  const overallLimit = await allowSetPasswordOverall({
+    recentSelfServiceCount: () => countRecentSelfServiceSends(supabase),
+  });
+  if (!overallLimit.allowed) return NextResponse.json(GENERIC);
 
   const link = await recoveryLinkForExisting(supabase, email);
   if (!link?.actionLink) return NextResponse.json(GENERIC);
