@@ -42,7 +42,11 @@ async function sendSlackNotification(body: CreativeUploadData) {
       b.fileNames.length > 0
         ? b.fileNames
             .slice(0, 8)
-            .map((n) => `• ${n}`)
+            .map((n, i) => {
+              const original = b.originalFileNames?.[i];
+              const was = original && original !== n ? ` (uploaded as ${original})` : '';
+              return `• ${n}${was}`;
+            })
             .join('\n') +
           (b.fileNames.length > 8 ? `\n…and ${b.fileNames.length - 8} more` : '')
         : '_no files_';

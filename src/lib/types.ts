@@ -68,6 +68,9 @@ export interface SubmissionFile {
   id: string;
   submission_id: string;
   file_name: string;
+  original_file_name?: string | null;
+  auto_tags?: Record<string, unknown> | null;
+  tag_source?: string | null;
   file_type: string;
   file_size: number;
   file_url: string;
@@ -145,6 +148,19 @@ export interface FileContext {
   copyTemplate: string;
   creatorName: string;
   creatorHandle: string;
+  /** Hand-edited Dropbox name. Empty means the formula still owns the name. */
+  customFileName?: string;
+  lockedFields?: {
+    creativeType?: boolean;
+    productId?: boolean;
+    hookAngle?: boolean;
+    landingPageUrl?: boolean;
+    fileName?: boolean;
+  };
+  /** Fields last filled by the model. A later user edit removes the field. */
+  autoFilled?: Array<'creativeType' | 'productId' | 'hookAngle' | 'landingPageUrl'>;
+  tagStatus?: 'running' | 'done' | 'error' | 'skipped';
+  autoTags?: Record<string, unknown> | null;
 }
 
 // ─── Batch Form Data (upload form) ──────────────────────────────
@@ -154,6 +170,7 @@ export interface FileMediaInfo {
   aspectRatio: AspectRatio;
   width: number;
   height: number;
+  durationSeconds?: number;
 }
 
 export interface BatchFormData {

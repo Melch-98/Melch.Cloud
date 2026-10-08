@@ -14,6 +14,7 @@ import {
 import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
 import { CREATIVE_TYPE_GROUPS, CREATIVE_TYPES_MAP, getCreativeTypeLabel } from '@/lib/creative-types';
+import { matrixPageColumnKey } from '@/lib/creative-matrix';
 
 // ─── Types ────────────────────────────────────────────────────────
 
@@ -320,10 +321,9 @@ export default function CreativeMatrixPage() {
 
       const row = rowMap.get(productKey)!;
 
-      // Determine column group from creative_type
-      const typeInfo = CREATIVE_TYPES_MAP.get(file.creative_type);
-      if (typeInfo) {
-        const colKey = `${typeInfo.fidelity === 'high_def' ? 'hd' : typeInfo.fidelity}_${typeInfo.format}` as ColKey;
+      // Column comes from the creative type's fidelity + format in CREATIVE_TYPES_MAP.
+      const colKey = matrixPageColumnKey(file.creative_type);
+      if (colKey) {
         row.counts[colKey]++;
         row.details[colKey][file.creative_type] = (row.details[colKey][file.creative_type] || 0) + 1;
         row.total++;

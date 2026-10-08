@@ -8,6 +8,8 @@ export interface CreativeUploadBatch {
   landingPageUrl: string | null;
   fileCount: number;
   fileNames: string[];
+  /** Uploaded filenames, parallel to fileNames, when the Dropbox name differs. */
+  originalFileNames?: string[];
 }
 
 export interface CreativeUploadData {
@@ -43,10 +45,14 @@ export function renderCreativeUpload(data: CreativeUploadData): {
         b.fileNames.length > 0
           ? b.fileNames
               .slice(0, 12)
-              .map(
-                (n) =>
-                  `<li style="color:#ABABAB;font-size:12px;padding:2px 0;">${escapeHtml(n)}</li>`
-              )
+              .map((n, i) => {
+                const original = b.originalFileNames?.[i];
+                const was =
+                  original && original !== n
+                    ? ` <span style="color:#666;">(uploaded as ${escapeHtml(original)})</span>`
+                    : '';
+                return `<li style="color:#ABABAB;font-size:12px;padding:2px 0;">${escapeHtml(n)}${was}</li>`;
+              })
               .join('') +
             (b.fileNames.length > 12
               ? `<li style="color:#666;font-size:12px;padding:2px 0;">…and ${b.fileNames.length - 12} more</li>`

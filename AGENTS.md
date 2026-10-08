@@ -64,12 +64,20 @@ Design: dark `#0a0a0a`, text `#f5f5f8`, gold `#c8b89a` (`brand.*` in Tailwind).
 
 - **`brands`** — source of truth for clients (Shopify domains, Meta `act_…`, Google customer id digits, margins, `archived_at`, legacy `shopify_client_id` / `shopify_client_secret`).
 - **`users_profile` + `user_permissions`** — role (`admin` \| `strategist` \| `founder` \| `user`), brand lock, capability flags. Browser updates to `users_profile` do not stick (no UPDATE policy); assignment goes through **`POST /api/admin/update-user`** (service role).
-- **`submissions` / `submission_files`** — creative batches + files + Dropbox sync state.
+- **`submissions` / `submission_files`** — creative batches + files + Dropbox sync state. Auto-tag columns (`original_file_name`, `auto_tags`, `tag_source`) and `brands.file_naming_pattern` come from `supabase/migrations/add_creative_auto_tags.sql`. `file_name` is the Dropbox name. The storage object keeps the uploaded name.
 - **`daily_pnl`** — one row per brand per day (Shopify NC/RC + Meta/Google/other spend). **`daily_pnl.currency`** is the ISO-4217 reporting currency for that row (Shopify/store settlement). Spend is converted into it at sync. NULL until the row is re-synced after the migration (`supabase/migration-daily-pnl-currency.sql` and `supabase/migrations/add_daily_pnl_reporting_currency.sql`).
 - **`brand_integrations`** — per-brand provider credentials. Trybe rows use `provider = 'trybe'`, `api_key` (never returned raw; masked in the integration API), and `metadata` JSON: `trybe_brand_id`, `trybe_program_id`, `trybe_program_name`. Metadata column: `supabase/migrations/add_brand_integrations_metadata.sql`.
 - Supporting: `ad_changelog` / `ad_snapshots` (changelog diffs), `shopify_stores` / `shopify_orders` / `shopify_products`, `app_settings`, `integrations` (Dropbox), calendar + feature-request tables.
 
 Prefer service-role clients only on the server. Browser uses anon key + RLS.
+
+## Creative upload auto-tag
+
+- `/upload` tags each new file in the background (`POST /api/creative-auto-tag`). Provider is xAI chat completions (`https://api.x.ai/v1/chat/completions`) behind `src/lib/auto-tag/provider.ts`. Default model is `grok-4.20-0309-non-reasoning` (`XAI_VISION_MODEL`). The key is `XAI_API_KEY`, server-only. If that key is missing, fields stay blank, nothing errors, and the upload still submits.
+- Frames are jpeg or png, long side about 768px, and at least 512 pixels in total. Anything smaller is skipped. `usage.cost_in_usd_ticks` is logged and stored on `auto_tags.usage` (1 USD = 10^10 ticks).
+- Accepted tags write `creative_type`, `fidelity` (always the `CREATIVE_TYPES_MAP` fidelity for that type), `product_id`, `product_name`, `hook_angle`, and `landing_page_url`. The Creative Matrix page and the summary API both read those columns. A product must be a real Shopify product. A low-confidence field is stored null.
+- Dropbox name pattern defaults to `{Brand}_{Product}_{HookSlug}_{Type}_{CreatorOrUGC}_{AspectOrLength}`. Unknown pieces are left out. A per-brand pattern is `brands.file_naming_pattern` (Team → brand settings). A typed name wins.
+- Submit does not wait on the model. Rows still `tag_source = pending` are tagged once, before the Dropbox copy, by `POST /api/submissions/sync-drive`, the Dropbox cron `GET /api/cron/sync-pending`, and admin retry-sync. Any other `tag_source` is left alone.
 
 ## Trybe Program
 

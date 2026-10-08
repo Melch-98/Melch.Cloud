@@ -7,6 +7,7 @@ import {
   sanitizeDropboxPathSegment,
   DropboxNotConnectedError,
 } from '@/lib/dropbox';
+import { tagPendingSubmissionFiles } from '@/lib/creative-tag-sync';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -61,6 +62,15 @@ export async function POST(req: NextRequest) {
   if (!profile || profile.role !== 'admin') {
     return NextResponse.json({ error: 'Forbidden — admin only' }, { status: 403 });
   }
+
+  if (body.submission_id) {
+    try {
+      await tagPendingSubmissionFiles(supabase, body.submission_id);
+    } catch (err) {
+      console.warn('Auto-tag before Dropbox retry failed:', err instanceof Error ? err.message : err);
+    }
+  }
+
   const { data: submission, error: subError } = await supabase
     .from('submissions')
     .select(

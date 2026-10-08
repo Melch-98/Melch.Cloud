@@ -10,6 +10,8 @@ interface AssetThumbnailProps {
   mediaInfo?: FileMediaInfo;
   isSelected: boolean;
   isTagged: boolean;
+  /** Dropbox name. Shown on the tile; the uploaded name stays in the tooltip. */
+  displayName?: string;
   dupeWarning?: string;
   onClick: (index: number, shiftKey: boolean) => void;
   onRemove: (index: number) => void;
@@ -50,6 +52,7 @@ const AssetThumbnail: React.FC<AssetThumbnailProps> = ({
   mediaInfo,
   isSelected,
   isTagged,
+  displayName,
   dupeWarning = '',
   onClick,
   onRemove,
@@ -141,7 +144,7 @@ const AssetThumbnail: React.FC<AssetThumbnailProps> = ({
           : '2px solid rgba(255,255,255,0.06)',
         opacity: isSelected ? 1 : undefined,
       }}
-      title={dupeWarning || file.name}
+      title={dupeWarning || `Uploaded as ${file.name}`}
     >
       {/* Thumbnail */}
       {thumbUrl && !thumbError ? (
@@ -209,7 +212,7 @@ const AssetThumbnail: React.FC<AssetThumbnailProps> = ({
       {/* Aspect ratio badge — bottom-right */}
       {ratio && (
         <div
-          className="absolute bottom-1.5 right-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full"
+          className="absolute bottom-7 right-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full"
           style={{ ...badgeStyle, color: '#C8B89A' }}
         >
           {ratio}
@@ -219,18 +222,18 @@ const AssetThumbnail: React.FC<AssetThumbnailProps> = ({
       {/* Tagged indicator — bottom-left gold dot */}
       {isTagged && (
         <div
-          className="absolute bottom-2 left-2 w-2 h-2 rounded-full"
+          className="absolute bottom-7 left-2 w-2 h-2 rounded-full"
           style={{ backgroundColor: '#C8B89A' }}
           title="Tagged"
         />
       )}
 
-      {/* Filename strip */}
+      {/* Filename strip — the name Dropbox will use */}
       <div
-        className="absolute bottom-0 left-0 right-0 px-2 py-1 text-[10px] text-white truncate opacity-0 group-hover:opacity-100 transition-opacity"
+        className="absolute bottom-0 left-0 right-0 px-2 py-1 text-[10px] text-white truncate"
         style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}
       >
-        {file.name}
+        {displayName || file.name}
       </div>
     </div>
   );

@@ -27,6 +27,7 @@ import { getCreativeTypeLabel, CREATIVE_TYPE_GROUPS } from '@/lib/creative-types
 interface BatchFile {
   id: string;
   file_name: string;
+  original_file_name?: string | null;
   file_url: string;
   file_type: string | null;
   media_format: string | null;
@@ -200,7 +201,19 @@ function FileThumbnail({ file }: { file: BatchFile }) {
 
       {/* File info */}
       <div className="p-2">
-        <p className="text-[10px] text-gray-400 truncate">{file.file_name}</p>
+        <p
+          className="text-[10px] text-gray-400 truncate"
+          title={
+            file.original_file_name && file.original_file_name !== file.file_name
+              ? `Uploaded as ${file.original_file_name}`
+              : file.file_name
+          }
+        >
+          {file.file_name}
+        </p>
+        {file.original_file_name && file.original_file_name !== file.file_name && (
+          <p className="text-[9px] text-gray-600 truncate">was {file.original_file_name}</p>
+        )}
         <div className="flex gap-1 mt-0.5 flex-wrap">
           {file.media_format && (
             <span className="text-[9px] text-gray-500 uppercase">{file.media_format}</span>
@@ -494,7 +507,7 @@ export default function SubmissionsPage() {
           copy_title, is_carousel, is_flexible, is_whitelist,
           batch_status, launched_at, created_at, file_count,
           submission_files (
-            id, file_name, file_url, file_type, media_format, aspect_ratio,
+            id, file_name, original_file_name, file_url, file_type, media_format, aspect_ratio,
             product_id, product_name, creative_type, fidelity, hook_angle
           )
         `)
@@ -566,6 +579,7 @@ export default function SubmissionsPage() {
           if (
             filterSearch &&
             !f.file_name.toLowerCase().includes(searchLower) &&
+            !(f.original_file_name && f.original_file_name.toLowerCase().includes(searchLower)) &&
             !(f.hook_angle && f.hook_angle.toLowerCase().includes(searchLower)) &&
             !(f.product_name && f.product_name.toLowerCase().includes(searchLower))
           )

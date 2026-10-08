@@ -8,6 +8,7 @@ import {
   sanitizeDropboxPathSegment,
   DropboxNotConnectedError,
 } from '@/lib/dropbox';
+import { tagPendingSubmissionFiles } from '@/lib/creative-tag-sync';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -146,7 +147,13 @@ async function syncOneBatch(
   submissionId: string,
   deadlineMs: number
 ): Promise<{ status: string; uploaded: number; skipped: number; total: number; error?: string }> {
-  // Load full submission data
+  try {
+    await tagPendingSubmissionFiles(supabase, submissionId);
+  } catch (err) {
+    console.warn('Auto-tag before Dropbox sync failed:', err instanceof Error ? err.message : err);
+  }
+
+  // Load full submission data (after any rename, so Dropbox uses file_name)
   const { data: submission, error: subError } = await supabase
     .from('submissions')
     .select(

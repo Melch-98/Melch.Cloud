@@ -1,9 +1,10 @@
 'use client';
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Layers } from 'lucide-react';
+import { ChevronDown, Layers } from 'lucide-react';
 import type { FileMediaInfo } from './FileUploader';
 import { FileContext } from '@/lib/types';
+import { landingUrlForProduct } from '@/lib/creative-auto-tag';
 import CreativeTypeSelector from './CreativeTypeSelector';
 
 interface Product {
@@ -28,8 +29,18 @@ interface AssetDetailPanelProps {
   isCarousel: boolean;
   isWhitelist: boolean;
   errors: Record<string, string>;
+  /** Dropbox name for the primary file. Empty when several files are selected. */
+  proposedName?: string;
+  /** https://brand.com — used when a product pick should fill the landing page. */
+  storefrontOrigin?: string | null;
   /** Apply a partial context update to every selected index */
-  onContextChange: (indices: number[], updates: Partial<FileContext>) => void;
+  onContextChange: (
+    indices: number[],
+    updates: Partial<FileContext>,
+    options?: {
+      lockFields?: Array<'creativeType' | 'productId' | 'hookAngle' | 'landingPageUrl' | 'fileName'>;
+    }
+  ) => void;
 }
 
 function formatSize(bytes: number): string {
@@ -60,6 +71,15 @@ const inputStyle: React.CSSProperties = {
 
 const labelClass =
   'block text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1 flex items-center gap-1.5';
+
+const AutoBadge = () => (
+  <span
+    className="text-[9px] font-bold px-1.5 py-0.5 rounded normal-case tracking-normal"
+    style={{ backgroundColor: 'rgba(200,184,154,0.16)', color: '#C8B89A' }}
+  >
+    Auto
+  </span>
+);
 
 const MixedBadge = () => (
   <span
@@ -114,6 +134,8 @@ const AssetDetailPanel: React.FC<AssetDetailPanelProps> = ({
   isCarousel,
   isWhitelist,
   errors,
+  proposedName = '',
+  storefrontOrigin = null,
   onContextChange,
 }) => {
   const [visible, setVisible] = useState(false);
@@ -203,14 +225,30 @@ const AssetDetailPanel: React.FC<AssetDetailPanelProps> = ({
   const [creativeType, creativeTypeMixed] = fieldValue('creativeType');
   const [productId, productMixed] = fieldValue('productId');
   const [hookAngle, hookMixed] = fieldValue('hookAngle');
+  const [landingPageUrl, landingMixed] = fieldValue('landingPageUrl');
   const [copyTemplate, copyTplMixed] = fieldValue('copyTemplate');
   const [creatorName, creatorMixed] = fieldValue('creatorName');
   const [creatorHandle, handleMixed] = fieldValue('creatorHandle');
   const [copyHeadline] = fieldValue('copyHeadline');
   const [copyBody] = fieldValue('copyBody');
+  const [customFileName, nameMixed] = fieldValue('customFileName');
 
-  const apply = (updates: Partial<FileContext>) =>
-    onContextChange(selectedIndices, updates);
+  const primaryCtx = fileContexts[primaryIdx];
+  const autoFilled = new Set(primaryCtx?.autoFilled || []);
+  const tagging = selectedIndices.some((i) => fileContexts[i]?.tagStatus === 'running');
+  const landingLocked = selectedIndices.some((i) => fileContexts[i]?.lockedFields?.landingPageUrl);
+  const shownName = multi
+    ? ''
+    : primaryCtx?.lockedFields?.fileName
+      ? customFileName || proposedName
+      : proposedName;
+
+  const apply = (
+    updates: Partial<FileContext>,
+    options?: {
+      lockFields?: Array<'creativeType' | 'productId' | 'hookAngle' | 'landingPageUrl' | 'fileName'>;
+    }
+  ) => onContextChange(selectedIndices, updates, options);
 
   return (
     <div
@@ -258,8 +296,8 @@ const AssetDetailPanel: React.FC<AssetDetailPanelProps> = ({
             </>
           ) : (
             <>
-              <p className="text-sm font-medium text-[#F5F5F8] truncate">
-                {primaryFile.name}
+              <p className="text-sm font-medium text-[#F5F5F8] truncate" title={primaryFile.name}>
+                {shownName || primaryFile.name}
               </p>
               <p className="text-[11px] text-[#ABABAB] mt-1">
                 {info && info.width > 0 ? `${info.width}x${info.height}` : '—'}
@@ -273,48 +311,26 @@ const AssetDetailPanel: React.FC<AssetDetailPanelProps> = ({
         </div>
       </div>
 
-      {/* Tagging fields */}
       <div className="p-4 space-y-4">
-        <CreativeTypeSelector
-          value={creativeType}
-          isMixed={creativeTypeMixed}
-          fileFormat={uniformFormat}
-          onChange={(val) => apply({ creativeType: val })}
-        />
-
-        <div>
-          <label className={labelClass}>
-            Product {productMixed && <MixedBadge />}
-          </label>
-          <select
-            value={productId}
-            onChange={(e) => {
-              const pid = e.target.value;
-              const pname =
-                products.find((p) => p.shopify_product_id === pid)?.title || '';
-              apply({ productId: pid, productName: pname });
-            }}
-            className={inputClass}
-            style={inputStyle}
-          >
-            <option value="">{productMixed ? 'Mixed…' : 'Select product…'}</option>
-            <ProductOptions products={products} />
-          </select>
-        </div>
-
-        <div>
-          <label className={labelClass}>
-            Hook / Angle {hookMixed && <MixedBadge />}
-          </label>
-          <input
-            type="text"
-            value={hookAngle}
-            placeholder={hookMixed ? 'Mixed — type to overwrite all' : 'e.g. “Tired skin at 40”'}
-            onChange={(e) => apply({ hookAngle: e.target.value })}
-            className={inputClass}
-            style={inputStyle}
-          />
-        </div>
+        {!multi && (
+          <div>
+            <label className={labelClass}>Dropbox file name</label>
+            <input
+              type="text"
+              value={shownName}
+              placeholder={primaryFile.name}
+              onChange={(e) => apply({ customFileName: e.target.value })}
+              className={inputClass}
+              style={inputStyle}
+            />
+            {shownName !== primaryFile.name && (
+              <p className="text-[10px] text-gray-500 mt-1 truncate">Uploaded as {primaryFile.name}</p>
+            )}
+          </div>
+        )}
+        {multi && nameMixed && (
+          <p className="text-[10px] text-gray-500">Each selected file keeps its own Dropbox name.</p>
+        )}
 
         {!isCarousel && (
           <div>
@@ -439,6 +455,80 @@ const AssetDetailPanel: React.FC<AssetDetailPanelProps> = ({
             </div>
           )}
         </div>
+
+        <details className="rounded-lg" open style={{ backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+          <summary className="cursor-pointer list-none px-3 py-2 flex items-center gap-2 text-[11px] font-medium text-[#C8B89A]">
+            <ChevronDown className="w-3.5 h-3.5" />
+            Auto-tagged — review
+            {tagging && <span className="text-[10px] text-gray-500 normal-case font-normal">Tagging…</span>}
+          </summary>
+          <div className="px-3 pb-3 space-y-4">
+            <CreativeTypeSelector
+              value={creativeType}
+              isMixed={creativeTypeMixed}
+              fileFormat={uniformFormat}
+              auto={autoFilled.has('creativeType') && !creativeTypeMixed}
+              onChange={(val) => apply({ creativeType: val })}
+            />
+
+            <div>
+              <label className={labelClass}>
+                Product {autoFilled.has('productId') && !productMixed && <AutoBadge />}
+                {productMixed && <MixedBadge />}
+              </label>
+              <select
+                value={productId}
+                onChange={(e) => {
+                  const pid = e.target.value;
+                  const product = products.find((p) => p.shopify_product_id === pid);
+                  const updates: Partial<FileContext> = {
+                    productId: pid,
+                    productName: product?.title || '',
+                  };
+                  if (!landingLocked) {
+                    updates.landingPageUrl = landingUrlForProduct(storefrontOrigin, product?.handle) || '';
+                  }
+                  apply(updates, { lockFields: ['productId'] });
+                }}
+                className={inputClass}
+                style={inputStyle}
+              >
+                <option value="">{productMixed ? 'Mixed…' : 'Select product…'}</option>
+                <ProductOptions products={products} />
+              </select>
+            </div>
+
+            <div>
+              <label className={labelClass}>
+                Hook / Angle {autoFilled.has('hookAngle') && !hookMixed && <AutoBadge />}
+                {hookMixed && <MixedBadge />}
+              </label>
+              <input
+                type="text"
+                value={hookAngle}
+                placeholder={hookMixed ? 'Mixed — type to overwrite all' : 'e.g. “Tired skin at 40”'}
+                onChange={(e) => apply({ hookAngle: e.target.value })}
+                className={inputClass}
+                style={inputStyle}
+              />
+            </div>
+
+            <div>
+              <label className={labelClass}>
+                Landing page {autoFilled.has('landingPageUrl') && !landingMixed && <AutoBadge />}
+                {landingMixed && <MixedBadge />}
+              </label>
+              <input
+                type="text"
+                value={landingPageUrl}
+                placeholder={landingMixed ? 'Mixed — type to overwrite all' : 'Filled from the product when we know it'}
+                onChange={(e) => apply({ landingPageUrl: e.target.value })}
+                className={inputClass}
+                style={inputStyle}
+              />
+            </div>
+          </div>
+        </details>
       </div>
     </div>
   );

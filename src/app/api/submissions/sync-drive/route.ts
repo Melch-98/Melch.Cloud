@@ -8,6 +8,7 @@ import {
   sanitizeDropboxPathSegment,
   DropboxNotConnectedError,
 } from '@/lib/dropbox';
+import { tagPendingSubmissionFiles } from '@/lib/creative-tag-sync';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -44,6 +45,12 @@ export async function POST(req: NextRequest) {
       { error: 'Server config error: missing Supabase credentials' },
       { status: 500 }
     );
+  }
+
+  try {
+    await tagPendingSubmissionFiles(supabase, submissionId);
+  } catch (err) {
+    console.warn('Auto-tag before Dropbox sync failed:', err instanceof Error ? err.message : err);
   }
 
   // Load submission + brand + files (include dropbox_path for resume check)
