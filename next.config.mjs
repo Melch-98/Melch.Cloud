@@ -8,6 +8,14 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
+  async redirects() {
+    // Retired Performance pages. Old bookmarks land on the dashboard.
+    return [
+      { source: '/analytics/efficiency', destination: '/dashboard', permanent: true },
+      { source: '/analytics/ltv-cohorts', destination: '/dashboard', permanent: true },
+      { source: '/analytics/forecast', destination: '/dashboard', permanent: true },
+    ];
+  },
   async headers() {
     const csp = "frame-ancestors https://*.myshopify.com https://admin.shopify.com";
     return [

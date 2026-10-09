@@ -12,7 +12,7 @@ No new database tables or columns needed — everything reads from existing data
 
 ### Auth + brand selection
 
-Follow the same pattern as other analytics pages (e.g., `src/app/analytics/efficiency/page.tsx`):
+Follow the same pattern as other analytics pages (e.g., `src/app/analytics/daily-pnl/page.tsx`):
 
 ```typescript
 'use client';

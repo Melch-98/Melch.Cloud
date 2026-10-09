@@ -30,9 +30,6 @@
 | Geo Performance | Already converted (shared FX helpers) |
 | Ad Perspective | `makeFmt` (Meta account currency) |
 | Campaigns | Fixed — Meta **and** Google native → reporting FX in `/api/campaign-metrics`; UI uses reporting symbol (incl. chart ticks) |
-| Efficiency | Fixed — reporting chip + `makeFmt` symbol; backed by `daily_pnl` |
-| LTV Cohorts | Fixed — same |
-| Forecast | Fixed — same |
 | Triple Whale sync | Passes reporting currency into TW SQL; **prefer Shopify sync for spend truth** (TW channel spend may still be native/USD-ish depending on TW) |
 
 ## Residual risks
