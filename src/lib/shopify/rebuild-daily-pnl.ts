@@ -1,15 +1,18 @@
 import { acquireSyncLock, invalidatePnlCache, releaseSyncLock } from '@/lib/redis';
 import { getFxRates } from '@/lib/currency';
 import { fetchDailyAdSpend } from '@/lib/shopify/fetch-ad-spend';
+import { buildFullCoveredDayRows, coveredDaysWithinStoredHistory } from '@/lib/shopify/pnl-covered-days';
 import { aggregateOrdersByDay, type PnlShopifyOrder } from '@/lib/shopify/pnl-days';
 import { resolveShopIanaTimeZone } from '@/lib/shopify/shop-timezone';
 import {
   addCalendarDays,
+  fullyCoveredShopDays,
   isShopDayFullyCovered,
+  shopLocalDay,
   ymdInTimeZone,
   zonedMidnight,
 } from '@/lib/shopify/shop-time';
-import { roundMoney, spendFields, upsertDailyPnl } from '@/lib/shopify/upsert-daily-pnl';
+import { upsertDailyPnl } from '@/lib/shopify/upsert-daily-pnl';
 import { exchangeClientCredentials } from '@/lib/shopify/client-credentials';
 import { normalizeShopDomain } from '@/lib/shopify/config';
 import {
@@ -39,6 +42,7 @@ export type RebuildDailyPnlResult = {
   orders_read: number;
   days_written: number;
   partial_days_skipped: string[];
+  history_days_skipped: string[];
   meta_spend_days: number;
   google_spend_days: number;
   ad_spend_errors: string[];
@@ -128,12 +132,33 @@ async function loadStoredOrders(
   return orders;
 }
 
+/** Shop-local day of the brand's earliest stored order, or null when none exist. */
+async function earliestStoredOrderDay(
+  supabase: SupabaseLike,
+  brandId: string,
+  timeZone: string
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('shopify_orders')
+    .select('shopify_created_at')
+    .eq('brand_id', brandId)
+    .not('shopify_created_at', 'is', null)
+    .order('shopify_created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  const createdAt = (data as { shopify_created_at?: string | null } | null)?.shopify_created_at;
+  if (!createdAt) return null;
+  return shopLocalDay(createdAt, timeZone);
+}
+
 /**
  * Rebuild daily_pnl for one brand from shopify_orders already stored, plus the
  * same Meta and Google spend fetch the live sync uses. Does not pull orders
  * from Shopify again. NC/RC still goes through aggregateOrdersByDay, including
  * the lifetime-count enrichment when an Admin token is available.
- * The in-progress shop-local day is not written.
+ * The in-progress shop-local day is not written. Days before the brand's
+ * earliest stored shopify_orders.shopify_created_at are not zero-filled.
  */
 export async function rebuildDailyPnlFromStoredOrders(
   supabase: SupabaseLike,
@@ -175,6 +200,7 @@ export async function rebuildDailyPnlFromStoredOrders(
     const untilIso = endDate === today ? now.toISOString() : new Date(Date.parse(queryUntil) - 1).toISOString();
 
     const orders = await loadStoredOrders(supabase, row.id, sinceIso, queryUntil);
+    const earliestDay = await earliestStoredOrderDay(supabase, row.id, timeZone);
     const domain = normalizeShopDomain(row.shopify_store_domain);
     if (token && domain) {
       try {
@@ -211,43 +237,19 @@ export async function rebuildDailyPnlFromStoredOrders(
     const dailyMeta = convertSpendMap(spend.meta, metaCurrency || reporting.code, reporting.code, fxRates);
     const dailyGoogle = convertSpendMap(spend.google, googleCurrency || reporting.code, reporting.code, fxRates);
 
-    const inRange = (date: string) => date >= startDate && date <= endDate;
-    const complete = (date: string) =>
-      inRange(date) && isShopDayFullyCovered(date, sinceIso, untilIso, timeZone);
-
-    const rows = Array.from(dayBuckets.entries())
-      .filter(([date]) => complete(date))
-      .map(([date, bucket]) => ({
-        brand_id: row.id,
-        date,
-        nc_orders: bucket.nc_orders,
-        nc_revenue: roundMoney(bucket.nc_revenue),
-        rc_orders: bucket.rc_orders,
-        rc_revenue: roundMoney(bucket.rc_revenue),
-        gross_sales: roundMoney(bucket.gross_sales),
-        discounts: roundMoney(bucket.discounts),
-        refunds: roundMoney(bucket.refunds),
-        taxes: roundMoney(bucket.taxes),
-        shipping: roundMoney(bucket.shipping),
-        currency: reporting.code,
-        synced_at: now.toISOString(),
-        ...spendFields(date, dailyMeta, dailyGoogle),
-      }));
-
-    const orderDates = new Set(rows.map((entry) => entry.date));
-    const spendOnlyRows = [];
-    for (const date of new Set([...dailyMeta.keys(), ...dailyGoogle.keys()])) {
-      if (orderDates.has(date) || !complete(date)) continue;
-      spendOnlyRows.push({
-        brand_id: row.id,
-        date,
-        currency: reporting.code,
-        synced_at: now.toISOString(),
-        ...spendFields(date, dailyMeta, dailyGoogle),
-      });
-    }
-
-    const allRows = [...rows, ...spendOnlyRows];
+    const history = coveredDaysWithinStoredHistory(
+      fullyCoveredShopDays(sinceIso, untilIso, timeZone),
+      earliestDay
+    );
+    const allRows = buildFullCoveredDayRows({
+      brandId: row.id,
+      currency: reporting.code,
+      syncedAt: now.toISOString(),
+      coveredDays: history.write,
+      buckets: dayBuckets,
+      meta: { ok: spend.metaOk, byDay: dailyMeta },
+      google: { ok: spend.googleOk, byDay: dailyGoogle },
+    });
     if (allRows.length > 0) {
       const { error } = await upsertDailyPnl(supabase, allRows);
       if (error) throw new Error(error.message || 'Failed to save daily_pnl');
@@ -269,6 +271,7 @@ export async function rebuildDailyPnlFromStoredOrders(
       orders_read: orders.length,
       days_written: allRows.length,
       partial_days_skipped: partialDaysSkipped,
+      history_days_skipped: history.skipped,
       meta_spend_days: allRows.filter((entry) => entry.meta_spend != null).length,
       google_spend_days: allRows.filter((entry) => entry.google_spend != null).length,
       ad_spend_errors: spend.errors,

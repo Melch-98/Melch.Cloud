@@ -4,6 +4,7 @@ import {
   PNL_CAP_DAYS,
   PNL_CHUNK_DAYS,
   pnlCatchUpWindow,
+  pnlIntegritySkipReason,
   pnlPathForBrand,
   pnlRefreshWindow,
   selectPnlRefreshBrands,
@@ -43,6 +44,16 @@ test('custom-app brands refresh Daily P&L through the Shopify sync', () => {
 
 test('a shop domain without Shopify credentials refreshes through Triple Whale', () => {
   assert.equal(pnlPathForBrand(jaguar), 'triple_whale');
+});
+
+test('integrity checks Shopify Admin brands and skips Triple Whale-only brands', () => {
+  assert.equal(pnlIntegritySkipReason(fond), null);
+  assert.equal(pnlIntegritySkipReason(jaguar), 'triple_whale');
+  assert.equal(pnlIntegritySkipReason(party), 'no_shop');
+  assert.equal(
+    pnlIntegritySkipReason({ ...fond, archived_at: '2026-08-01T00:00:00.000Z' }),
+    'archived'
+  );
 });
 
 test('archived brands are skipped even when they still have Shopify credentials', () => {

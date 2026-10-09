@@ -140,3 +140,37 @@ export function coveredShopDays(
     .filter((day) => isShopDayFullyCovered(day, sinceIso, untilIso, timeZone))
     .sort();
 }
+
+/**
+ * Every shop-local day the window covers completely, including days with no
+ * orders. A since instant after local midnight drops that first day. An until
+ * instant before the next local midnight drops the in-progress day.
+ */
+export function fullyCoveredShopDays(sinceIso: string, untilIso: string, timeZone: string): string[] {
+  const since = Date.parse(sinceIso);
+  const until = Date.parse(untilIso);
+  if (!Number.isFinite(since) || !Number.isFinite(until) || until < since) return [];
+  const zone = usableTimeZone(timeZone);
+  let day = ymdInTimeZone(new Date(since), zone);
+  const last = ymdInTimeZone(new Date(until), zone);
+  const covered: string[] = [];
+  for (let i = 0; i < 800 && day <= last; i += 1) {
+    if (isShopDayFullyCovered(day, sinceIso, untilIso, zone)) covered.push(day);
+    day = addCalendarDays(day, 1);
+  }
+  return covered;
+}
+
+/** Vercel maxDuration for GET /api/cron/shopify-orders. */
+export const SHOPIFY_CRON_MAX_MS = 300_000;
+/** Leave this much of the cron before starting or continuing the integrity check. */
+export const PNL_INTEGRITY_MIN_BUDGET_MS = 20_000;
+
+export function pnlIntegrityDeadline(startedMs: number): number {
+  return startedMs + SHOPIFY_CRON_MAX_MS - PNL_INTEGRITY_MIN_BUDGET_MS;
+}
+
+/** True while at least ~20s remain before the cron's 300s limit. */
+export function pnlIntegrityBudgetRemains(nowMs: number, deadlineMs: number): boolean {
+  return nowMs < deadlineMs;
+}

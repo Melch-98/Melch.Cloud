@@ -1,7 +1,10 @@
+import { normalizeShopDomain } from '@/lib/shopify/config';
+import { pnlIntegritySkipReason, type PnlBrand, type PnlIntegritySkipReason } from '@/lib/shopify/pnl-targets';
 import { resolveShopIanaTimeZone } from '@/lib/shopify/shop-timezone';
 import {
   isGrossMismatch,
   lastCompleteShopDays,
+  pnlIntegrityBudgetRemains,
   PNL_INTEGRITY_DAYS,
   PNL_INTEGRITY_THRESHOLD,
   shopLocalDay,
@@ -23,11 +26,19 @@ export type PnlIntegrityMismatch = {
   delta_pct: number | null;
 };
 
+export type PnlIntegritySkip = {
+  brand_id: string;
+  brand_name: string;
+  reason: PnlIntegritySkipReason | 'time_budget';
+};
+
 export type PnlIntegrityReport = {
   checked_at: string;
   window_days: number;
   threshold: number;
   brands_checked: number;
+  brands_skipped: PnlIntegritySkip[];
+  time_budget: boolean;
   mismatches: PnlIntegrityMismatch[];
 };
 
@@ -38,6 +49,35 @@ type BrandRow = {
   shopify_client_id: string | null;
   shopify_client_secret: string | null;
 };
+
+type StoreRow = {
+  brand_id: string | null;
+  shop_domain: string;
+  access_token: string | null;
+  uninstalled_at: string | null;
+};
+
+function liveAdminToken(store: StoreRow | undefined, domain: string | null): boolean {
+  if (!domain || !store) return false;
+  if (normalizeShopDomain(store.shop_domain) !== domain) return false;
+  if (!store.access_token || store.uninstalled_at) return false;
+  return store.access_token !== 'gadget-managed';
+}
+
+function asPnlBrand(brand: BrandRow, stores: StoreRow[]): PnlBrand {
+  const domain = normalizeShopDomain(brand.shopify_store_domain);
+  const store =
+    stores.find((row) => domain && normalizeShopDomain(row.shop_domain) === domain) ||
+    stores.find((row) => row.brand_id === brand.id);
+  return {
+    id: brand.id,
+    name: brand.name,
+    archived_at: null,
+    shopify_store_domain: domain,
+    hasClientCredentials: !!(brand.shopify_client_id && brand.shopify_client_secret && domain),
+    hasLiveAdminToken: liveAdminToken(store, domain),
+  };
+}
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
@@ -87,10 +127,15 @@ async function loadOrderGrossByDay(
  * shop-local days. Gross is subtotal + discounts, voided orders excluded — the
  * same basis as the Daily P&L order aggregation. Mismatches over 2% are logged
  * and stored on app_settings.daily_pnl_integrity for a later alert.
+ *
+ * Triple Whale-only brands are skipped: their orders are not Shopify Admin
+ * gross. When deadlineMs is set, a brand is not started once that instant has
+ * passed, and the partial report is still saved.
  */
 export async function checkDailyPnlIntegrity(
   supabase: SupabaseLike,
-  now: Date = new Date()
+  now: Date = new Date(),
+  deadlineMs?: number
 ): Promise<PnlIntegrityReport> {
   const { data: brandRows, error: brandError } = await supabase
     .from('brands')
@@ -98,11 +143,29 @@ export async function checkDailyPnlIntegrity(
     .is('archived_at', null);
   if (brandError) throw new Error(brandError.message);
 
+  const { data: storeRows, error: storeError } = await supabase
+    .from('shopify_stores')
+    .select('brand_id, shop_domain, access_token, uninstalled_at');
+  if (storeError) throw new Error(storeError.message);
+  const stores = (storeRows || []) as StoreRow[];
+
   const mismatches: PnlIntegrityMismatch[] = [];
+  const brandsSkipped: PnlIntegritySkip[] = [];
   let brandsChecked = 0;
+  let timeBudget = false;
 
   for (const brand of (brandRows || []) as BrandRow[]) {
-    if (!brand.shopify_store_domain) continue;
+    const pnlBrand = asPnlBrand(brand, stores);
+    const skipReason = pnlIntegritySkipReason(pnlBrand);
+    if (skipReason) {
+      brandsSkipped.push({ brand_id: brand.id, brand_name: brand.name, reason: skipReason });
+      continue;
+    }
+    if (timeBudget || (deadlineMs !== undefined && !pnlIntegrityBudgetRemains(Date.now(), deadlineMs))) {
+      timeBudget = true;
+      brandsSkipped.push({ brand_id: brand.id, brand_name: brand.name, reason: 'time_budget' });
+      continue;
+    }
     brandsChecked += 1;
     const zone = await resolveShopIanaTimeZone(supabase, brand);
     const { start, end } = lastCompleteShopDays(now, zone.timeZone);
@@ -158,6 +221,8 @@ export async function checkDailyPnlIntegrity(
     window_days: PNL_INTEGRITY_DAYS,
     threshold: PNL_INTEGRITY_THRESHOLD,
     brands_checked: brandsChecked,
+    brands_skipped: brandsSkipped,
+    time_budget: timeBudget,
     mismatches,
   };
 
@@ -170,7 +235,11 @@ export async function checkDailyPnlIntegrity(
     { onConflict: 'key' }
   );
   if (saveError) console.error(`Failed to store daily_pnl integrity: ${saveError.message}`);
-  else if (mismatches.length === 0) {
+  else if (timeBudget) {
+    console.log(
+      `daily_pnl integrity stopped; under 20s remain before the cron limit (${brandsChecked} brands checked)`
+    );
+  } else if (mismatches.length === 0) {
     console.log(`daily_pnl integrity ok (${brandsChecked} brands, last ${PNL_INTEGRITY_DAYS} shop-local days)`);
   }
 

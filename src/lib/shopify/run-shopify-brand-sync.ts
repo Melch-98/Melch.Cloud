@@ -14,10 +14,12 @@ import {
 } from '@/lib/currency';
 import { fetchGoogleAdsCurrency } from '@/lib/pipeboard-google';
 import { fetchDailyAdSpend } from '@/lib/shopify/fetch-ad-spend';
+import { collectPagedOrders, ordersFromPayload, type OrdersPageResult } from '@/lib/shopify/orders-pages';
+import { buildFullCoveredDayRows, buildSpendOnlyCoveredDayRows } from '@/lib/shopify/pnl-covered-days';
 import { aggregateOrdersByDay, type PnlShopifyOrder } from '@/lib/shopify/pnl-days';
 import { resolveShopIanaTimeZone } from '@/lib/shopify/shop-timezone';
-import { addCalendarDays, isShopDayFullyCovered, ymdInTimeZone, zonedMidnight } from '@/lib/shopify/shop-time';
-import { roundMoney, spendFields, upsertDailyPnl } from '@/lib/shopify/upsert-daily-pnl';
+import { addCalendarDays, fullyCoveredShopDays, ymdInTimeZone, zonedMidnight } from '@/lib/shopify/shop-time';
+import { upsertDailyPnl } from '@/lib/shopify/upsert-daily-pnl';
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -216,9 +218,6 @@ async function fetchAllOrders(
   sinceDate: string,
   untilDate: string
 ): Promise<ShopifyOrder[]> {
-  const allOrders: ShopifyOrder[] = [];
-  let nextUrl: string | null = null;
-
   // First request
   const params: Record<string, string> = {
     status: 'any',
@@ -231,33 +230,25 @@ async function fetchAllOrders(
   };
 
   const first = await shopifyFetch(domain, token, 'orders', params);
-  const firstData = first.data as { orders: ShopifyOrder[] };
-  allOrders.push(...firstData.orders);
-  nextUrl = first.nextLink;
+  const firstOrders = ordersFromPayload(first.data) as ShopifyOrder[];
+  const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+  return collectPagedOrders(firstOrders, first.nextLink, (url) => readShopifyOrdersPage(url, token), sleep, 100);
+}
 
-  // Paginate
-  while (nextUrl) {
-    const res = await fetch(nextUrl, {
-      headers: {
-        'X-Shopify-Access-Token': token,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!res.ok) break;
-
-    const linkHeader = res.headers.get('Link') || '';
-    const nextMatch = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
-    nextUrl = nextMatch ? nextMatch[1] : null;
-
-    const data = (await res.json()) as { orders: ShopifyOrder[] };
-    allOrders.push(...data.orders);
-
-    // Shopify rate limit: 2 req/sec — short pause is enough
-    await new Promise((r) => setTimeout(r, 100));
-  }
-
-  return allOrders;
+async function readShopifyOrdersPage(url: string, token: string): Promise<OrdersPageResult> {
+  const res = await fetch(url, {
+    headers: {
+      'X-Shopify-Access-Token': token,
+      'Content-Type': 'application/json',
+    },
+  });
+  return {
+    ok: res.ok,
+    status: res.status,
+    retryAfter: res.headers.get('Retry-After'),
+    link: res.headers.get('Link'),
+    body: res.ok ? await res.json() : null,
+  };
 }
 
 // ─── Enrich orders with reliable lifetime order counts ─────────
@@ -451,7 +442,7 @@ export async function runShopifyBrandSync(
     if (!untilDate) untilDate = now.toISOString();
     const spendFrom = ymdInTimeZone(new Date(sinceDate), timeZone);
     const spendTo = ymdInTimeZone(new Date(untilDate), timeZone);
-    const dayIsComplete = (date: string) => isShopDayFullyCovered(date, sinceDate, untilDate, timeZone);
+    const coveredDays = fullyCoveredShopDays(sinceDate, untilDate, timeZone);
 
     // ── Shopify order sync (skip if spend-only mode) ──
     if (!spendOnly) {
@@ -514,27 +505,18 @@ export async function runShopifyBrandSync(
       fxRates
     );
 
-    // Build order rows WITH spend data merged in.
-    // Partial edge days (the in-progress shop day, or a window that starts
-    // mid-day) are not written, so they cannot replace a full day.
-    const rows = Array.from(dayBuckets.entries())
-      .filter(([date]) => dayIsComplete(date))
-      .map(([date, bucket]) => ({
-      brand_id: brand.id,
-      date,
-      nc_orders: bucket.nc_orders,
-      nc_revenue: roundMoney(bucket.nc_revenue),
-      rc_orders: bucket.rc_orders,
-      rc_revenue: roundMoney(bucket.rc_revenue),
-      gross_sales: roundMoney(bucket.gross_sales),
-      discounts: roundMoney(bucket.discounts),
-      refunds: roundMoney(bucket.refunds),
-      taxes: roundMoney(bucket.taxes),
-      shipping: roundMoney(bucket.shipping),
+    // One row per fully covered shop-local day, including days with zero
+    // orders. A successful spend fetch writes 0 for days it omitted. A failed
+    // fetch omits that column. Partial edge days are not in coveredDays.
+    const rows = buildFullCoveredDayRows({
+      brandId: brand.id,
       currency: reporting.code,
-      synced_at: new Date().toISOString(),
-      ...spendFields(date, dailyMeta, dailyGoogle),
-    }));
+      syncedAt: new Date().toISOString(),
+      coveredDays,
+      buckets: dayBuckets,
+      meta: { ok: nativeSpend.metaOk, byDay: dailyMeta },
+      google: { ok: nativeSpend.googleOk, byDay: dailyGoogle },
+    });
 
     googleDaysSynced = rows.filter((row) => row.google_spend != null).length;
     metaDaysSynced = rows.filter((row) => row.meta_spend != null).length;
@@ -545,31 +527,6 @@ export async function runShopifyBrandSync(
       if (upsertError) {
         console.error('Upsert error:', upsertError);
         return NextResponse.json({ error: 'Failed to save data', details: upsertError.message }, { status: 500 });
-      }
-    }
-
-    // Upsert any spend-only dates (dates with ad spend but no orders)
-    const orderDates = new Set(dayBuckets.keys());
-    const spendOnlyRows: any[] = [];
-    const allSpendDates = new Set([...dailyGoogle.keys(), ...dailyMeta.keys()]);
-
-    for (const date of allSpendDates) {
-      if (!orderDates.has(date) && dayIsComplete(date)) {
-        spendOnlyRows.push({
-          brand_id: brand.id,
-          date,
-          currency: reporting.code,
-          ...spendFields(date, dailyMeta, dailyGoogle),
-        });
-      }
-    }
-    googleDaysSynced += spendOnlyRows.filter((row) => row.google_spend != null).length;
-    metaDaysSynced += spendOnlyRows.filter((row) => row.meta_spend != null).length;
-
-    if (spendOnlyRows.length > 0) {
-      const { error: spendOnlyErr } = await upsertDailyPnl(supabase, spendOnlyRows);
-      if (spendOnlyErr) {
-        adSpendErrors.push(`Spend-only upsert: ${spendOnlyErr.message}`);
       }
     }
 
@@ -728,25 +685,16 @@ export async function runShopifyBrandSync(
         fxRates
       );
 
-      const adSpendByDate = new Map<string, { google_spend?: number; meta_spend?: number }>();
-      for (const [date, spend] of dailyGoogle) {
-        adSpendByDate.set(date, { google_spend: Math.round(spend * 100) / 100 });
-      }
-      for (const [date, spend] of dailyMeta) {
-        const existing = adSpendByDate.get(date) || {};
-        existing.meta_spend = Math.round(spend * 100) / 100;
-        adSpendByDate.set(date, existing);
-      }
+      const adRows = buildSpendOnlyCoveredDayRows({
+        brandId: brand.id,
+        currency: reporting.code,
+        syncedAt: new Date().toISOString(),
+        coveredDays,
+        meta: { ok: nativeSpend.metaOk, byDay: dailyMeta },
+        google: { ok: nativeSpend.googleOk, byDay: dailyGoogle },
+      });
 
-      if (adSpendByDate.size > 0) {
-        const adRows = Array.from(adSpendByDate.entries())
-          .filter(([date]) => dayIsComplete(date))
-          .map(([date, vals]) => ({
-          brand_id: brand.id,
-          date,
-          currency: reporting.code,
-          ...vals,
-        }));
+      if (adRows.length > 0) {
         const { error: adErr } = await upsertDailyPnl(supabase, adRows);
         if (adErr) {
           adSpendErrors.push(`Ad spend upsert: ${adErr.message}`);
