@@ -54,7 +54,7 @@ Design: dark `#0a0a0a`, text `#f5f5f8`, gold `#c8b89a` (`brand.*` in Tailwind).
 | `/analytics/trybe-program` | admin / strategist / founder | Trybe Program Overview (read-only). Nav: Creative Analytics → **Trybe Program**. Excludes FOND. |
 | `/analytics` (+ copy, ad perspective, matrix) | role-gated | Creative analytics. Matrix is admin + strategist. |
 | `/analytics/funnel-viewer` | admin / strategist / founder | Funnel Viewer constellation. Port of Odylic Constellation. One live route, `GET /api/funnel-viewer/ads`. Attribution default is 7-day click only (`FUNNEL_ATTRIBUTION` in `src/lib/meta-funnel.ts`). Non-admins are locked to `users_profile.brand_id`. |
-| `/ad-changelog` | admin + founder | Meta/Google status & budget diffs (snapshot-based; **manual “Refresh Now”** — no weekly cron). Admin brand picker lists non-archived brands; founder is locked to `users_profile.brand_id`. |
+| `/ad-changelog` | admin + founder | Live Meta `/activities` + Google Ads `change_event` feed (`ad_activity`). Cron `GET /api/cron/ad-activity` every 15 minutes. Admin brand picker lists non-archived brands; founder is locked to `users_profile.brand_id`. System events (Meta review, billing, spend limit, first delivery) are hidden until the toggle is on. |
 | `/calendar`, `/copy-templates`, `/ad-lab`, `/stats` | role-gated | Calendar, copy library, experiments, file stats |
 | `/releases`, `/feature-requests`, `/account` | role-gated | App releases, FR board, profile |
 | `/app` | Shopify embedded | App Bridge bootstrap |
@@ -68,7 +68,8 @@ Design: dark `#0a0a0a`, text `#f5f5f8`, gold `#c8b89a` (`brand.*` in Tailwind).
 - **`submissions` / `submission_files`** — creative batches + files + Dropbox sync state. Auto-tag columns (`original_file_name`, `auto_tags`, `tag_source`) and `brands.file_naming_pattern` come from `supabase/migrations/add_creative_auto_tags.sql`. `file_name` is the Dropbox name. The storage object keeps the uploaded name.
 - **`daily_pnl`** — one row per brand per day (Shopify NC/RC + Meta/Google/other spend). **`daily_pnl.currency`** is the ISO-4217 reporting currency for that row (Shopify/store settlement). Spend is converted into it at sync. NULL until the row is re-synced after the migration (`supabase/migration-daily-pnl-currency.sql` and `supabase/migrations/add_daily_pnl_reporting_currency.sql`).
 - **`brand_integrations`** — per-brand provider credentials. Trybe rows use `provider = 'trybe'`, `api_key` (never returned raw; masked in the integration API), and `metadata` JSON: `trybe_brand_id`, `trybe_program_id`, `trybe_program_name`. Metadata column: `supabase/migrations/add_brand_integrations_metadata.sql`.
-- Supporting: `ad_changelog` / `ad_snapshots` (changelog diffs), `shopify_stores` / `shopify_orders` / `shopify_products`, `app_settings`, `integrations` (Dropbox), calendar + feature-request tables.
+- **`ad_activity`** — one row per Meta activity or Google `change_event` (`supabase/migrations/add_ad_activity.sql`). `ad_activity_sync` stores last success and last error per brand and platform. The changelog no longer reads `ad_changelog` / `ad_snapshots`. `src/app/api/ad-media/route.ts` still selects `ad_snapshots`.
+- Supporting: `shopify_stores` / `shopify_orders` / `shopify_products`, `app_settings`, `integrations` (Dropbox), calendar + feature-request tables.
 
 Prefer service-role clients only on the server. Browser uses anon key + RLS.
 
@@ -134,12 +135,12 @@ Do not invent `shopify_stores` rows. Do not register Shopify webhooks for a bran
 4. **Never invent** brand lists, metrics, tokens, currencies, or “looks right” spend. Query or say unknown.
 5. **Google Ads** = Pipeboard (`src/lib/pipeboard-google.ts`). Normalize customer IDs with `normalizeCustomerId` (digits only). Windsor is retired.
 6. **Meta token** expires; refresh manually into env / `app_settings`. Use `/api/token-health` when diagnosing.
-7. **Ad Changelog** scans on demand (POST `/api/ad-changelog`). There is **no** Vercel weekly cron; operators click **Refresh Now**. Missing Meta token → `Meta: META_ACCESS_TOKEN not configured`. Missing Pipeboard token → `Google: PIPEBOARD_API_TOKEN not configured`. The page shows those strings in the error banner (`scanError`). First scan seeds snapshots (many `new_entity` rows); later scans emit status/budget/removed diffs. Google budgets are not returned by Pipeboard (status-only for Google). Founder requests for another brand are 403.
+7. **Ad Changelog** is a live feed. `GET /api/cron/ad-activity` runs every 15 minutes (`CRON_SECRET`) and upserts `ad_activity` on `event_key`. First run backfills Meta 7 days and Google 14 days; later runs overlap the last success (Meta 10 minutes, Google 15). Google’s query stays inside 29 days. Per-brand **Refresh** is `POST /api/ad-changelog`, about once a minute, admin or founder on their own brand. Missing Meta token → `Meta: META_ACCESS_TOKEN not configured`. Missing Pipeboard token → `Google: PIPEBOARD_API_TOKEN not configured`. Those strings land on `ad_activity_sync.last_error` and the page. Apply `supabase/migrations/add_ad_activity.sql` before the cron can write. Founder requests for another brand are 403.
 8. Don’t expand Triple Whale onboarding or “fix the TS build” as drive-by scope unless that is the task. Organic Jaguar’s orders and Daily P&L come from the scheduled Triple Whale pull, not a Shopify webhook.
 
 ## Working here
 
 - Path alias: `@/*` → `src/*`.
 - Local: `npm install` then `npm run dev` (needs env mirroring Vercel for real data).
-- Cron: `vercel.json` → `/api/cron/sync-pending` every 5 minutes (Dropbox resume) and `/api/cron/shopify-orders` every 2 hours at minute 20 UTC. Both use `CRON_SECRET`. The 5-minute Dropbox cron is already running in production, so this project accepts sub-daily schedules.
+- Cron: `vercel.json` → `/api/cron/sync-pending` every 5 minutes (Dropbox resume), `/api/cron/shopify-orders` every 2 hours at minute 20 UTC, and `/api/cron/ad-activity` every 15 minutes. All use `CRON_SECRET`. The 5-minute Dropbox cron is already running in production, so this project accepts sub-daily schedules.
 - Agents: prefer this file over archived Hermes. Update **this** file when product truth changes.

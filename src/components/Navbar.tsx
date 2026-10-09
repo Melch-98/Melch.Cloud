@@ -178,7 +178,6 @@ export default function Navbar({ children }: { children?: React.ReactNode }) {
       href: '/ad-changelog',
       icon: Activity,
       roles: ['admin', 'founder'],
-      badge: 'Beta',
     },
     {
       label: 'Calendar',

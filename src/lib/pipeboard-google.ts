@@ -89,7 +89,7 @@ export interface GoogleCampaign {
   [key: string]: any;
 }
 
-// Campaign list + status (for changelog diffing).
+// Campaign list + status.
 export async function getCampaigns(token: string, customerId: string): Promise<GoogleCampaign[]> {
   const data = await rpc(token, 'get_google_ads_campaigns', {
     customer_id: normalizeCustomerId(customerId),
