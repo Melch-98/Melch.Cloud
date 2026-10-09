@@ -3,6 +3,7 @@ import { runTripleWhaleBrandSync } from '@/lib/shopify/run-triplewhale-brand-syn
 import { clearCatchUpCursor, loadCatchUpCursors, saveCatchUpCursor } from './catchup-cursor';
 import { normalizeShopDomain } from './config';
 import { pnlCatchUpWindow, pnlPathForBrand, type PnlBrand, type PnlRefreshWindow } from './pnl-targets';
+import { resolveShopIanaTimeZone } from './shop-timezone';
 
 const PNL_CURSOR_PREFIX = 'shopify_pnl_catchup:';
 /** Stop starting brands after this so the order pull still fits in the 300s cron. */
@@ -90,8 +91,10 @@ async function readJson(response: Response): Promise<{ status: number; error: st
 
 /**
  * Refreshes daily_pnl for every non-archived brand the manual sync routes can serve.
- * The window starts at the earlier of (today minus 3) and (newest row minus 1),
- * capped at 45 days, and is sliced to 10 days so a long gap continues next run.
+ * The window is the shop's IANA calendar. It starts at local midnight of the
+ * earlier of (today minus 3) and (newest row minus 1), capped at 45 days, and
+ * is sliced to 10 days so a long gap continues next run. UTC is the fallback
+ * when the shop zone cannot be read.
  * Shopify-connected brands call runShopifyBrandSync. Domain-only brands call
  * runTripleWhaleBrandSync. One brand's failure does not stop the others.
  * Brands not started before deadlineMs are deferred, not failed.
@@ -135,10 +138,17 @@ export async function refreshDailyPnl(
       continue;
     }
     const newest = await newestPnlDate(supabase, brand.id);
+    const zone = await resolveShopIanaTimeZone(supabase, {
+      id: brand.id,
+      name: brand.name,
+      shopify_store_domain: brand.shopify_store_domain,
+      shopify_client_id: row.shopify_client_id,
+      shopify_client_secret: row.shopify_client_secret,
+    });
     pending.push({
       brand,
       path,
-      window: pnlCatchUpWindow(now, newest, cursors.get(brand.id) ?? null),
+      window: pnlCatchUpWindow(now, newest, cursors.get(brand.id) ?? null, zone.timeZone),
     });
   }
 

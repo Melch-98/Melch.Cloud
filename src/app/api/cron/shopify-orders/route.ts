@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-server';
 import { ensureCustomAppOrderWebhooks } from '@/lib/shopify/ensure-order-webhooks';
 import { syncConnectedBrandOrders } from '@/lib/shopify/order-sync';
+import { checkDailyPnlIntegrity } from '@/lib/shopify/pnl-integrity';
 import { PNL_BUDGET_MS, refreshDailyPnl } from '@/lib/shopify/refresh-daily-pnl';
 
 export const dynamic = 'force-dynamic';
@@ -13,11 +14,16 @@ export const maxDuration = 300;
  * Every 2 hours (Vercel already runs the Dropbox cron every 5 minutes, so
  * sub-daily crons are allowed on this project):
  * 1. Idempotently register order webhooks for custom-app brands.
- * 2. Refresh daily_pnl from the earlier of (today minus 3) and (newest row
- *    minus 1), capped at 45 days. A gap longer than 10 days is the oldest
- *    slice only; the next run continues. Same functions as the manual routes.
+ * 2. Refresh daily_pnl in each shop's IANA timezone, from local midnight of
+ *    the earlier of (today minus 3) and (newest row minus 1), capped at 45
+ *    days. A gap longer than 10 days is the oldest slice only; the next run
+ *    continues. Days the fetch does not cover completely are not written.
+ *    Same functions as the manual routes.
  * 3. Pull shopify_orders since the newest stored row (48 hour floor, 45 day
  *    cap). A longer gap is the oldest 10 days, then the next run continues.
+ * 4. Compare daily_pnl.gross_sales to shopify_orders gross for the last 14
+ *    complete shop-local days. Mismatches over 2% are logged and stored on
+ *    app_settings key daily_pnl_integrity.
  *
  * A missing webhook scope or one brand's sync error is logged and does not
  * fail the rest of the run. GET is the Vercel cron (Bearer CRON_SECRET).
@@ -38,6 +44,14 @@ async function runSync() {
     const webhooks = await ensureCustomAppOrderWebhooks(supabase);
     const pnl = await refreshDailyPnl(supabase, new Date(), started + PNL_BUDGET_MS);
     const orders = await syncConnectedBrandOrders(supabase, started + 270_000);
+    let integrity: Awaited<ReturnType<typeof checkDailyPnlIntegrity>> | { error: string };
+    try {
+      integrity = await checkDailyPnlIntegrity(supabase, new Date());
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Daily P&L integrity check failed';
+      console.error(message);
+      integrity = { error: message };
+    }
     const orderFailures = orders.filter((brand) => brand.error).length;
     const pnlFailures = pnl.brands.filter((brand) => !brand.ok && !brand.skipped).length;
     return NextResponse.json({
@@ -45,6 +59,7 @@ async function runSync() {
       webhooks,
       pnl,
       orders,
+      integrity,
       synced_at: new Date().toISOString(),
     });
   } catch (err) {
