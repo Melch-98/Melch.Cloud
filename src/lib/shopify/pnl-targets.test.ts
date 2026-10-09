@@ -64,7 +64,7 @@ test('fan-out keeps FOND on Shopify, Organic Jaguar on Triple Whale, and drops a
   );
 });
 
-test('the refresh window is the last three UTC days plus today', () => {
+test('the default refresh window is the last three UTC days plus today', () => {
   const window = pnlRefreshWindow(new Date('2026-09-28T17:30:00.000Z'));
   assert.equal(window.startDate, '2026-09-25');
   assert.equal(window.endDate, '2026-09-28');
@@ -118,4 +118,43 @@ test('a brand with no daily_pnl rows backfills from the 45-day cap', () => {
   const window = pnlCatchUpWindow(NOW, null);
   assert.equal(window.startDate, '2026-08-14');
   assert.equal(window.chunked, true);
+});
+
+test('Toronto days start at local midnight, not UTC midnight', () => {
+  const now = new Date('2026-10-09T17:30:00.000Z');
+  const window = pnlCatchUpWindow(now, '2026-10-09', null, 'America/Toronto');
+  assert.equal(window.startDate, '2026-10-06');
+  assert.equal(window.endDate, '2026-10-09');
+  assert.equal(window.sinceDate, '2026-10-06T04:00:00.000Z');
+  assert.equal(window.untilDate, '2026-10-09T17:30:00.000Z');
+  assert.equal(window.chunked, false);
+});
+
+test('Chicago before local midnight is still the previous shop day', () => {
+  const now = new Date('2026-10-09T04:30:00.000Z');
+  const toronto = pnlCatchUpWindow(now, '2026-10-09', null, 'America/Toronto');
+  const chicago = pnlCatchUpWindow(now, '2026-10-08', null, 'America/Chicago');
+  const utc = pnlCatchUpWindow(now, '2026-10-09', null, 'UTC');
+  assert.equal(toronto.startDate, '2026-10-06');
+  assert.equal(toronto.sinceDate, '2026-10-06T04:00:00.000Z');
+  assert.equal(chicago.startDate, '2026-10-05');
+  assert.equal(chicago.sinceDate, '2026-10-05T05:00:00.000Z');
+  assert.equal(utc.startDate, '2026-10-06');
+  assert.equal(utc.sinceDate, '2026-10-06T00:00:00.000Z');
+});
+
+test('Chicago standard time uses the winter offset', () => {
+  const now = new Date('2026-01-15T18:00:00.000Z');
+  const window = pnlCatchUpWindow(now, '2026-01-15', null, 'America/Chicago');
+  assert.equal(window.startDate, '2026-01-12');
+  assert.equal(window.sinceDate, '2026-01-12T06:00:00.000Z');
+});
+
+test('a chunked Toronto window ends on the last millisecond of the shop day', () => {
+  const now = new Date('2026-10-09T17:30:00.000Z');
+  const window = pnlCatchUpWindow(now, '2026-01-01', null, 'America/Toronto');
+  assert.equal(window.chunked, true);
+  assert.equal(window.sinceDate, '2026-08-25T04:00:00.000Z');
+  assert.equal(window.endDate, '2026-09-03');
+  assert.equal(window.untilDate, '2026-09-04T03:59:59.999Z');
 });
