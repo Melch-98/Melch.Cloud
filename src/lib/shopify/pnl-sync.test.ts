@@ -5,6 +5,7 @@ import { aggregateOrdersByDay, type DayBucket, type PnlShopifyOrder } from './pn
 import {
   buildFullCoveredDayRows,
   buildSpendOnlyCoveredDayRows,
+  coveredDaysWithinStoredHistory,
   ZERO_DAY_BUCKET,
 } from './pnl-covered-days.ts';
 import { pnlCatchUpWindow } from './pnl-targets.ts';
@@ -266,6 +267,21 @@ test('an empty successful spend payload is zero, and an error payload is not', (
   assert.equal(readMetaSpend(true, { error: { message: 'Invalid OAuth access token' } }).ok, false);
   assert.equal(readMetaSpend(false, { data: [] }).ok, false);
   assert.equal(readMetaSpend(true, { data: [], paging: { next: 'https://graph.facebook.com/next' } }).ok, false);
+});
+
+test('a rebuild does not zero-fill days before the earliest stored order', () => {
+  const covered = ['2026-09-20', '2026-09-21', '2026-09-25', '2026-09-26'];
+  const beforeHistory = coveredDaysWithinStoredHistory(covered, '2026-09-25');
+  assert.deepEqual(beforeHistory.write, ['2026-09-25', '2026-09-26']);
+  assert.deepEqual(beforeHistory.skipped, ['2026-09-20', '2026-09-21']);
+
+  const noOrders = coveredDaysWithinStoredHistory(covered, null);
+  assert.deepEqual(noOrders.write, []);
+  assert.deepEqual(noOrders.skipped, covered);
+
+  const historyAlreadyOpen = coveredDaysWithinStoredHistory(covered, '2026-09-01');
+  assert.deepEqual(historyAlreadyOpen.write, covered);
+  assert.deepEqual(historyAlreadyOpen.skipped, []);
 });
 
 test('integrity does not start when under 20 seconds remain before the 300s cron limit', () => {

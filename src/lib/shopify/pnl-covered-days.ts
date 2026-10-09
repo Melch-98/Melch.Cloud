@@ -68,6 +68,25 @@ export type CoveredPnlRow = {
 };
 
 /**
+ * Drop shop-local days before the earliest stored order. Those days are not
+ * in shopify_orders, so writing zeros would wipe a real daily_pnl row.
+ * No stored orders means the whole window is skipped.
+ */
+export function coveredDaysWithinStoredHistory(
+  coveredDays: string[],
+  earliestShopDay: string | null
+): { write: string[]; skipped: string[] } {
+  if (!earliestShopDay) return { write: [], skipped: coveredDays.slice() };
+  const write: string[] = [];
+  const skipped: string[] = [];
+  for (const day of coveredDays) {
+    if (day < earliestShopDay) skipped.push(day);
+    else write.push(day);
+  }
+  return { write, skipped };
+}
+
+/**
  * One daily_pnl row per fully covered shop-local day. Days with no orders
  * still write explicit zeros. A refund-only bucket is kept.
  */

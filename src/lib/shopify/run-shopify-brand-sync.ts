@@ -14,6 +14,7 @@ import {
 } from '@/lib/currency';
 import { fetchGoogleAdsCurrency } from '@/lib/pipeboard-google';
 import { fetchDailyAdSpend } from '@/lib/shopify/fetch-ad-spend';
+import { collectPagedOrders, ordersFromPayload, type OrdersPageResult } from '@/lib/shopify/orders-pages';
 import { buildFullCoveredDayRows, buildSpendOnlyCoveredDayRows } from '@/lib/shopify/pnl-covered-days';
 import { aggregateOrdersByDay, type PnlShopifyOrder } from '@/lib/shopify/pnl-days';
 import { resolveShopIanaTimeZone } from '@/lib/shopify/shop-timezone';
@@ -217,9 +218,6 @@ async function fetchAllOrders(
   sinceDate: string,
   untilDate: string
 ): Promise<ShopifyOrder[]> {
-  const allOrders: ShopifyOrder[] = [];
-  let nextUrl: string | null = null;
-
   // First request
   const params: Record<string, string> = {
     status: 'any',
@@ -232,33 +230,25 @@ async function fetchAllOrders(
   };
 
   const first = await shopifyFetch(domain, token, 'orders', params);
-  const firstData = first.data as { orders: ShopifyOrder[] };
-  allOrders.push(...firstData.orders);
-  nextUrl = first.nextLink;
+  const firstOrders = ordersFromPayload(first.data) as ShopifyOrder[];
+  const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+  return collectPagedOrders(firstOrders, first.nextLink, (url) => readShopifyOrdersPage(url, token), sleep, 100);
+}
 
-  // Paginate
-  while (nextUrl) {
-    const res = await fetch(nextUrl, {
-      headers: {
-        'X-Shopify-Access-Token': token,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!res.ok) break;
-
-    const linkHeader = res.headers.get('Link') || '';
-    const nextMatch = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
-    nextUrl = nextMatch ? nextMatch[1] : null;
-
-    const data = (await res.json()) as { orders: ShopifyOrder[] };
-    allOrders.push(...data.orders);
-
-    // Shopify rate limit: 2 req/sec — short pause is enough
-    await new Promise((r) => setTimeout(r, 100));
-  }
-
-  return allOrders;
+async function readShopifyOrdersPage(url: string, token: string): Promise<OrdersPageResult> {
+  const res = await fetch(url, {
+    headers: {
+      'X-Shopify-Access-Token': token,
+      'Content-Type': 'application/json',
+    },
+  });
+  return {
+    ok: res.ok,
+    status: res.status,
+    retryAfter: res.headers.get('Retry-After'),
+    link: res.headers.get('Link'),
+    body: res.ok ? await res.json() : null,
+  };
 }
 
 // ─── Enrich orders with reliable lifetime order counts ─────────
