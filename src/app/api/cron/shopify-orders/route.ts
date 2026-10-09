@@ -4,6 +4,7 @@ import { ensureCustomAppOrderWebhooks } from '@/lib/shopify/ensure-order-webhook
 import { syncConnectedBrandOrders } from '@/lib/shopify/order-sync';
 import { checkDailyPnlIntegrity } from '@/lib/shopify/pnl-integrity';
 import { PNL_BUDGET_MS, refreshDailyPnl } from '@/lib/shopify/refresh-daily-pnl';
+import { pnlIntegrityBudgetRemains, pnlIntegrityDeadline } from '@/lib/shopify/shop-time';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -18,12 +19,15 @@ export const maxDuration = 300;
  *    the earlier of (today minus 3) and (newest row minus 1), capped at 45
  *    days. A gap longer than 10 days is the oldest slice only; the next run
  *    continues. Days the fetch does not cover completely are not written.
- *    Same functions as the manual routes.
+ *    Fully covered days are written even with zero orders. A successful spend
+ *    fetch writes 0 for days it omits; a failed fetch does not.
  * 3. Pull shopify_orders since the newest stored row (48 hour floor, 45 day
  *    cap). A longer gap is the oldest 10 days, then the next run continues.
- * 4. Compare daily_pnl.gross_sales to shopify_orders gross for the last 14
- *    complete shop-local days. Mismatches over 2% are logged and stored on
- *    app_settings key daily_pnl_integrity.
+ * 4. Compare daily_pnl.gross_sales to shopify_orders gross for Shopify Admin
+ *    brands over the last 14 complete shop-local days. Triple Whale-only
+ *    brands are skipped. The check is skipped when under 20s remain before
+ *    this route's 300s limit. Mismatches over 2% are stored on app_settings
+ *    key daily_pnl_integrity.
  *
  * A missing webhook scope or one brand's sync error is logged and does not
  * fail the rest of the run. GET is the Vercel cron (Bearer CRON_SECRET).
@@ -44,13 +48,22 @@ async function runSync() {
     const webhooks = await ensureCustomAppOrderWebhooks(supabase);
     const pnl = await refreshDailyPnl(supabase, new Date(), started + PNL_BUDGET_MS);
     const orders = await syncConnectedBrandOrders(supabase, started + 270_000);
-    let integrity: Awaited<ReturnType<typeof checkDailyPnlIntegrity>> | { error: string };
-    try {
-      integrity = await checkDailyPnlIntegrity(supabase, new Date());
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Daily P&L integrity check failed';
-      console.error(message);
-      integrity = { error: message };
+    const integrityDeadline = pnlIntegrityDeadline(started);
+    let integrity:
+      | Awaited<ReturnType<typeof checkDailyPnlIntegrity>>
+      | { skipped: true; reason: 'time_budget' }
+      | { error: string };
+    if (!pnlIntegrityBudgetRemains(Date.now(), integrityDeadline)) {
+      console.log('daily_pnl integrity skipped; under 20s remain before the 300s cron limit');
+      integrity = { skipped: true, reason: 'time_budget' };
+    } else {
+      try {
+        integrity = await checkDailyPnlIntegrity(supabase, new Date(), integrityDeadline);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Daily P&L integrity check failed';
+        console.error(message);
+        integrity = { error: message };
+      }
     }
     const orderFailures = orders.filter((brand) => brand.error).length;
     const pnlFailures = pnl.brands.filter((brand) => !brand.ok && !brand.skipped).length;

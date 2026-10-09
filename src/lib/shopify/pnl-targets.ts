@@ -24,6 +24,20 @@ export function pnlPathForBrand(brand: PnlBrand): PnlPath {
   return 'triple_whale';
 }
 
+export type PnlIntegritySkipReason = 'triple_whale' | 'no_shop' | 'archived';
+
+/**
+ * Shopify Admin brands are compared to shopify_orders. Triple Whale-only
+ * brands (Organic Jaguar) are a different order source and must not be flagged.
+ */
+export function pnlIntegritySkipReason(brand: PnlBrand): PnlIntegritySkipReason | null {
+  const path = pnlPathForBrand(brand);
+  if (path === 'shopify') return null;
+  if (path === 'triple_whale') return 'triple_whale';
+  if (brand.archived_at) return 'archived';
+  return 'no_shop';
+}
+
 export function selectPnlRefreshBrands(brands: PnlBrand[]): {
   shopify: PnlBrand[];
   tripleWhale: PnlBrand[];

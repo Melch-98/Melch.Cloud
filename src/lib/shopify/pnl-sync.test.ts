@@ -1,12 +1,21 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { aggregateOrdersByDay, type PnlShopifyOrder } from './pnl-days.ts';
+import { readGoogleSpend, readMetaSpend } from './fetch-ad-spend.ts';
+import { aggregateOrdersByDay, type DayBucket, type PnlShopifyOrder } from './pnl-days.ts';
+import {
+  buildFullCoveredDayRows,
+  buildSpendOnlyCoveredDayRows,
+  ZERO_DAY_BUCKET,
+} from './pnl-covered-days.ts';
 import { pnlCatchUpWindow } from './pnl-targets.ts';
 import {
   coveredShopDays,
+  fullyCoveredShopDays,
   isGrossMismatch,
   isShopDayFullyCovered,
   lastCompleteShopDays,
+  pnlIntegrityBudgetRemains,
+  pnlIntegrityDeadline,
   shopLocalDay,
 } from './shop-time.ts';
 import { spendFields, upsertDailyPnl } from './upsert-daily-pnl.ts';
@@ -158,6 +167,114 @@ test('a missing currency column retries without nulling spend', async () => {
   assert.equal(seen[1].rows[0].meta_spend, 4);
   assert.equal(seen[0].options.defaultToNull, false);
   assert.equal(seen[1].options.defaultToNull, false);
+});
+
+function bucket(gross: number, extra: Partial<DayBucket> = {}): DayBucket {
+  return { ...ZERO_DAY_BUCKET, gross_sales: gross, nc_orders: gross > 0 ? 1 : 0, nc_revenue: gross, ...extra };
+}
+
+test('every fully covered day is written, with zeros when that day has no orders', () => {
+  const since = '2026-10-02T04:00:00.000Z';
+  const until = '2026-10-05T17:00:00.000Z';
+  const days = fullyCoveredShopDays(since, until, 'America/Toronto');
+  assert.deepEqual(days, ['2026-10-02', '2026-10-03', '2026-10-04']);
+  assert.equal(fullyCoveredShopDays('2026-10-02T12:00:00.000Z', until, 'America/Toronto').includes('2026-10-02'), false);
+
+  const buckets = new Map<string, DayBucket>([
+    ['2026-10-02', bucket(3061)],
+    ['2026-10-03', bucket(0, { refunds: -12.5 })],
+  ]);
+  const rows = buildFullCoveredDayRows({
+    brandId: 'mintier',
+    currency: 'USD',
+    syncedAt: '2026-10-05T17:00:00.000Z',
+    coveredDays: days,
+    buckets,
+    meta: { ok: true, byDay: new Map([['2026-10-02', 12.5]]) },
+    google: { ok: true, byDay: new Map([['2026-10-04', 3.25]]) },
+  });
+
+  assert.equal(rows.length, 3);
+  assert.equal(rows[0].gross_sales, 3061);
+  assert.equal(rows[0].meta_spend, 12.5);
+  assert.equal(rows[0].google_spend, 0);
+  assert.equal(rows[1].gross_sales, 0);
+  assert.equal(rows[1].nc_orders, 0);
+  assert.equal(rows[1].refunds, -12.5);
+  assert.equal(rows[1].meta_spend, 0);
+  assert.equal(rows[1].google_spend, 0);
+  assert.equal(rows[2].gross_sales, 0);
+  assert.equal(rows[2].meta_spend, 0);
+  assert.equal(rows[2].google_spend, 3.25);
+  assert.equal(rows.some((row) => row.date === '2026-10-05'), false);
+});
+
+test('a failed spend fetch does not write zero over a covered day', () => {
+  const rows = buildFullCoveredDayRows({
+    brandId: 'mintier',
+    currency: 'USD',
+    syncedAt: '2026-10-05T17:00:00.000Z',
+    coveredDays: ['2026-10-02', '2026-10-03'],
+    buckets: new Map([['2026-10-02', bucket(100)]]),
+    meta: { ok: false, byDay: new Map([['2026-10-02', 99]]) },
+    google: { ok: true, byDay: new Map() },
+  });
+  assert.equal('meta_spend' in rows[0], false);
+  assert.equal('meta_spend' in rows[1], false);
+  assert.equal(rows[0].google_spend, 0);
+  assert.equal(rows[1].google_spend, 0);
+  assert.equal(rows[1].gross_sales, 0);
+
+  const spendOnly = buildSpendOnlyCoveredDayRows({
+    brandId: 'mintier',
+    currency: 'USD',
+    syncedAt: '2026-10-05T17:00:00.000Z',
+    coveredDays: ['2026-10-02'],
+    meta: { ok: true, byDay: new Map() },
+    google: { ok: false, byDay: new Map() },
+  });
+  assert.equal(spendOnly.length, 1);
+  assert.equal(spendOnly[0].meta_spend, 0);
+  assert.equal('google_spend' in spendOnly[0], false);
+  assert.equal('gross_sales' in spendOnly[0], false);
+
+  const neither = buildSpendOnlyCoveredDayRows({
+    brandId: 'mintier',
+    currency: 'USD',
+    syncedAt: '2026-10-05T17:00:00.000Z',
+    coveredDays: ['2026-10-02'],
+    meta: { ok: false, byDay: new Map() },
+    google: { ok: false, byDay: new Map() },
+  });
+  assert.deepEqual(neither, []);
+});
+
+test('an empty successful spend payload is zero, and an error payload is not', () => {
+  const googleEmpty = readGoogleSpend({ results: [] });
+  assert.equal(googleEmpty.ok, true);
+  assert.equal(googleEmpty.byDay.size, 0);
+  const googleZeroCost = readGoogleSpend([
+    { segments: { date: '2026-10-02' }, metrics: { costMicros: '0' } },
+  ]);
+  assert.equal(googleZeroCost.ok, true);
+  assert.equal(googleZeroCost.byDay.has('2026-10-02'), false);
+  assert.equal(readGoogleSpend({ error: 'nope' }).ok, false);
+
+  const metaEmpty = readMetaSpend(true, { data: [] });
+  assert.equal(metaEmpty.ok, true);
+  assert.equal(metaEmpty.byDay.size, 0);
+  assert.equal(readMetaSpend(true, { error: { message: 'Invalid OAuth access token' } }).ok, false);
+  assert.equal(readMetaSpend(false, { data: [] }).ok, false);
+  assert.equal(readMetaSpend(true, { data: [], paging: { next: 'https://graph.facebook.com/next' } }).ok, false);
+});
+
+test('integrity does not start when under 20 seconds remain before the 300s cron limit', () => {
+  const started = 1_000_000;
+  const deadline = pnlIntegrityDeadline(started);
+  assert.equal(deadline, started + 300_000 - 20_000);
+  assert.equal(pnlIntegrityBudgetRemains(deadline, deadline), false);
+  assert.equal(pnlIntegrityBudgetRemains(deadline + 5_000, deadline), false);
+  assert.equal(pnlIntegrityBudgetRemains(deadline - 1, deadline), true);
 });
 
 test('integrity flags gross gaps over 2 percent and ignores the open shop day', () => {

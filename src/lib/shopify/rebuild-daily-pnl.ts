@@ -1,15 +1,17 @@
 import { acquireSyncLock, invalidatePnlCache, releaseSyncLock } from '@/lib/redis';
 import { getFxRates } from '@/lib/currency';
 import { fetchDailyAdSpend } from '@/lib/shopify/fetch-ad-spend';
+import { buildFullCoveredDayRows } from '@/lib/shopify/pnl-covered-days';
 import { aggregateOrdersByDay, type PnlShopifyOrder } from '@/lib/shopify/pnl-days';
 import { resolveShopIanaTimeZone } from '@/lib/shopify/shop-timezone';
 import {
   addCalendarDays,
+  fullyCoveredShopDays,
   isShopDayFullyCovered,
   ymdInTimeZone,
   zonedMidnight,
 } from '@/lib/shopify/shop-time';
-import { roundMoney, spendFields, upsertDailyPnl } from '@/lib/shopify/upsert-daily-pnl';
+import { upsertDailyPnl } from '@/lib/shopify/upsert-daily-pnl';
 import { exchangeClientCredentials } from '@/lib/shopify/client-credentials';
 import { normalizeShopDomain } from '@/lib/shopify/config';
 import {
@@ -211,43 +213,15 @@ export async function rebuildDailyPnlFromStoredOrders(
     const dailyMeta = convertSpendMap(spend.meta, metaCurrency || reporting.code, reporting.code, fxRates);
     const dailyGoogle = convertSpendMap(spend.google, googleCurrency || reporting.code, reporting.code, fxRates);
 
-    const inRange = (date: string) => date >= startDate && date <= endDate;
-    const complete = (date: string) =>
-      inRange(date) && isShopDayFullyCovered(date, sinceIso, untilIso, timeZone);
-
-    const rows = Array.from(dayBuckets.entries())
-      .filter(([date]) => complete(date))
-      .map(([date, bucket]) => ({
-        brand_id: row.id,
-        date,
-        nc_orders: bucket.nc_orders,
-        nc_revenue: roundMoney(bucket.nc_revenue),
-        rc_orders: bucket.rc_orders,
-        rc_revenue: roundMoney(bucket.rc_revenue),
-        gross_sales: roundMoney(bucket.gross_sales),
-        discounts: roundMoney(bucket.discounts),
-        refunds: roundMoney(bucket.refunds),
-        taxes: roundMoney(bucket.taxes),
-        shipping: roundMoney(bucket.shipping),
-        currency: reporting.code,
-        synced_at: now.toISOString(),
-        ...spendFields(date, dailyMeta, dailyGoogle),
-      }));
-
-    const orderDates = new Set(rows.map((entry) => entry.date));
-    const spendOnlyRows = [];
-    for (const date of new Set([...dailyMeta.keys(), ...dailyGoogle.keys()])) {
-      if (orderDates.has(date) || !complete(date)) continue;
-      spendOnlyRows.push({
-        brand_id: row.id,
-        date,
-        currency: reporting.code,
-        synced_at: now.toISOString(),
-        ...spendFields(date, dailyMeta, dailyGoogle),
-      });
-    }
-
-    const allRows = [...rows, ...spendOnlyRows];
+    const allRows = buildFullCoveredDayRows({
+      brandId: row.id,
+      currency: reporting.code,
+      syncedAt: now.toISOString(),
+      coveredDays: fullyCoveredShopDays(sinceIso, untilIso, timeZone),
+      buckets: dayBuckets,
+      meta: { ok: spend.metaOk, byDay: dailyMeta },
+      google: { ok: spend.googleOk, byDay: dailyGoogle },
+    });
     if (allRows.length > 0) {
       const { error } = await upsertDailyPnl(supabase, allRows);
       if (error) throw new Error(error.message || 'Failed to save daily_pnl');
