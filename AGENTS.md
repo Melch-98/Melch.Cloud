@@ -50,7 +50,7 @@ Design: dark `#0a0a0a`, text `#f5f5f8`, gold `#c8b89a` (`brand.*` in Tailwind).
 | `/analytics/bfcm-pacing` | admin / strategist / founder | BFCM command center. Founders see the Performance nav. |
 | `/analytics/daily-pnl` | admin / founder | Daily P&L in the brand’s reporting currency |
 | `/analytics/campaigns`, `/analytics/geo-performance` | admin / founder / strategist | Campaigns; geo aMER |
-| `/analytics/efficiency`, `/analytics/ltv-cohorts`, `/analytics/forecast` | admin / founder | Efficiency, LTV, forecast — display via reporting currency |
+| `/analytics/efficiency`, `/analytics/ltv-cohorts`, `/analytics/forecast` | — | Retired. Permanent redirects to `/dashboard` (`next.config.mjs`). |
 | `/analytics/trybe-program` | admin / strategist / founder | Trybe Program Overview (read-only). Nav: Creative Analytics → **Trybe Program**. Excludes FOND. |
 | `/analytics` (+ copy, ad perspective, matrix) | role-gated | Creative analytics. Matrix is admin + strategist. |
 | `/analytics/funnel-viewer` | admin / strategist / founder | Funnel Viewer constellation. Port of Odylic Constellation. One live route, `GET /api/funnel-viewer/ads`. Attribution default is 7-day click only (`FUNNEL_ATTRIBUTION` in `src/lib/meta-funnel.ts`). Non-admins are locked to `users_profile.brand_id`. |

@@ -28,7 +28,6 @@ import {
   Activity,
   Video,
   Home,
-  Target,
   Grid3X3,
   Zap,
   Globe,
@@ -161,9 +160,6 @@ export default function Navbar({ children }: { children?: React.ReactNode }) {
         { label: 'Daily P&L', href: '/analytics/daily-pnl', icon: DollarSign, roles: ['admin', 'founder'] },
         { label: 'Campaigns', href: '/analytics/campaigns', icon: Activity, roles: ['admin', 'founder', 'strategist'] },
         { label: 'Geo Performance', href: '/analytics/geo-performance', icon: Globe, roles: ['admin', 'founder', 'strategist'] },
-        { label: 'Efficiency Curve', href: '/analytics/efficiency', icon: TrendingUp, roles: ['admin', 'founder'] },
-        { label: 'LTV Cohorts', href: '/analytics/ltv-cohorts', icon: Users, roles: ['admin', 'founder'] },
-        { label: 'Forecast', href: '/analytics/forecast', icon: Target, roles: ['admin', 'founder'] },
       ]},
       { label: 'Creative Analytics', href: '/analytics', icon: Sparkles, roles: ['admin', 'strategist', 'founder'], badge: 'Beta', children: [
         { label: 'Top Creatives', href: '/analytics', icon: Sparkles },
