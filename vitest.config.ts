@@ -7,6 +7,7 @@ export default defineConfig({
     include: [
       'src/components/funnel-viewer/**/*.test.ts',
       'src/lib/meta-funnel.test.ts',
+      'src/lib/ad-activity/activity.test.ts',
       'src/lib/creative-auto-tag.test.ts',
       'src/lib/creative-naming.test.ts',
       'src/lib/auto-tag/grok.test.ts',

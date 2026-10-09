@@ -7,6 +7,10 @@
     {
       "path": "/api/cron/shopify-orders",
       "schedule": "20 */2 * * *"
+    },
+    {
+      "path": "/api/cron/ad-activity",
+      "schedule": "*/15 * * * *"
     }
   ]
 }
