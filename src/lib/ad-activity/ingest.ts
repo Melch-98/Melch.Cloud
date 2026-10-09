@@ -1,12 +1,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { gaqlQuery, normalizeCustomerId, resolvePipeboardToken } from '@/lib/pipeboard-google';
+import { gaqlQueryStrict, normalizeCustomerId, resolvePipeboardToken } from '@/lib/pipeboard-google';
 import {
   googleChangeEventQuery,
+  googleChangeOccurredMs,
   googleQueryBounds,
   metaAccountId,
   metaActivityFields,
   normalizeGoogleChange,
   normalizeMetaActivity,
+  oldestMetaEventMs,
+  platformSyncBookmark,
   safeErrorMessage,
   type MetaActivity,
   type NormalizedActivity,
@@ -212,27 +215,49 @@ async function syncMeta(
     } catch {
       currency = null;
     }
-    const fetched = await fetchMetaActivities(token, accountId, window.since, window.until);
-    const normalized = fetched.events
+    const collected: MetaActivity[] = [];
+    let truncated = false;
+    let untilMs = window.until;
+    for (let pass = 0; pass < 6; pass++) {
+      const fetched = await fetchMetaActivities(token, accountId, window.since, untilMs);
+      collected.push(...fetched.events);
+      if (!fetched.truncated) {
+        truncated = false;
+        break;
+      }
+      const oldest = oldestMetaEventMs(fetched.events);
+      if (oldest == null || oldest >= untilMs) {
+        truncated = true;
+        break;
+      }
+      untilMs = oldest;
+      truncated = true;
+    }
+    const normalized = collected
       .map((event) => normalizeMetaActivity(event, { accountId, currency }))
       .filter((event): event is NormalizedActivity => !!event);
     const deduped = dedupe(normalized);
     const upserted = await upsertActivities(sb, brand.id, deduped);
-    const truncated = fetched.truncated
-      ? 'Meta activity page cap reached; some older events in this window were not saved'
-      : null;
+    const bookmark = platformSyncBookmark({
+      platform: 'meta',
+      windowUntilMs: window.until,
+      rawCount: collected.length,
+      parsedCount: normalized.length,
+      truncated,
+      oldestFetchedMs: oldestMetaEventMs(collected),
+    });
     await markSync(sb, brand.id, 'meta', {
       account_id: accountId,
-      last_success_at: new Date(window.until).toISOString(),
-      last_error: truncated,
-      last_error_at: truncated ? new Date(now).toISOString() : null,
+      ...(bookmark.lastSuccessAt ? { last_success_at: bookmark.lastSuccessAt } : {}),
+      last_error: bookmark.error,
+      last_error_at: bookmark.error ? new Date(now).toISOString() : null,
     });
     return {
       brand_id: brand.id,
       platform: 'meta',
-      ok: !truncated,
+      ok: !bookmark.error,
       upserted,
-      error: truncated || undefined,
+      error: bookmark.error || undefined,
     };
   } catch (error) {
     const message = safeErrorMessage(error, token);
@@ -285,7 +310,7 @@ async function syncGoogle(
   });
 
   try {
-    const customerRows = await gaqlQuery(
+    const customerRows = await gaqlQueryStrict(
       token,
       customerId,
       'SELECT customer.time_zone, customer.currency_code FROM customer LIMIT 1'
@@ -295,30 +320,60 @@ async function syncGoogle(
     if (!timeZone) throw new Error('Google customer time_zone was not returned');
 
     const collected: NormalizedActivity[] = [];
+    let rawCount = 0;
+    let truncated = false;
+    let oldestFetchedMs: number | null = null;
+    let endedOnFullPage = false;
     let cursor = window.since;
     for (let pass = 0; pass < 5 && cursor < window.until; pass++) {
       const bounds = googleQueryBounds(cursor, window.until, timeZone);
       const query = googleChangeEventQuery(bounds.startLocal, bounds.endLocal);
-      const rows = await gaqlQuery(token, customerId, query);
-      const batch = (rows || [])
+      const rows = await gaqlQueryStrict(token, customerId, query);
+      rawCount += rows.length;
+      const batch = rows
         .map((row) => normalizeGoogleChange(row, { customerId, currency, timeZone }))
         .filter((event): event is NormalizedActivity => !!event);
       collected.push(...batch);
-      if (!rows || rows.length < 1000) break;
-      const last = batch[batch.length - 1];
-      const next = last ? new Date(last.occurred_at).getTime() + 1000 : cursor;
-      if (next <= cursor) break;
-      cursor = next;
+      if (rows.length < 1000) {
+        endedOnFullPage = false;
+        break;
+      }
+      endedOnFullPage = true;
+      const lastMs = googleChangeOccurredMs(rows[rows.length - 1], timeZone);
+      if (lastMs == null || lastMs <= cursor) {
+        truncated = true;
+        oldestFetchedMs = lastMs ?? oldestFetchedMs;
+        break;
+      }
+      // Same timestamp again next pass. event_key drops the rows we already stored.
+      cursor = lastMs;
+      oldestFetchedMs = lastMs;
     }
+    if (endedOnFullPage) truncated = true;
 
-    const upserted = await upsertActivities(sb, brand.id, dedupe(collected));
+    const deduped = dedupe(collected);
+    const upserted = await upsertActivities(sb, brand.id, deduped);
+    const bookmark = platformSyncBookmark({
+      platform: 'google',
+      windowUntilMs: window.until,
+      rawCount,
+      parsedCount: collected.length,
+      truncated,
+      oldestFetchedMs,
+    });
     await markSync(sb, brand.id, 'google', {
       account_id: customerId,
-      last_success_at: new Date(window.until).toISOString(),
-      last_error: null,
-      last_error_at: null,
+      ...(bookmark.lastSuccessAt ? { last_success_at: bookmark.lastSuccessAt } : {}),
+      last_error: bookmark.error,
+      last_error_at: bookmark.error ? new Date(now).toISOString() : null,
     });
-    return { brand_id: brand.id, platform: 'google', ok: true, upserted };
+    return {
+      brand_id: brand.id,
+      platform: 'google',
+      ok: !bookmark.error,
+      upserted,
+      error: bookmark.error || undefined,
+    };
   } catch (error) {
     const message = safeErrorMessage(error, token);
     await markSync(sb, brand.id, 'google', {

@@ -70,10 +70,6 @@ export function metaActivityFields(): string {
   return META_FIELDS.join(',');
 }
 
-/**
- * Leaf fields are selected on purpose. Selecting only the old_resource /
- * new_resource messages comes back null on the JSON query path.
- */
 export const GOOGLE_CHANGE_EVENT_FIELDS = [
   'change_event.resource_name',
   'change_event.change_date_time',
@@ -89,28 +85,6 @@ export const GOOGLE_CHANGE_EVENT_FIELDS = [
   'change_event.ad_group',
   'campaign.name',
   'ad_group.name',
-  'change_event.old_resource.campaign_budget.amount_micros',
-  'change_event.new_resource.campaign_budget.amount_micros',
-  'change_event.old_resource.campaign_budget.period',
-  'change_event.new_resource.campaign_budget.period',
-  'change_event.old_resource.campaign.status',
-  'change_event.new_resource.campaign.status',
-  'change_event.old_resource.campaign.name',
-  'change_event.new_resource.campaign.name',
-  'change_event.old_resource.ad_group.status',
-  'change_event.new_resource.ad_group.status',
-  'change_event.old_resource.ad_group.name',
-  'change_event.new_resource.ad_group.name',
-  'change_event.old_resource.ad_group.cpc_bid_micros',
-  'change_event.new_resource.ad_group.cpc_bid_micros',
-  'change_event.old_resource.ad_group.target_cpa_micros',
-  'change_event.new_resource.ad_group.target_cpa_micros',
-  'change_event.old_resource.campaign.target_cpa.target_cpa_micros',
-  'change_event.new_resource.campaign.target_cpa.target_cpa_micros',
-  'change_event.old_resource.campaign.target_roas.target_roas',
-  'change_event.new_resource.campaign.target_roas.target_roas',
-  'change_event.old_resource.ad_group_ad.status',
-  'change_event.new_resource.ad_group_ad.status',
 ];
 
 export function googleChangeEventQuery(startLocal: string, endLocal: string): string {
@@ -385,16 +359,40 @@ export function metaEventKey(accountId: string, event: MetaActivity): string {
   return `meta:${accountId}:${digest}`;
 }
 
+/** Graph `event_time` is an ISO string. Numeric unix seconds still parse. */
+export function metaEventTime(value: unknown): Date | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    const ms = value > 10_000_000_000 ? value : value * 1000;
+    const date = new Date(ms);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (/^\d+(\.\d+)?$/.test(trimmed)) return metaEventTime(Number(trimmed));
+  const date = new Date(trimmed);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function oldestMetaEventMs(events: Array<{ event_time?: string | number }>): number | null {
+  let oldest: number | null = null;
+  for (const event of events) {
+    const time = metaEventTime(event.event_time);
+    if (!time) continue;
+    const ms = time.getTime();
+    if (oldest == null || ms < oldest) oldest = ms;
+  }
+  return oldest;
+}
+
 export function normalizeMetaActivity(
   event: MetaActivity,
   ctx: { accountId: string; currency: string | null }
 ): NormalizedActivity | null {
   const eventType = (event.event_type || '').trim();
   if (!eventType) return null;
-  const seconds = Number(event.event_time);
-  if (!Number.isFinite(seconds) || seconds <= 0) return null;
-  const occurred = new Date(seconds > 10_000_000_000 ? seconds : seconds * 1000);
-  if (Number.isNaN(occurred.getTime())) return null;
+  const occurred = metaEventTime(event.event_time);
+  if (!occurred) return null;
 
   const extracted = extractExtra(event.extra_data);
   const currency = extracted.currency || (ctx.currency ? ctx.currency.toUpperCase() : null) || 'USD';
@@ -529,6 +527,51 @@ export function googleIsSystem(clientType: string | null, userEmail: string | nu
 export function googleEventKey(customerId: string, resourceName: string | null, fallback: string): string {
   if (resourceName) return `google:${customerId}:${resourceName}`;
   return `google:${customerId}:${fallback}`;
+}
+
+export function googleChangeOccurredMs(row: unknown, timeZone: string): number | null {
+  const event = changeEventOf(rowDict(row));
+  const when = String(event.changeDateTime ?? event.change_date_time ?? '');
+  if (!/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}/.test(when)) return null;
+  const local = when.replace('T', ' ').slice(0, 19);
+  const occurred = zonedLocalToUtc(local, timeZone);
+  return Number.isNaN(occurred.getTime()) ? null : occurred.getTime();
+}
+
+/**
+ * Where to leave last_success_at after a pull.
+ * A page cap must not claim the window is finished. Meta is newest-first, so
+ * the bookmark is the oldest row reached — the earliest unsaved point — and
+ * the next since stays there. Google is ascending, so the bookmark is the
+ * last row's timestamp and the next query starts at that same second.
+ * Zero parsed rows do not move it.
+ */
+export function platformSyncBookmark(opts: {
+  platform: 'meta' | 'google';
+  windowUntilMs: number;
+  rawCount: number;
+  parsedCount: number;
+  truncated?: boolean;
+  oldestFetchedMs?: number | null;
+}): { lastSuccessAt: string | null; error: string | null } {
+  if (opts.rawCount > 0 && opts.parsedCount === 0) {
+    const label = opts.platform === 'meta' ? 'Meta' : 'Google';
+    const noun = opts.platform === 'meta' ? 'activities' : 'change events';
+    return {
+      lastSuccessAt: null,
+      error: `${label}: ${opts.rawCount} ${noun} returned, 0 parsed`,
+    };
+  }
+  if (opts.truncated) {
+    const earliest = opts.oldestFetchedMs;
+    return {
+      lastSuccessAt: earliest != null ? new Date(earliest).toISOString() : null,
+      error: opts.platform === 'meta'
+        ? 'Meta activity page cap reached; some older events in this window were not saved'
+        : 'Google change_event page stopped before the window ended',
+    };
+  }
+  return { lastSuccessAt: new Date(opts.windowUntilMs).toISOString(), error: null };
 }
 
 export function normalizeGoogleChange(

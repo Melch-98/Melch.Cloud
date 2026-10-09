@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   googleChangeEventQuery,
   metaEventKey,
+  metaEventTime,
   normalizeGoogleChange,
   normalizeMetaActivity,
+  platformSyncBookmark,
   type MetaActivity,
 } from '@/lib/ad-activity/normalize';
+import { gaqlResultRows } from '@/lib/pipeboard-google';
 import {
   GOOGLE_MAX_WINDOW_MS,
   META_BACKFILL_MS,
@@ -23,7 +26,7 @@ const NOW = Date.parse('2026-10-09T20:00:00.000Z');
 function metaBudget(): MetaActivity {
   return {
     event_type: 'update_campaign_budget',
-    event_time: '1760000000',
+    event_time: '2026-10-09T13:03:57+0000',
     actor_name: 'Nick Melcher',
     actor_id: '111',
     application_name: 'Power Editor',
@@ -57,9 +60,66 @@ describe('Meta activity normalization', () => {
     expect(event?.is_system).toBe(false);
     expect(event?.old_value).toBe('CAD 150');
     expect(event?.new_value).toBe('CAD 200');
+    expect(event?.occurred_at).toBe('2026-10-09T13:03:57.000Z');
     expect(event?.summary).toBe(
       'Nick Melcher raised budget on campaign X from CAD 150 to CAD 200/day (Power Editor)'
     );
+  });
+
+  it('reads a live Graph composite budget payload', () => {
+    const event = normalizeMetaActivity(
+      {
+        event_type: 'update_campaign_budget',
+        event_time: '2026-10-09T13:03:57+0000',
+        actor_name: 'Nick Melcher',
+        actor_id: '111',
+        application_name: 'Power Editor',
+        object_id: '222',
+        object_name: 'Fall Prospecting',
+        object_type: 'CAMPAIGN_GROUP',
+        translated_event_type: 'Campaign budget updated',
+        extra_data: {
+          old_value: {
+            type: 'payment_amount',
+            currency: 'CAD',
+            old_value: 15000,
+            additional_type: 'status_string',
+            additional_value: 'Per day',
+          },
+          new_value: {
+            type: 'payment_amount',
+            currency: 'CAD',
+            new_value: 20000,
+            additional_type: 'status_string',
+            additional_value: 'Per day',
+          },
+          type: 'composite_data',
+        },
+      },
+      { accountId: 'act_1', currency: 'USD' }
+    );
+    expect(event?.change_type).toBe('budget');
+    expect(event?.occurred_at).toBe('2026-10-09T13:03:57.000Z');
+    expect(event?.summary).toBe(
+      'Nick Melcher raised budget on campaign Fall Prospecting from CAD 150 to CAD 200/day (Power Editor)'
+    );
+  });
+
+  it('accepts unix seconds and drops an unparseable event_time', () => {
+    const seconds = normalizeMetaActivity(
+      { ...metaBudget(), event_time: 1760000000 },
+      { accountId: 'act_1', currency: 'CAD' }
+    );
+    expect(seconds?.occurred_at).toBe(new Date(1760000000 * 1000).toISOString());
+    const numeric = normalizeMetaActivity(
+      { ...metaBudget(), event_time: '1760000000' },
+      { accountId: 'act_1', currency: 'CAD' }
+    );
+    expect(numeric?.occurred_at).toBe(seconds?.occurred_at);
+    expect(metaEventTime('not-a-time')).toBeNull();
+    expect(
+      normalizeMetaActivity({ ...metaBudget(), event_time: 'not-a-time' }, { accountId: 'act_1', currency: 'CAD' })
+    ).toBeNull();
   });
 
   it('reads a flat extra_data budget payload the same way', () => {
@@ -85,7 +145,7 @@ describe('Meta activity normalization', () => {
     const event = normalizeMetaActivity(
       {
         event_type: 'update_campaign_run_status',
-        event_time: '1760000001',
+        event_time: '2026-10-09T13:04:01+0000',
         actor_name: 'Nick Melcher',
         actor_id: '111',
         application_name: 'Ads Manager',
@@ -108,7 +168,7 @@ describe('Meta activity normalization', () => {
 
   it('hides review, billing, spend-limit, and first-delivery events as system', () => {
     const base = {
-      event_time: '1760000002',
+      event_time: '2026-10-09T13:04:02+0000',
       actor_id: '0',
       object_id: '1',
       object_name: 'Account',
@@ -245,7 +305,7 @@ describe('ingestion windows', () => {
     expect(sliceWindow(0, META_SLICE_MS, META_SLICE_MS)).toEqual([{ since: 0, until: META_SLICE_MS }]);
   });
 
-  it('selects Google budget micros and keeps the filter inside the clamped window', () => {
+  it('selects the Google resource messages and keeps the filter inside the clamped window', () => {
     const window = ingestionWindow({
       platform: 'google',
       lastSuccessAt: new Date(NOW - 40 * 24 * 60 * 60 * 1000).toISOString(),
@@ -254,12 +314,93 @@ describe('ingestion windows', () => {
     const start = formatInTimeZone(new Date(window.since), 'America/Chicago');
     const end = formatInTimeZone(new Date(window.until), 'America/Chicago');
     const query = googleChangeEventQuery(start, end);
-    expect(query).toContain('change_event.old_resource.campaign_budget.amount_micros');
-    expect(query).toContain('change_event.new_resource.campaign_budget.amount_micros');
+    expect(query).toContain('change_event.old_resource');
+    expect(query).toContain('change_event.new_resource');
+    expect(query).not.toMatch(/change_event\.old_resource\./);
+    expect(query).not.toMatch(/change_event\.new_resource\./);
     expect(query).toContain(`>= '${start}'`);
     expect(query).toContain(`<= '${end}'`);
     expect(query).toContain('LIMIT 1000');
     expect(zonedLocalToUtc(start, 'America/Chicago').getTime()).toBe(window.since);
+  });
+});
+
+describe('sync bookmarks and strict GAQL rows', () => {
+  it('does not advance the watermark when every returned row fails to parse', () => {
+    const meta = platformSyncBookmark({
+      platform: 'meta',
+      windowUntilMs: NOW,
+      rawCount: 12,
+      parsedCount: 0,
+    });
+    expect(meta.lastSuccessAt).toBeNull();
+    expect(meta.error).toBe('Meta: 12 activities returned, 0 parsed');
+
+    const google = platformSyncBookmark({
+      platform: 'google',
+      windowUntilMs: NOW,
+      rawCount: 4,
+      parsedCount: 0,
+    });
+    expect(google.lastSuccessAt).toBeNull();
+    expect(google.error).toBe('Google: 4 change events returned, 0 parsed');
+  });
+
+  it('stops a capped Meta pull at the oldest saved row instead of the window end', () => {
+    const oldest = Date.parse('2026-10-08T12:00:00.000Z');
+    const bookmark = platformSyncBookmark({
+      platform: 'meta',
+      windowUntilMs: NOW,
+      rawCount: 2000,
+      parsedCount: 2000,
+      truncated: true,
+      oldestFetchedMs: oldest,
+    });
+    expect(bookmark.lastSuccessAt).toBe(new Date(oldest).toISOString());
+    expect(bookmark.lastSuccessAt).not.toBe(new Date(NOW).toISOString());
+    expect(bookmark.error).toBe(
+      'Meta activity page cap reached; some older events in this window were not saved'
+    );
+  });
+
+  it('stops a capped Google pull at the last row timestamp', () => {
+    const last = Date.parse('2026-10-09T15:15:00.000Z');
+    const bookmark = platformSyncBookmark({
+      platform: 'google',
+      windowUntilMs: NOW,
+      rawCount: 1000,
+      parsedCount: 1000,
+      truncated: true,
+      oldestFetchedMs: last,
+    });
+    expect(bookmark.lastSuccessAt).toBe(new Date(last).toISOString());
+    expect(bookmark.error).toBe('Google change_event page stopped before the window ended');
+  });
+
+  it('advances to the window end when the pull is complete', () => {
+    const bookmark = platformSyncBookmark({
+      platform: 'meta',
+      windowUntilMs: NOW,
+      rawCount: 3,
+      parsedCount: 3,
+    });
+    expect(bookmark.lastSuccessAt).toBe(new Date(NOW).toISOString());
+    expect(bookmark.error).toBeNull();
+  });
+
+  it('throws the Pipeboard error text instead of treating it as an empty result', () => {
+    expect(gaqlResultRows([{ campaign: { name: 'Y' } }])).toEqual([{ campaign: { name: 'Y' } }]);
+    expect(gaqlResultRows({ results: [] })).toEqual([]);
+    const text = `Request failed: 'change_event.old_resource.ad_group.name' is not a recognized field. ${'x'.repeat(400)}`;
+    expect(() => gaqlResultRows(text)).toThrow(/^Pipeboard GAQL: /);
+    try {
+      gaqlResultRows(text);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      expect(message.startsWith('Pipeboard GAQL: ')).toBe(true);
+      expect(message.length).toBe('Pipeboard GAQL: '.length + 300);
+      expect(message).toContain('change_event.old_resource.ad_group.name');
+    }
   });
 });
 
