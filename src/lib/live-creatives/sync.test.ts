@@ -53,6 +53,7 @@ describe('rejectedCreativeField', () => {
   it('names the field Graph rejected and drops it', () => {
     const message = '(#100) Tried accessing nonexisting field (destination_spec) on node type (AdCreative)';
     expect(rejectedCreativeField(message)).toBe('destination_spec');
+    expect(rejectedCreativeField('(#100) Missing permissions')).toBeNull();
     const next = dropCreativeField(CREATIVE_FIELD_LIST, 'destination_spec');
     expect(next).not.toContain('destination_spec');
     expect(next).toContain('call_to_action');
@@ -180,32 +181,139 @@ describe('syncLiveCreatives post destinations', () => {
     expect(JSON.stringify(results)).not.toContain(TOKEN);
   });
 
-  it('scrubs a token Graph echoed on a failed post fetch', async () => {
+  it('keeps a successful brand sync when a post fetch returns #100', async () => {
+    const seen: string[] = [];
+    const upserts: Array<Array<Record<string, unknown>>> = [];
+    const adset = { is_dynamic_creative: false, promoted_object: {} };
     const { results } = await syncLiveCreatives({
-      supabase: fakeSupabase([]),
+      supabase: fakeSupabase(upserts),
+      token: TOKEN,
+      now: new Date('2026-10-10T12:00:00.000Z'),
+      budgetMs: 60_000,
+      graph: async (url) => {
+        expect(url).not.toContain(TOKEN);
+        seen.push(url);
+        if (url.includes('/ads?')) {
+          return {
+            data: [
+              { id: 'ad-link', name: 'Linked', creative: { id: 'cr-link' }, adset },
+              { id: 'ad-ok', name: 'Readable post', creative: { id: 'cr-ok' }, adset },
+              { id: 'ad-bad', name: 'Unreadable post', creative: { id: 'cr-bad' }, adset },
+            ],
+          };
+        }
+        if (url.includes('attachments{')) {
+          const ids = idsIn(url);
+          if (ids.length > 1) throw new Error(`(#100) Missing permissions ${TOKEN}`);
+          if (ids[0] === '11_1') {
+            return {
+              '11_1': {
+                id: '11_1',
+                call_to_action: { type: 'SHOP_NOW', value: { link: 'https://mintier.com/products/soap' } },
+              },
+            };
+          }
+          throw new Error(`(#100) Missing permissions ${TOKEN}`);
+        }
+        return {
+          'cr-link': { id: 'cr-link', link_url: 'https://mintier.com/products/soap' },
+          'cr-ok': { id: 'cr-ok', effective_object_story_id: '11_1' },
+          'cr-bad': { id: 'cr-bad', effective_object_story_id: '22_2' },
+        };
+      },
+    });
+
+    expect(results[0]).toMatchObject({ ok: true, ads: 3, postFetchFailed: 1 });
+    expect(results[0].error).toBeUndefined();
+    const rows = upserts.flat();
+    expect(rows.find((row) => row.ad_id === 'ad-link')?.product_key).toBe('product:soap');
+    expect(rows.find((row) => row.ad_id === 'ad-ok')?.product_key).toBe('product:soap');
+    expect(rows.find((row) => row.ad_id === 'ad-bad')?.product_label).toBe('No landing page');
+    expect(seen.filter((url) => url.includes('attachments{')).map(idsIn)).toEqual([
+      ['11_1', '22_2'],
+      ['11_1'],
+      ['22_2'],
+    ]);
+    expect(JSON.stringify(results)).not.toContain(TOKEN);
+    expect(JSON.stringify(upserts)).not.toContain(TOKEN);
+  });
+
+  it('retries a post id that comes back as a #100 node and still syncs', async () => {
+    const upserts: Array<Array<Record<string, unknown>>> = [];
+    const adset = { is_dynamic_creative: false, promoted_object: {} };
+    const { results } = await syncLiveCreatives({
+      supabase: fakeSupabase(upserts),
       token: TOKEN,
       now: new Date('2026-10-10T12:00:00.000Z'),
       budgetMs: 60_000,
       graph: async (url) => {
         if (url.includes('/ads?')) {
           return {
+            data: [
+              { id: 'ad-ok', name: 'Ok', creative: { id: 'cr-ok' }, adset },
+              { id: 'ad-bad', name: 'Bad', creative: { id: 'cr-bad' }, adset },
+            ],
+          };
+        }
+        if (url.includes('attachments{')) {
+          const ids = idsIn(url);
+          if (ids.length > 1) {
+            return {
+              '11_1': {
+                id: '11_1',
+                call_to_action: { type: 'SHOP_NOW', value: { link: 'https://mintier.com/products/soap' } },
+              },
+              '22_2': { error: { message: `(#100) Missing permissions ${TOKEN}`, code: 100 } },
+            };
+          }
+          throw new Error(`(#100) Missing permissions ${TOKEN}`);
+        }
+        return {
+          'cr-ok': { id: 'cr-ok', effective_object_story_id: '11_1' },
+          'cr-bad': { id: 'cr-bad', effective_object_story_id: '22_2' },
+        };
+      },
+    });
+    expect(results[0]).toMatchObject({ ok: true, postFetchFailed: 1 });
+    const rows = upserts.flat();
+    expect(rows.find((row) => row.ad_id === 'ad-ok')?.product_key).toBe('product:soap');
+    expect(rows.find((row) => row.ad_id === 'ad-bad')?.product_kind).toBe('none');
+    expect(JSON.stringify(results)).not.toContain(TOKEN);
+  });
+
+  it('drops a new creative field that returns #100 and still syncs the brand', async () => {
+    const seen: string[] = [];
+    const upserts: Array<Array<Record<string, unknown>>> = [];
+    const { results } = await syncLiveCreatives({
+      supabase: fakeSupabase(upserts),
+      token: TOKEN,
+      now: new Date('2026-10-10T12:00:00.000Z'),
+      budgetMs: 60_000,
+      graph: async (url, token) => {
+        expect(url).not.toContain(TOKEN);
+        seen.push(url);
+        if (url.includes('/ads?')) {
+          return {
             data: [{
               id: 'ad-1',
-              name: 'Post',
+              name: 'Soap',
               creative: { id: 'cr-1' },
               adset: { is_dynamic_creative: false, promoted_object: {} },
             }],
           };
         }
-        if (url.includes('attachments{')) {
-          throw new Error(`Post fetch failed ${TOKEN}`);
+        if (url.includes('creative_sourcing_spec')) {
+          throw new Error(`(#100) Missing permissions ${token}`);
         }
-        return { 'cr-1': { id: 'cr-1', effective_object_story_id: '55_66' } };
+        return { 'cr-1': { id: 'cr-1', link_url: 'https://mintier.com/products/soap' } };
       },
     });
-    expect(results[0].ok).toBe(false);
-    expect(results[0].error).toContain('(redacted)');
-    expect(results[0].error).not.toContain(TOKEN);
-    expect(results[0].none).toBe(0);
+
+    expect(results[0]).toMatchObject({ ok: true, rows: 1, postFetchFailed: 0, none: 0 });
+    expect(upserts.flat()[0]?.product_key).toBe('product:soap');
+    const creativeUrls = seen.filter((url) => url.includes('object_story_spec'));
+    expect(creativeUrls.some((url) => url.includes('creative_sourcing_spec'))).toBe(true);
+    expect(creativeUrls.some((url) => url.includes('call_to_action') && !url.includes('creative_sourcing_spec'))).toBe(true);
+    expect(JSON.stringify(results)).not.toContain(TOKEN);
   });
 });
