@@ -12,6 +12,7 @@ export const maxDuration = 300;
  * GET is the Vercel cron (hourly, Bearer CRON_SECRET).
  * One brand's failure is recorded and does not stop the others.
  * A dead Meta token stops the rest of the run.
+ * Each brand result includes none (rows still product_kind none) and noneAdIds (up to 5).
  */
 export async function GET(req: NextRequest) {
   const cronSecret = process.env.CRON_SECRET;

@@ -1,7 +1,7 @@
 // Hourly pull of active Meta ads into live_creatives.
 // Token goes out as Authorization: Bearer. It is not written to logs.
 
-import { draftsFromAd } from '@/lib/live-creatives/assets';
+import { draftsFromAd, storyIdForPostFetch, type StoryPost } from '@/lib/live-creatives/assets';
 import { brandBudgetOpen, graphBase, metaGraphGet, scrubSecret, tokenDead } from '@/lib/live-creatives/graph';
 import { hostsFromBrandConfig } from '@/lib/live-creatives/landing';
 import { mergeCronRow, omitCronProtected, type ExistingLiveCreative } from '@/lib/live-creatives/merge';
@@ -14,15 +14,47 @@ export interface SyncBrandResult {
   rows: number;
   duplicates: number;
   truncated: boolean;
+  /** Rows whose product_kind is still none after destination fallbacks. */
+  none: number;
+  /** Up to five ad ids among those rows. */
+  noneAdIds: string[];
   error?: string;
 }
 
 type Graph = (url: string, token: string) => Promise<any>;
 
-const CREATIVE_FIELDS = [
+/**
+ * AdCreative fields for Graph v21.0.
+ * Documented on the Ad Creative node: effective_object_story_id, object_story_id,
+ * link_url, object_url, template_url, call_to_action_type, call_to_action
+ * (type and value.link are default subfields), effective_instagram_media_id,
+ * source_instagram_media_id, instagram_permalink_url, creative_sourcing_spec, url_tags.
+ * destination_spec is not an AdCreative field in that reference. It is requested
+ * and dropped, with any other name Graph rejects as a nonexisting field.
+ */
+export const CREATIVE_FIELD_LIST = [
   'id', 'name', 'object_type', 'thumbnail_url', 'image_url', 'image_hash', 'video_id',
   'product_set_id', 'object_story_spec', 'asset_feed_spec', 'title',
-].join(',');
+  'effective_object_story_id', 'object_story_id', 'link_url', 'object_url', 'template_url',
+  'call_to_action_type', 'call_to_action', 'effective_instagram_media_id', 'source_instagram_media_id',
+  'instagram_permalink_url', 'destination_spec', 'creative_sourcing_spec', 'url_tags',
+];
+
+export const POST_FIELDS = 'call_to_action,attachments{unshimmed_url,url,target,type,subattachments{unshimmed_url,url,target}}';
+
+const FIELD_CHUNK = 25;
+
+export function rejectedCreativeField(message: string): string | null {
+  const match = /nonexisting field \(([a-z0-9_.{}]+)\)/i.exec(message)
+    || /unknown field[:\s]+['"]?([a-z0-9_.{}]+)/i.exec(message);
+  return match?.[1] || null;
+}
+
+export function dropCreativeField(fields: string[], rejected: string): string[] {
+  const bare = rejected.split('{')[0].split('.')[0];
+  if (!bare) return fields;
+  return fields.filter((field) => field.split('{')[0].split('.')[0] !== bare);
+}
 
 export async function readMetaToken(supabase: { from: (table: string) => any }): Promise<string> {
   const fromEnv = process.env.META_ACCESS_TOKEN || '';
@@ -35,6 +67,21 @@ function accountId(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) return '';
   return trimmed.startsWith('act_') ? trimmed : `act_${trimmed}`;
+}
+
+function emptyFailure(brand: { id: string; name?: string | null }, message: string): SyncBrandResult {
+  return {
+    brandId: brand.id,
+    brandName: brand.name || brand.id,
+    ok: false,
+    ads: 0,
+    rows: 0,
+    duplicates: 0,
+    truncated: false,
+    none: 0,
+    noneAdIds: [],
+    error: message,
+  };
 }
 
 async function paged(
@@ -62,24 +109,61 @@ async function paged(
   return { rows, truncated };
 }
 
-async function fetchCreatives(
-  ids: string[],
-  token: string,
-  graph: Graph,
-  deadline: number,
-): Promise<Record<string, any>> {
-  const out: Record<string, any> = {};
-  for (let i = 0; i < ids.length; i += 25) {
-    if (Date.now() > deadline) break;
-    const chunk = ids.slice(i, i + 25);
-    const url = `${graphBase()}/?ids=${chunk.join(',')}&fields=${CREATIVE_FIELDS}`;
-    const body = await graph(url, token);
-    for (const [key, value] of Object.entries(body || {})) {
-      if (key === 'paging' || key === 'error' || !value || typeof value !== 'object' || Array.isArray(value)) continue;
-      out[key] = value;
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function asPost(value: unknown): StoryPost | null {
+  const record = asRecord(value);
+  return record ? record as StoryPost : null;
+}
+
+function absorbNodes(out: Record<string, unknown>, body: unknown) {
+  if (!body || typeof body !== 'object') return;
+  for (const [key, value] of Object.entries(body)) {
+    if (key === 'paging' || key === 'error' || !value || typeof value !== 'object' || Array.isArray(value)) continue;
+    if ('error' in value) continue;
+    out[key] = value;
+  }
+}
+
+async function fetchByIds(input: {
+  ids: string[];
+  fields: { list: string[] };
+  token: string;
+  graph: Graph;
+  deadline: number;
+  allowFieldDrop: boolean;
+}): Promise<{ map: Record<string, unknown>; truncated: boolean }> {
+  const map: Record<string, unknown> = {};
+  let truncated = false;
+  let index = 0;
+  let drops = 0;
+  while (index < input.ids.length) {
+    if (Date.now() > input.deadline) {
+      truncated = true;
+      break;
+    }
+    const chunk = input.ids.slice(index, index + FIELD_CHUNK);
+    const url = `${graphBase()}/?ids=${chunk.map((id) => encodeURIComponent(id)).join(',')}&fields=${input.fields.list.join(',')}`;
+    try {
+      const body = await input.graph(url, input.token);
+      absorbNodes(map, body);
+      index += chunk.length;
+      drops = 0;
+    } catch (err) {
+      const message = scrubSecret(err instanceof Error ? err.message : 'Meta request failed', input.token);
+      const rejected = input.allowFieldDrop ? rejectedCreativeField(message) : null;
+      const next = rejected ? dropCreativeField(input.fields.list, rejected) : input.fields.list;
+      if (!rejected || next.length === 0 || next.length === input.fields.list.length || drops >= 12) {
+        throw new Error(message);
+      }
+      input.fields.list = next;
+      drops += 1;
     }
   }
-  return out;
+  return { map, truncated };
 }
 
 async function hostsForBrand(supabase: any, brand: {
@@ -140,6 +224,18 @@ async function existingByKey(
   return map;
 }
 
+function noneSummary(rows: Array<Record<string, unknown>>): { none: number; noneAdIds: string[] } {
+  const noneAdIds: string[] = [];
+  let none = 0;
+  for (const row of rows) {
+    if (row.product_kind !== 'none') continue;
+    none += 1;
+    const adId = typeof row.ad_id === 'string' ? row.ad_id : '';
+    if (adId && noneAdIds.length < 5 && !noneAdIds.includes(adId)) noneAdIds.push(adId);
+  }
+  return { none, noneAdIds };
+}
+
 export async function syncLiveCreatives(input: {
   supabase: any;
   token: string;
@@ -155,6 +251,7 @@ export async function syncLiveCreatives(input: {
   const graph = input.graph ?? ((url: string, token: string) => metaGraphGet(url, token));
   const results: SyncBrandResult[] = [];
   const deferred: string[] = [];
+  const creativeFields = { list: [...CREATIVE_FIELD_LIST] };
 
   let brandQuery = input.supabase
     .from('brands')
@@ -165,7 +262,7 @@ export async function syncLiveCreatives(input: {
   if (input.brandId) brandQuery = brandQuery.eq('id', input.brandId);
   const { data: brands, error: brandError } = await brandQuery;
   if (brandError) {
-    throw new Error(scrubSecret(brandError.message || 'Could not list brands'));
+    throw new Error(scrubSecret(brandError.message || 'Could not list brands', input.token));
   }
 
   let stopForToken = false;
@@ -185,21 +282,13 @@ export async function syncLiveCreatives(input: {
         graph,
         now,
         deadline,
+        creativeFields,
       });
       results.push(result);
       if (result.error && tokenDead(result.error)) stopForToken = true;
     } catch (err) {
-      const message = scrubSecret(err instanceof Error ? err.message : 'Live creative sync failed');
-      results.push({
-        brandId: brand.id,
-        brandName: brand.name || brand.id,
-        ok: false,
-        ads: 0,
-        rows: 0,
-        duplicates: 0,
-        truncated: false,
-        error: message,
-      });
+      const message = scrubSecret(err instanceof Error ? err.message : 'Live creative sync failed', input.token);
+      results.push(emptyFailure(brand, message));
       if (tokenDead(message)) stopForToken = true;
     }
   }
@@ -220,6 +309,7 @@ async function syncBrand(input: {
   graph: Graph;
   now: Date;
   deadline: number;
+  creativeFields: { list: string[] };
 }): Promise<SyncBrandResult> {
   const base: SyncBrandResult = {
     brandId: input.brand.id,
@@ -229,6 +319,8 @@ async function syncBrand(input: {
     rows: 0,
     duplicates: 0,
     truncated: false,
+    none: 0,
+    noneAdIds: [],
   };
   const params = new URLSearchParams({
     fields: 'id,name,effective_status,creative{id},adset{id,is_dynamic_creative,promoted_object}',
@@ -245,8 +337,30 @@ async function syncBrand(input: {
   base.truncated = adsTruncated;
 
   const creativeIds = Array.from(new Set(ads.map((ad) => ad?.creative?.id).filter((id: unknown): id is string => typeof id === 'string' && !!id)));
-  const creatives = await fetchCreatives(creativeIds, input.token, input.graph, input.deadline);
-  if (Date.now() > input.deadline) base.truncated = true;
+  const creatives = await fetchByIds({
+    ids: creativeIds,
+    fields: input.creativeFields,
+    token: input.token,
+    graph: input.graph,
+    deadline: input.deadline,
+    allowFieldDrop: true,
+  });
+  if (creatives.truncated) base.truncated = true;
+
+  const postIds = Array.from(new Set(
+    Object.values(creatives.map)
+      .map((creative) => storyIdForPostFetch(creative))
+      .filter((id): id is string => !!id),
+  ));
+  const posts = await fetchByIds({
+    ids: postIds,
+    fields: { list: [POST_FIELDS] },
+    token: input.token,
+    graph: input.graph,
+    deadline: input.deadline,
+    allowFieldDrop: false,
+  });
+  if (posts.truncated) base.truncated = true;
 
   const hosts = await hostsForBrand(input.supabase, input.brand);
   const products = await productsForBrand(input.supabase, input.brand.id);
@@ -255,7 +369,11 @@ async function syncBrand(input: {
     const adId = String(ad?.id || '');
     if (!adId) return [];
     const creativeId = typeof ad?.creative?.id === 'string' ? ad.creative.id : null;
-    const creative = creativeId ? creatives[creativeId] : null;
+    const creative = creativeId ? asRecord(creatives.map[creativeId]) : null;
+    const storyField = creative?.effective_object_story_id;
+    const storyFallback = creative?.object_story_id;
+    const storyId = typeof storyField === 'string' ? storyField : (typeof storyFallback === 'string' ? storyFallback : '');
+    const post = storyId ? asPost(posts.map[storyId]) : null;
     const promoted = ad?.adset?.promoted_object?.product_set_id;
     return draftsFromAd({
       brandId: input.brand.id,
@@ -263,6 +381,7 @@ async function syncBrand(input: {
       adName: typeof ad?.name === 'string' ? ad.name : null,
       creativeId,
       creative,
+      post,
       adset: {
         dynamic: ad?.adset?.is_dynamic_creative === true,
         productSetId: typeof promoted === 'string' ? promoted : '',
@@ -296,5 +415,8 @@ async function syncBrand(input: {
     if (error) throw new Error(error.message);
   }
   base.rows = unique.length;
+  const summary = noneSummary(unique);
+  base.none = summary.none;
+  base.noneAdIds = summary.noneAdIds;
   return base;
 }

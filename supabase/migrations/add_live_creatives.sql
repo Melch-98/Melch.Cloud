@@ -41,10 +41,18 @@ CREATE TABLE IF NOT EXISTS public.live_creatives (
   CONSTRAINT live_creatives_identity UNIQUE (brand_id, platform, ad_id, asset_key),
   CONSTRAINT live_creatives_platform_check CHECK (platform = 'meta'),
   CONSTRAINT live_creatives_product_kind_check CHECK (
-    product_kind IS NULL OR product_kind IN ('product', 'homepage', 'collection', 'shop_all', 'other', 'none')
+    product_kind IS NULL OR product_kind IN (
+      'product', 'homepage', 'collection', 'shop_all', 'other',
+      'lead_form', 'messages', 'call', 'ig_profile', 'meta_shop', 'app', 'catalog',
+      'none'
+    )
   ),
   CONSTRAINT live_creatives_manual_kind_check CHECK (
-    manual_product_kind IS NULL OR manual_product_kind IN ('product', 'homepage', 'collection', 'shop_all', 'other', 'none')
+    manual_product_kind IS NULL OR manual_product_kind IN (
+      'product', 'homepage', 'collection', 'shop_all', 'other',
+      'lead_form', 'messages', 'call', 'ig_profile', 'meta_shop', 'app', 'catalog',
+      'none'
+    )
   ),
   CONSTRAINT live_creatives_product_source_check CHECK (
     product_source IS NULL OR product_source IN ('url', 'manual')

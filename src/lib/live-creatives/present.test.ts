@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adMatchesProduct, adProductKeys, groupAdsByProduct, type LiveCreativeView } from '@/lib/live-creatives/present';
+import { adMatchesProduct, adProductKeys, groupAdsByProduct, productFilterOptions, type LiveCreativeView } from '@/lib/live-creatives/present';
 
 function row(partial: Partial<LiveCreativeView> & Pick<LiveCreativeView, 'ad_id' | 'asset_key' | 'product_key' | 'product_label'>): LiveCreativeView {
   return {
@@ -53,5 +53,33 @@ describe('groupAdsByProduct', () => {
     expect(adMatchesProduct([carousel], ['homepage'])).toBe(false);
     const [group] = groupAdsByProduct([{ ad_id: 'ad-9', spend: 20, purchase_value: 40, purchases: 4 }], rows);
     expect(group).toMatchObject({ product_key: 'product:soap', creatives: 1, spend: 20, roas: 2, cpa: 5 });
+  });
+
+  it('offers lead form, messages, and Meta Shop in the filter ahead of no landing page', () => {
+    const ads = [
+      { ad_id: 'ad-lead', spend: 3, purchase_value: 0, purchases: 0 },
+      { ad_id: 'ad-msg', spend: 2, purchase_value: 0, purchases: 0 },
+      { ad_id: 'ad-shop', spend: 4, purchase_value: 0, purchases: 0 },
+      { ad_id: 'ad-none', spend: 1, purchase_value: 0, purchases: 0 },
+    ];
+    const rows = new Map<string, LiveCreativeView[]>([
+      ['ad-lead', [row({ ad_id: 'ad-lead', asset_key: 'a', product_key: 'lead_form', product_label: 'Lead form', product_kind: 'lead_form' })]],
+      ['ad-msg', [row({ ad_id: 'ad-msg', asset_key: 'b', product_key: 'messages', product_label: 'Messages', product_kind: 'messages' })]],
+      ['ad-shop', [row({ ad_id: 'ad-shop', asset_key: 'c', product_key: 'meta_shop', product_label: 'Meta Shop', product_kind: 'meta_shop' })]],
+      ['ad-none', [row({ ad_id: 'ad-none', asset_key: 'd', product_key: 'none', product_label: 'No landing page', product_kind: 'none' })]],
+    ]);
+    expect(productFilterOptions(ads, rows).map((option) => option.product_label)).toEqual([
+      'Lead form',
+      'Messages',
+      'Meta Shop',
+      'No landing page',
+    ]);
+    const groups = groupAdsByProduct(ads, rows);
+    expect(groups.map((group) => group.product_label)).toEqual([
+      'Meta Shop',
+      'Lead form',
+      'Messages',
+      'No landing page',
+    ]);
   });
 });
