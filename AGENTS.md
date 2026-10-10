@@ -55,7 +55,8 @@ Design: dark `#0a0a0a`, text `#f5f5f8`, gold `#c8b89a` (`brand.*` in Tailwind).
 | `/analytics` (+ copy, ad perspective, matrix) | role-gated | Creative analytics. Matrix is admin + strategist. |
 | `/analytics/funnel-viewer` | admin / strategist / founder | Funnel Viewer constellation. Port of Odylic Constellation. One live route, `GET /api/funnel-viewer/ads`. Attribution default is 7-day click only (`FUNNEL_ATTRIBUTION` in `src/lib/meta-funnel.ts`). Non-admins are locked to `users_profile.brand_id`. |
 | `/ad-changelog` | admin + founder | Live Meta `/activities` + Google Ads `change_event` feed (`ad_activity`). Cron `GET /api/cron/ad-activity` every 15 minutes. Admin brand picker lists non-archived brands; founder is locked to `users_profile.brand_id`. System events (Meta review, billing, spend limit, first delivery) are hidden until the toggle is on. |
-| `/calendar`, `/copy-templates`, `/ad-lab`, `/stats` | role-gated | Calendar, copy library, experiments, file stats |
+| `/calendar` | — | Retired. Permanent redirect to `/dashboard` (`next.config.mjs`). |
+| `/copy-templates`, `/ad-lab`, `/stats` | role-gated | Copy library, experiments, file stats |
 | `/releases`, `/feature-requests`, `/account` | role-gated | App releases, FR board, profile |
 | `/app` | Shopify embedded | App Bridge bootstrap |
 
@@ -69,7 +70,7 @@ Design: dark `#0a0a0a`, text `#f5f5f8`, gold `#c8b89a` (`brand.*` in Tailwind).
 - **`daily_pnl`** — one row per brand per day (Shopify NC/RC + Meta/Google/other spend). **`daily_pnl.currency`** is the ISO-4217 reporting currency for that row (Shopify/store settlement). Spend is converted into it at sync. NULL until the row is re-synced after the migration (`supabase/migration-daily-pnl-currency.sql` and `supabase/migrations/add_daily_pnl_reporting_currency.sql`).
 - **`brand_integrations`** — per-brand provider credentials. Trybe rows use `provider = 'trybe'`, `api_key` (never returned raw; masked in the integration API), and `metadata` JSON: `trybe_brand_id`, `trybe_program_id`, `trybe_program_name`. Metadata column: `supabase/migrations/add_brand_integrations_metadata.sql`.
 - **`ad_activity`** — one row per Meta activity or Google `change_event` (`supabase/migrations/add_ad_activity.sql`). `ad_activity_sync` stores last success and last error per brand and platform. The changelog no longer reads `ad_changelog` / `ad_snapshots`. `src/app/api/ad-media/route.ts` still selects `ad_snapshots`.
-- Supporting: `shopify_stores` / `shopify_orders` / `shopify_products`, `app_settings`, `integrations` (Dropbox), calendar + feature-request tables.
+- Supporting: `shopify_stores` / `shopify_orders` / `shopify_products`, `app_settings`, `integrations` (Dropbox), feature-request tables. `calendar_events` remains after the Calendar page was retired; the app does not read it.
 
 Prefer service-role clients only on the server. Browser uses anon key + RLS.
 

@@ -9,11 +9,12 @@ const nextConfig = {
     ignoreBuildErrors: true,
   },
   async redirects() {
-    // Retired Performance pages. Old bookmarks land on the dashboard.
+    // Retired pages. Old bookmarks land on the dashboard.
     return [
       { source: '/analytics/efficiency', destination: '/dashboard', permanent: true },
       { source: '/analytics/ltv-cohorts', destination: '/dashboard', permanent: true },
       { source: '/analytics/forecast', destination: '/dashboard', permanent: true },
+      { source: '/calendar', destination: '/dashboard', permanent: true },
     ];
   },
   async headers() {
