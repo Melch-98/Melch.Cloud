@@ -19,6 +19,7 @@ import FileUploader, { FileMediaInfo } from './FileUploader';
 import AssetThumbnail from './AssetThumbnail';
 import { createClient } from '@/lib/supabase';
 import { deriveBatchCreativeType } from '@/lib/batch-creative-type';
+import { localToday, showsUsageEndDate, usageEndDateError } from '@/lib/usage-end-date';
 
 export interface BatchFormData {
   batchName: string;
@@ -32,6 +33,7 @@ export interface BatchFormData {
   isFlexible: boolean;
   isWhitelist: boolean;
   creatorSocialHandle: string;
+  usageEndDate: string;
   fileCards: Record<number, { headline: string; body: string }>;
   fileMediaInfo: Record<number, FileMediaInfo>;
 }
@@ -72,6 +74,7 @@ const createEmptyBatch = (batchName: string): BatchFormState => ({
   isFlexible: false,
   isWhitelist: false,
   creatorSocialHandle: '',
+  usageEndDate: '',
   fileCards: {},
   fileMediaInfo: {},
   errors: {},
@@ -277,6 +280,20 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
     );
   }, []);
 
+  const updateOptional = (batch: BatchFormState, updates: Partial<BatchFormState>) => {
+    const next = { ...batch, ...updates };
+    if (
+      !showsUsageEndDate({
+        isWhitelist: next.isWhitelist,
+        creatorName: next.creatorName,
+        creatorHandle: next.creatorSocialHandle,
+      })
+    ) {
+      updates = { ...updates, usageEndDate: '' };
+    }
+    updateBatch(batch.id, updates);
+  };
+
   const removeBatch = useCallback((id: string) => {
     setBatches((prev) => {
       if (prev.length <= 1) return prev;
@@ -327,11 +344,21 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
     );
   }, []);
 
-  const validateBatch = (batch: BatchFormState): boolean => {
+  const validateBatch = (batch: BatchFormState): Record<string, string> => {
     const errors: Record<string, string> = {};
     if (batch.files.length === 0) errors.files = 'Add at least one file';
+    if (
+      showsUsageEndDate({
+        isWhitelist: batch.isWhitelist,
+        creatorName: batch.creatorName,
+        creatorHandle: batch.creatorSocialHandle,
+      })
+    ) {
+      const dateError = usageEndDateError(batch.usageEndDate, localToday());
+      if (dateError) errors.usageEndDate = dateError;
+    }
     setBatches((prev) => prev.map((b) => (b.id === batch.id ? { ...b, errors } : b)));
-    return Object.keys(errors).length === 0;
+    return errors;
   };
 
   const handleSubmit = async () => {
@@ -340,12 +367,20 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
       return;
     }
 
-    let allValid = true;
+    let fileProblem = false;
+    let dateProblem = false;
     for (const batch of batches) {
-      if (!validateBatch(batch)) allValid = false;
+      const errors = validateBatch(batch);
+      if (errors.files) fileProblem = true;
+      if (errors.usageEndDate) dateProblem = true;
     }
-    if (!allValid) {
-      setSubmitMessage({ type: 'error', text: 'Add at least one file to each batch' });
+    if (fileProblem || dateProblem) {
+      setSubmitMessage({
+        type: 'error',
+        text: dateProblem
+          ? 'Usage end date must be today or later'
+          : 'Add at least one file to each batch',
+      });
       return;
     }
 
@@ -412,6 +447,13 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
             is_carousel: batch.isCarousel,
             is_flexible: batch.isFlexible,
             is_whitelist: batch.isWhitelist,
+            usage_end_date: showsUsageEndDate({
+              isWhitelist: batch.isWhitelist,
+              creatorName: batch.creatorName,
+              creatorHandle: batch.creatorSocialHandle,
+            })
+              ? batch.usageEndDate.trim() || null
+              : null,
             file_count: batch.files.length,
           })
           .select()
@@ -471,6 +513,15 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
           .catch((e) => {
             console.warn('Dropbox sync trigger failed (non-fatal):', e);
           });
+        if (submission.usage_end_date) {
+          void fetch('/api/submissions/usage-task', {
+            method: 'POST',
+            headers: syncHeaders,
+            body: JSON.stringify({ submission_id: submission.id }),
+          }).catch((e) => {
+            console.warn('Usage task trigger failed (non-fatal):', e);
+          });
+        }
       }
 
       setUploadPct(100);
@@ -761,7 +812,9 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
               type="text"
               placeholder="Creator name"
               value={batch.creatorName}
-              onChange={(e) => updateBatch(batch.id, { creatorName: e.target.value })}
+              onChange={(e) =>
+                updateOptional(batch, { creatorName: e.target.value })
+              }
               className={inputClass}
               style={inputStyle}
             />
@@ -769,7 +822,9 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
               type="text"
               placeholder="Creator @handle"
               value={batch.creatorSocialHandle}
-              onChange={(e) => updateBatch(batch.id, { creatorSocialHandle: e.target.value })}
+              onChange={(e) =>
+                updateOptional(batch, { creatorSocialHandle: e.target.value })
+              }
               className={inputClass}
               style={inputStyle}
             />
@@ -805,7 +860,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
                   onClick={() => {
                     const updates: Partial<BatchFormState> = { [key]: !checked };
                     if (!checked && exclusive) updates[exclusive] = false;
-                    updateBatch(batch.id, updates);
+                    updateOptional(batch, updates);
                   }}
                   className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-colors duration-150"
                   style={{
@@ -822,6 +877,29 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
               );
             })}
           </div>
+          {showsUsageEndDate({
+            isWhitelist: batch.isWhitelist,
+            creatorName: batch.creatorName,
+            creatorHandle: batch.creatorSocialHandle,
+          }) && (
+            <label className="block">
+              <span className="text-[11px] text-gray-500 mb-1 block">Usage end date</span>
+              <input
+                type="date"
+                value={batch.usageEndDate}
+                min={localToday()}
+                onChange={(e) => updateBatch(batch.id, { usageEndDate: e.target.value })}
+                className={inputClass}
+                style={{ ...inputStyle, colorScheme: 'dark' }}
+              />
+              <span className="text-[10px] text-gray-600 mt-1 block">
+                Optional. When whitelist or creator usage should end.
+              </span>
+              {batch.errors.usageEndDate && (
+                <span className="text-[11px] text-red-400 mt-1 block">{batch.errors.usageEndDate}</span>
+              )}
+            </label>
+          )}
         </div>
 
         {batch.isCarousel && (
