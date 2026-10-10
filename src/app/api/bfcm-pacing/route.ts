@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { currencyFromShopInfo, getFxRates, resolveReportingCurrency, toReportingCurrency } from '@/lib/currency';
+import { currencyFromShopInfo, getFxRates } from '@/lib/currency';
 import {
   alignLastYear,
   bfcmWindow,
@@ -39,6 +39,7 @@ import {
 } from '@/lib/bfcm/campaigns';
 import { buildLastYearBfcmPnl, lastYearBfcmRange, type LastYearBfcmPnl, type LastYearPnlInputRow } from '@/lib/bfcm/last-year-pnl';
 import { merRatio } from '@/lib/bfcm/pacing';
+import { pacingDisplayFigures, resolveBfcmDisplayCurrency, resolveBfcmStoreCurrency } from '@/lib/bfcm/store-currency';
 import {
   averageSalesByHour,
   daySalesOrEmpty,
@@ -255,18 +256,27 @@ export async function GET(request: NextRequest) {
   if (brandError || !brand) return NextResponse.json({ error: 'Brand not found' }, { status: 404 });
 
   let shopCurrency: string | null = null;
-  if (brand.shopify_store_domain) {
-    const { data: storeRow } = await supabase
-      .from('shopify_stores')
-      .select('shop_info')
-      .eq('shop_domain', brand.shopify_store_domain)
-      .maybeSingle();
-    shopCurrency = currencyFromShopInfo(storeRow?.shop_info);
-  }
-  const reporting = resolveReportingCurrency({ shopCurrency });
-  const display = resolveReportingCurrency({ override: baseCurrencyParam, shopCurrency });
-  const reportingCurrency = reporting.code;
-  const baseCurrency = display.code;
+  const storeLookup = brand.shopify_store_domain
+    ? supabase.from('shopify_stores').select('shop_info').eq('shop_domain', brand.shopify_store_domain).maybeSingle()
+    : Promise.resolve({ data: null });
+  const [storeRow, pnlCurrencyRow] = await Promise.all([
+    storeLookup,
+    supabase
+      .from('daily_pnl')
+      .select('currency')
+      .eq('brand_id', brandId)
+      .not('currency', 'is', null)
+      .order('date', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+  shopCurrency = currencyFromShopInfo(storeRow.data?.shop_info);
+  const store = resolveBfcmStoreCurrency({
+    pnlCurrency: pnlCurrencyRow.data?.currency,
+    shopCurrency,
+  });
+  const reportingCurrency = store.code;
+  const baseCurrency = resolveBfcmDisplayCurrency({ requested: baseCurrencyParam, storeCurrency: reportingCurrency });
 
   const warnings: string[] = [];
   let metaToken = process.env.META_ACCESS_TOKEN || '';
@@ -389,15 +399,28 @@ export async function GET(request: NextRequest) {
   const metaCurrencyResolved = live.metaCurrency || (metaReady ? metaCurrency : null);
   const metaOk = metaReady && live.metaOk;
   const googleOk = live.google.configured && !live.google.error && live.google.spend != null;
-  const shopifyCurrency = shopCurrency || reportingCurrency;
-  const revenueReporting = toReportingCurrency(live.shopifyToday.revenue, shopifyCurrency, reportingCurrency, fxRates);
-  const ncReporting = toReportingCurrency(live.shopifyToday.ncRevenue, shopifyCurrency, reportingCurrency, fxRates);
-  const metaSpendReporting = metaOk
-    ? toReportingCurrency(live.totalSpendSoFar, metaCurrencyResolved || reportingCurrency, reportingCurrency, fxRates)
-    : 0;
-  const googleSpendReporting = googleOk
-    ? toReportingCurrency(live.google.spend || 0, live.google.currency || reportingCurrency, reportingCurrency, fxRates)
-    : 0;
+  const shopifyCurrency = reportingCurrency;
+  const inStore = pacingDisplayFigures({
+    storeCurrency: reportingCurrency,
+    displayCurrency: reportingCurrency,
+    metaCurrency: metaCurrencyResolved,
+    googleCurrency: live.google.currency,
+    fxRates,
+    todayRevenue: live.shopifyToday.revenue,
+    todayNcRevenue: live.shopifyToday.ncRevenue,
+    l7Revenue: 0,
+    sameDayRevenue: 0,
+    metaSpend: metaOk ? live.totalSpendSoFar : 0,
+    googleSpend: googleOk ? live.google.spend || 0 : 0,
+    amerNcRevenue: 0,
+    amerMetaSpend: 0,
+    amerGoogleSpend: 0,
+    amerOtherSpend: 0,
+  });
+  const revenueReporting = inStore.todayRevenue;
+  const ncReporting = inStore.todayNcRevenue;
+  const metaSpendReporting = inStore.metaSpend;
+  const googleSpendReporting = inStore.googleSpend;
   const spendForMer = (metaConfigured && !metaOk) || (live.google.configured && !googleOk)
     ? null
     : metaSpendReporting + googleSpendReporting;

@@ -29,6 +29,7 @@ import {
 import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
 import { lastYearFigure, lastYearTotal, zonedClock } from '@/lib/bfcm/calendar';
+import { pacingDisplayFigures } from '@/lib/bfcm/store-currency';
 import { paceSnapshot, vsBaselinePct, type PaceTone } from '@/lib/bfcm/pacing';
 
 // ─── Types ──────────────────────────────────────────────────────
@@ -1061,7 +1062,7 @@ export default function BfcmPacingPage() {
   const [extraGoalDate, setExtraGoalDate] = useState('');
   const requestRef = useRef(0);
   const loadedBrandRef = useRef('');
-  // AUTO → API resolves Shopify settlement currency (CAD for Tallow Twins, etc.)
+  // AUTO → store currency from daily_pnl (CAD for Tallow Twins, USD for Mintier).
   const [baseCurrency, setBaseCurrency] = useState<string>('AUTO');
 
   useEffect(() => {
@@ -1207,7 +1208,27 @@ export default function BfcmPacingPage() {
   const fx = data?.fxRates || {};
   const base = data?.baseCurrency || baseCurrency;
   const native = data?.currency || 'USD';
+  const storeCurrency = data?.shopify?.currency || data?.reportingCurrency || 'USD';
   const convert = (v: number, fromCurrency?: string) => toBase(v, fromCurrency || native, fx, base);
+  const shown = data
+    ? pacingDisplayFigures({
+        storeCurrency,
+        displayCurrency: base,
+        metaCurrency: data.currencies?.meta || null,
+        googleCurrency: data.currencies?.google || data.google?.currency || null,
+        fxRates: fx,
+        todayRevenue: data.shopify?.today.revenue ?? 0,
+        todayNcRevenue: data.shopify?.today.ncRevenue ?? 0,
+        l7Revenue: data.shopify?.l7DailyAvgRevenue ?? 0,
+        sameDayRevenue: data.shopify?.lastYear.sales?.revenue ?? 0,
+        metaSpend: data.today.totalSpendSoFar,
+        googleSpend: data.today.googleSpend,
+        amerNcRevenue: data.aMer.l7NcRevenue,
+        amerMetaSpend: data.aMer.l7MetaSpend,
+        amerGoogleSpend: data.aMer.l7GoogleSpend,
+        amerOtherSpend: data.aMer.l7OtherSpend,
+      })
+    : null;
   const lastYearMoney = (figure: PnlFigure) => {
     if (!data?.lastYearBfcmPnl || figure === 'no data') return figure === 'no data' ? 'no data' : '—';
     return fmtMoney(convert(figure, data.lastYearBfcmPnl.currency), base);
@@ -1216,8 +1237,8 @@ export default function BfcmPacingPage() {
     ? `${data.lastYearBfcmPnl.coreStart} – ${data.lastYearBfcmPnl.coreEnd} gross ${lastYearMoney(data.lastYearBfcmPnl.core.gross)}`
     : null;
 
-  const metaSpendBase = data ? convert(data.today.totalSpendSoFar, data.currencies.meta || native) : 0;
-  const googleSpendBase = data ? convert(data.today.googleSpend, data.currencies.google || data.currencies.meta || native) : 0;
+  const metaSpendBase = shown?.metaSpend ?? 0;
+  const googleSpendBase = shown?.googleSpend ?? 0;
   const acquisitionSpendBase = metaSpendBase + googleSpendBase;
   const budgetPct = pace?.spendVsBudget != null ? pace.spendVsBudget * 100 : 0;
 
@@ -1498,7 +1519,7 @@ export default function BfcmPacingPage() {
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
               <KpiCard
                 label={`Shopify gross (${base})`}
-                value={data.shopify ? fmtMoney(convert(data.shopify.today.revenue, data.shopify.currency), base) : '—'}
+                value={data.shopify && shown ? fmtMoney(shown.todayRevenue, base) : '—'}
                 accent="gold"
                 sub={data.shopify
                   ? `${fmtNum(data.shopify.today.orders)} orders · AOV ${fmtMoney(convert(data.shopify.today.aov, data.shopify.currency), base)}`
@@ -1546,7 +1567,7 @@ export default function BfcmPacingPage() {
             <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
               <KpiCard
                 label="L7 avg daily gross"
-                value={data.shopify ? fmtMoney(convert(data.shopify.l7DailyAvgRevenue, data.shopify.currency), base) : '—'}
+                value={data.shopify && shown ? fmtMoney(shown.l7Revenue, base) : '—'}
                 sub="L7 average daily gross, including quiet days"
               />
               <KpiCard
@@ -1558,7 +1579,7 @@ export default function BfcmPacingPage() {
                       return pct == null ? '—' : fmtPct(pct);
                     })()}
                 sub={data.shopify?.lastYear.status === 'ok'
-                  ? `${data.shopify.lastYear.dayLabel} ${data.shopify.lastYear.date} · ${fmtMoney(convert(data.shopify.lastYear.sales?.revenue || 0, data.shopify.currency), base)}`
+                  ? `${data.shopify.lastYear.dayLabel} ${data.shopify.lastYear.date} · ${fmtMoney(shown?.sameDayRevenue || 0, base)}`
                   : data.shopify?.lastYear.earliestOrderDay
                     ? `Orders stored from ${data.shopify.lastYear.earliestOrderDay}`
                     : 'No stored orders'}
@@ -1577,10 +1598,10 @@ export default function BfcmPacingPage() {
             {data.aMer.available && (
               <div className="rounded-xl px-5 py-3 mb-6 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs" style={{ backgroundColor: '#111111', color: '#888' }}>
                 <span className="font-medium" style={{ color: '#C8B89A' }}>aMER (7-day)</span>
-                <span>NC revenue {fmtMoney(convert(data.aMer.l7NcRevenue), base)}</span>
-                <span>Meta {fmtMoney(convert(data.aMer.l7MetaSpend), base)}</span>
-                <span>Google {fmtMoney(convert(data.aMer.l7GoogleSpend, data.currencies.google || native), base)}</span>
-                {data.aMer.l7OtherSpend > 0 && <span>Other {fmtMoney(convert(data.aMer.l7OtherSpend), base)}</span>}
+                <span>NC revenue {fmtMoney(shown?.amerNcRevenue || 0, base)}</span>
+                <span>Meta {fmtMoney(shown?.amerMetaSpend || 0, base)}</span>
+                <span>Google {fmtMoney(shown?.amerGoogleSpend || 0, base)}</span>
+                {data.aMer.l7OtherSpend > 0 && <span>Other {fmtMoney(shown?.amerOtherSpend || 0, base)}</span>}
                 <span>→ {data.aMer.l7 != null ? fmtRoas(data.aMer.l7) : '—'}</span>
               </div>
             )}

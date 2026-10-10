@@ -4,7 +4,6 @@ import {
   bfcmWindow,
   daysBetween,
   lastYearFigure,
-  lastYearTotal,
   weekdayName,
   type BfcmWindow,
   type LastYearFigure,
@@ -112,6 +111,7 @@ function eachDay(start: string, end: string): string[] {
 
 interface MoneyDay {
   date: string;
+  present: boolean;
   orders: number;
   gross: number;
   net: number;
@@ -122,9 +122,22 @@ interface MoneyDay {
   spend: number;
 }
 
+/** A calendar day with no daily_pnl row is missing, even when an earlier order exists. */
+function totalKnown(
+  days: { date: string; amount: number; present: boolean }[],
+  earliestOrderDay: string | null | undefined
+): LastYearFigure {
+  if (days.length === 0) return 'no data';
+  const figures = days.map((day) =>
+    day.present ? lastYearFigure(day.amount, day.date, earliestOrderDay) : 'no data'
+  );
+  if (figures.every((figure) => figure === 'no data')) return 'no data';
+  return figures.reduce<number>((sum, figure) => sum + (figure === 'no data' ? 0 : figure), 0);
+}
+
 function summarize(days: MoneyDay[], earliestOrderDay: string | null | undefined): LastYearBfcmTotals {
   const total = (pick: (day: MoneyDay) => number): LastYearFigure =>
-    roundFigure(lastYearTotal(days.map((day) => ({ date: day.date, amount: pick(day) })), earliestOrderDay));
+    roundFigure(totalKnown(days.map((day) => ({ date: day.date, amount: pick(day), present: day.present })), earliestOrderDay));
   const orders = total((day) => day.orders);
   const gross = total((day) => day.gross);
   const net = total((day) => day.net);
@@ -147,6 +160,7 @@ function summarize(days: MoneyDay[], earliestOrderDay: string | null | undefined
 
 /**
  * One row per calendar day from the extended last-year window.
+ * A day with no daily_pnl row is "no data", including when a stray order exists earlier.
  * Discounts and refunds are stored negative, so net is gross + discounts + refunds.
  * MER is (gross + discounts) / (Meta + Google). aMER is NC gross / (Meta + Google),
  * the same split the command center uses for today.
@@ -178,6 +192,7 @@ export function buildLastYearBfcmPnl(input: {
     const googleSpend = convert(num(row?.google_spend));
     return {
       date,
+      present: !!row,
       orders: num(row?.nc_orders) + num(row?.rc_orders),
       gross,
       net: gross + discounts + refunds,
@@ -192,7 +207,8 @@ export function buildLastYearBfcmPnl(input: {
   const days: LastYearBfcmDay[] = moneyDays.map((day) => {
     const offset = daysBetween(range.core.blackFriday, day.date);
     const known = range.core.days.find((coreDay) => coreDay.date === day.date);
-    const figure = (amount: number) => roundFigure(lastYearFigure(amount, day.date, input.earliestOrderDay));
+    const figure = (amount: number) =>
+      day.present ? roundFigure(lastYearFigure(amount, day.date, input.earliestOrderDay)) : 'no data';
     const gross = figure(day.gross);
     const ncRevenue = figure(day.ncRevenue);
     const metaSpend = figure(day.metaSpend);
