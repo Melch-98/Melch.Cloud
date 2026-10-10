@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await runUsageTaskSync(supabase, submissionId);
-    return NextResponse.json({
+    const payload: Record<string, unknown> = {
       ok: true,
       saved: true,
       action: result.action,
@@ -62,7 +62,12 @@ export async function POST(request: NextRequest) {
       usage_end_date: result.usageEndDate,
       notion_page_id: result.notionPageId,
       notion_page_url: result.notionPageUrl,
-    });
+    };
+    if (auth.role === 'admin') {
+      if (!result.ok && result.failure) payload.failure = result.failure;
+      if (result.clientLookupFailure) payload.warning = result.clientLookupFailure;
+    }
+    return NextResponse.json(payload);
   } catch (error) {
     if (error instanceof UsageDateError) {
       return NextResponse.json({ error: error.message }, { status: 400 });

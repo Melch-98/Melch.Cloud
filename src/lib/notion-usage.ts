@@ -1,3 +1,4 @@
+import { notionFailureFromResponse } from '@/lib/notion-error';
 import {
   NOTION_VERSION,
   buildDueUpdate,
@@ -27,17 +28,8 @@ function titleOf(page: { properties?: { Name?: { title?: Array<{ plain_text?: st
   return parts.map((part) => part.plain_text || '').join('').trim();
 }
 
-async function readError(res: Response): Promise<string> {
-  const status = `Notion ${res.status}`;
-  try {
-    const body = (await res.json()) as { message?: string };
-    if (body.message && !body.message.includes('secret') && !body.message.toLowerCase().includes('token')) {
-      return `${status}: ${body.message}`;
-    }
-  } catch {
-    // Status is enough. Do not log the raw body.
-  }
-  return status;
+function fail(res: Response, apiKey: string) {
+  return notionFailureFromResponse(res, [apiKey]);
 }
 
 export function createNotionUsageClient(
@@ -58,7 +50,7 @@ export function createNotionUsageClient(
           headers,
           body: JSON.stringify({ page_size: 100, start_cursor: cursor }),
         });
-        if (!res.ok) throw new Error(await readError(res));
+        if (!res.ok) throw await fail(res, apiKey);
         const body = (await res.json()) as {
           results?: Array<{ id: string; properties?: { Name?: { title?: Array<{ plain_text?: string }> } } }>;
           has_more?: boolean;
@@ -79,7 +71,7 @@ export function createNotionUsageClient(
         headers,
         body: JSON.stringify(task),
       });
-      if (!res.ok) throw new Error(await readError(res));
+      if (!res.ok) throw await fail(res, apiKey);
       const page = (await res.json()) as { id?: string; url?: string };
       if (!page.id) throw new Error('Notion did not return a page id');
       return {
@@ -94,7 +86,7 @@ export function createNotionUsageClient(
         headers,
         body: JSON.stringify(buildDueUpdate(usageEndDate)),
       });
-      if (!res.ok) throw new Error(await readError(res));
+      if (!res.ok) throw await fail(res, apiKey);
     },
   };
 }

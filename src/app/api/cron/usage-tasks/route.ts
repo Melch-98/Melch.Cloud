@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { sanitizeSecretText } from '@/lib/notion-error';
 import { createServiceClient } from '@/lib/supabase-server';
 import { retryMissingUsageTasks } from '@/lib/usage-task-sync';
 
@@ -30,9 +31,16 @@ export async function GET(req: NextRequest) {
     const result = await retryMissingUsageTasks(supabase);
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {
-    console.warn('Usage task retry failed', {
-      error: error instanceof Error ? error.message : 'usage task',
+    const message = sanitizeSecretText(error instanceof Error ? error.message : 'retry failed') || 'retry failed';
+    console.warn('Usage task retry failed', { error: message });
+    return NextResponse.json({
+      ok: true,
+      created: 0,
+      failed: 0,
+      missingKey: 0,
+      failures: [],
+      warnings: [],
+      error: message,
     });
-    return NextResponse.json({ ok: true, created: 0, failed: 0, missingKey: 0, error: 'retry failed' });
   }
 }

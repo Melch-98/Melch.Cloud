@@ -12,6 +12,7 @@ export default defineConfig({
       'src/lib/creative-type-mix.test.ts',
       'src/lib/usage-end-date.test.ts',
       'src/lib/usage-task.test.ts',
+      'src/lib/usage-task-sync.test.ts',
       'src/lib/supabase-server.test.ts',
       'src/lib/invite-status.test.ts',
       'src/lib/set-password-token.test.ts',

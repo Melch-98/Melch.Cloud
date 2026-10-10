@@ -1,8 +1,10 @@
 import { createNotionUsageClient } from '@/lib/notion-usage';
 import { isUsageEndDateAllowed, shiftIsoDate, utcToday } from '@/lib/usage-end-date';
 import {
+  describeUsageFailure,
   syncUsageTask,
   type UsageSubmissionRow,
+  type UsageTaskFailure,
   type UsageTaskResult,
 } from '@/lib/usage-task';
 
@@ -93,22 +95,53 @@ export async function rememberNotionPage(
  * Create the Agency Tasks page, or move its Due date when this batch
  * already has one. Notion failures are returned, not thrown.
  */
-export async function runUsageTaskSync(
-  supabase: ServiceClient,
-  submissionId: string
-): Promise<UsageTaskResult & { notionPageId: string | null; notionPageUrl: string | null; usageEndDate: string | null }> {
+export type UsageTaskSyncResult = UsageTaskResult & {
+  notionPageId: string | null;
+  notionPageUrl: string | null;
+  usageEndDate: string | null;
+};
+
+export async function runUsageTaskSync(supabase: ServiceClient, submissionId: string): Promise<UsageTaskSyncResult> {
   const row = await loadUsageSubmission(supabase, submissionId);
-  if (!row) return { ok: false, action: 'failed', error: 'not_found', notionPageId: null, notionPageUrl: null, usageEndDate: null };
+  if (!row) {
+    return {
+      ok: false,
+      action: 'failed',
+      error: 'not_found',
+      failure: {
+        submissionId,
+        step: 'submissions_update',
+        status: null,
+        code: 'not_found',
+        message: 'Submission was not found',
+      },
+      notionPageId: null,
+      notionPageUrl: null,
+      usageEndDate: null,
+    };
+  }
 
   const result = await syncUsageTask({ row, notion: createNotionUsageClient() });
   if (result.ok && result.action === 'created' && result.page) {
     try {
       await rememberNotionPage(supabase, submissionId, result.page);
     } catch (error) {
+      const failure = describeUsageFailure(submissionId, 'submissions_update', error);
+      failure.notionPageId = result.page.id;
       console.warn('Usage task was created but not saved on the batch', {
         submissionId,
-        error: error instanceof Error ? error.message : 'save',
+        error: failure.message,
       });
+      return {
+        ok: false,
+        action: 'failed',
+        error: failure.message,
+        failure,
+        clientLookupFailure: result.clientLookupFailure,
+        notionPageId: result.page.id,
+        notionPageUrl: result.page.url,
+        usageEndDate: row.usageEndDate,
+      };
     }
     return {
       ...result,
@@ -125,11 +158,19 @@ export async function runUsageTaskSync(
   };
 }
 
+export interface UsageTaskRetryResult {
+  created: number;
+  failed: number;
+  missingKey: number;
+  failures: UsageTaskFailure[];
+  warnings: UsageTaskFailure[];
+}
+
 /** Batches with a usage end date that is still current and no Notion page yet. */
 export async function retryMissingUsageTasks(
   supabase: ServiceClient,
   now = new Date()
-): Promise<{ created: number; failed: number; missingKey: number }> {
+): Promise<UsageTaskRetryResult> {
   const earliest = shiftIsoDate(utcToday(now), -1);
   const { data, error } = await supabase
     .from('submissions')
@@ -139,17 +180,23 @@ export async function retryMissingUsageTasks(
   if (error) throw new Error(error.message);
   if (!process.env.NOTION_API_KEY) {
     console.warn('Usage task retry skipped: NOTION_API_KEY is not set');
-    return { created: 0, failed: 0, missingKey: (data || []).length };
+    return { created: 0, failed: 0, missingKey: (data || []).length, failures: [], warnings: [] };
   }
 
   let created = 0;
   let failed = 0;
   let missingKey = 0;
+  const failures: UsageTaskFailure[] = [];
+  const warnings: UsageTaskFailure[] = [];
   for (const row of data || []) {
     const result = await runUsageTaskSync(supabase, row.id);
+    if (result.clientLookupFailure) warnings.push(result.clientLookupFailure);
     if (result.action === 'created') created += 1;
     else if (result.action === 'missing_key') missingKey += 1;
-    else if (!result.ok) failed += 1;
+    else if (!result.ok) {
+      failed += 1;
+      if (result.failure) failures.push(result.failure);
+    }
   }
-  return { created, failed, missingKey };
+  return { created, failed, missingKey, failures, warnings };
 }
