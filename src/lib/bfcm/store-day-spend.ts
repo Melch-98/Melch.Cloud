@@ -90,7 +90,7 @@ export function rebucketAccountHoursToStoreDay(input: {
 /** Flatten a Meta hourly insights payload into account-local hour rows. */
 export function accountHourRowsFromMeta(rows: unknown[]): AccountHourRow[] {
   const flat: AccountHourRow[] = [];
-  for (const [date, hours] of parseHourlySpendRows(rows)) {
+  for (const [date, hours] of Array.from(parseHourlySpendRows(rows))) {
     for (const point of hours) {
       if (!point.spend) continue;
       flat.push({ date, hour: point.hour, spend: point.spend });
