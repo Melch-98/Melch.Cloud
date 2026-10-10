@@ -1,3 +1,5 @@
+import { NotionApiError, sanitizeSecretText } from '@/lib/notion-error';
+
 /**
  * Agency Tasks page for a batch that has a usage end date.
  * Notion is called only from the server. A missing key or a Notion error
@@ -42,9 +44,69 @@ export interface UsageTaskCreateBody {
   properties: Record<string, unknown>;
 }
 
+export type UsageTaskStep = 'client_lookup' | 'page_create' | 'submissions_update' | 'due_update';
+
+export interface UsageTaskFailure {
+  submissionId: string;
+  step: UsageTaskStep;
+  status: number | null;
+  code: string | null;
+  message: string;
+  notionPageId?: string;
+}
+
 export type UsageTaskResult =
-  | { ok: true; action: 'skipped' | 'missing_key' | 'created' | 'updated'; page?: NotionPageRef }
-  | { ok: false; action: 'failed'; error: string };
+  | {
+      ok: true;
+      action: 'skipped' | 'missing_key' | 'created' | 'updated';
+      page?: NotionPageRef;
+      failure?: undefined;
+      clientLookupFailure?: UsageTaskFailure;
+    }
+  | {
+      ok: false;
+      action: 'failed';
+      error: string;
+      failure: UsageTaskFailure;
+      clientLookupFailure?: UsageTaskFailure;
+    };
+
+export function describeUsageFailure(submissionId: string, step: UsageTaskStep, error: unknown): UsageTaskFailure {
+  if (error instanceof NotionApiError) {
+    return {
+      submissionId,
+      step,
+      status: error.status,
+      code: error.code ? sanitizeSecretText(error.code).slice(0, 80) || null : null,
+      message: sanitizeSecretText(error.message) || 'Notion request failed',
+    };
+  }
+  const raw = error instanceof Error ? error.message : 'request failed';
+  return {
+    submissionId,
+    step,
+    status: null,
+    code: null,
+    message: sanitizeSecretText(raw) || 'request failed',
+  };
+}
+
+/** Notion date properties take a calendar day. A timestamp is cut to that day. */
+export function notionDay(value: string): string {
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(value.trim());
+  return match ? match[1] : value.trim();
+}
+
+const RICH_TEXT_LIMIT = 2000;
+
+export function notionRichText(content: string): Array<{ type: 'text'; text: { content: string } }> {
+  const source = content.length > 0 ? content : ' ';
+  const chunks: Array<{ type: 'text'; text: { content: string } }> = [];
+  for (let index = 0; index < source.length && chunks.length < 100; index += RICH_TEXT_LIMIT) {
+    chunks.push({ type: 'text', text: { content: source.slice(index, index + RICH_TEXT_LIMIT) } });
+  }
+  return chunks;
+}
 
 export function tasksDataSourceId(): string {
   return process.env.NOTION_TASKS_DATA_SOURCE_ID || DEFAULT_TASKS_DATA_SOURCE_ID;
@@ -118,13 +180,13 @@ export function buildUsageTaskCreate(input: {
     appUrl: input.appUrl,
   });
   const properties: Record<string, unknown> = {
-    Name: { title: [{ text: { content: usageTaskName(input.row) } }] },
+    Name: { title: notionRichText(usageTaskName(input.row)) },
     Type: { select: { name: 'TURN OFF ON DUE DATE' } },
     Priority: { select: { name: 'P0' } },
     Status: { select: { name: 'To Do' } },
     'Waiting On': { select: { name: 'Internal' } },
-    Due: { date: { start: input.row.usageEndDate } },
-    Notes: { rich_text: [{ text: { content: notes } }] },
+    Due: { date: { start: notionDay(input.row.usageEndDate || '') } },
+    Notes: { rich_text: notionRichText(notes) },
   };
   if (input.client) {
     properties.Client = { relation: [{ id: input.client.id }] };
@@ -142,7 +204,7 @@ export function buildUsageTaskCreate(input: {
 }
 
 export function buildDueUpdate(usageEndDate: string): { properties: { Due: { date: { start: string } } } } {
-  return { properties: { Due: { date: { start: usageEndDate } } } };
+  return { properties: { Due: { date: { start: notionDay(usageEndDate) } } } };
 }
 
 export async function syncUsageTask(input: {
@@ -160,14 +222,17 @@ export async function syncUsageTask(input: {
       return { ok: true, action: 'missing_key' };
     }
     try {
-      await input.notion.updateDue(existingId, date);
+      await input.notion.updateDue(existingId, notionDay(date));
       return { ok: true, action: 'updated' };
     } catch (error) {
+      const failure = describeUsageFailure(input.row.id, 'due_update', error);
       console.warn('Usage task due date was not updated', {
         submissionId: input.row.id,
-        error: error instanceof Error ? error.message : 'notion',
+        status: failure.status,
+        code: failure.code,
+        error: failure.message,
       });
-      return { ok: false, action: 'failed', error: 'notion' };
+      return { ok: false, action: 'failed', error: failure.message, failure };
     }
   }
 
@@ -176,18 +241,34 @@ export async function syncUsageTask(input: {
     return { ok: true, action: 'missing_key' };
   }
 
+  let client: UsageClient | null = null;
+  let clientLookupFailure: UsageTaskFailure | undefined;
   try {
     const clients = await input.notion.listClients();
-    const client = matchClient(clients, input.row.brandName);
-    const page = await input.notion.createTask(
-      buildUsageTaskCreate({ row: { ...input.row, usageEndDate: date }, client, appUrl: input.appUrl })
-    );
-    return { ok: true, action: 'created', page };
+    client = matchClient(clients, input.row.brandName);
   } catch (error) {
+    clientLookupFailure = describeUsageFailure(input.row.id, 'client_lookup', error);
+    console.warn('Usage task client lookup failed; creating the task without Client', {
+      submissionId: input.row.id,
+      status: clientLookupFailure.status,
+      code: clientLookupFailure.code,
+      error: clientLookupFailure.message,
+    });
+  }
+
+  try {
+    const page = await input.notion.createTask(
+      buildUsageTaskCreate({ row: { ...input.row, usageEndDate: notionDay(date) }, client, appUrl: input.appUrl })
+    );
+    return { ok: true, action: 'created', page, clientLookupFailure };
+  } catch (error) {
+    const failure = describeUsageFailure(input.row.id, 'page_create', error);
     console.warn('Usage task was not created', {
       submissionId: input.row.id,
-      error: error instanceof Error ? error.message : 'notion',
+      status: failure.status,
+      code: failure.code,
+      error: failure.message,
     });
-    return { ok: false, action: 'failed', error: 'notion' };
+    return { ok: false, action: 'failed', error: failure.message, failure, clientLookupFailure };
   }
 }
