@@ -2,22 +2,10 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  Loader,
-  RefreshCw,
-  Activity,
-  ChevronDown,
-  ArrowRightLeft,
-  DollarSign,
-  PlusCircle,
-  MinusCircle,
-  Filter,
-  AlertCircle,
-} from 'lucide-react';
+import { Loader, RefreshCw, Activity, ChevronDown, Filter, AlertCircle } from 'lucide-react';
 import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
 
-// ─── Brand Palette ──────────────────────────────────────────────
 const GOLD = '#C8B89A';
 const GOLD_DIM = 'rgba(200,184,154,0.18)';
 const BG_CARD = '#111111';
@@ -25,85 +13,119 @@ const BORDER = 'rgba(200,184,154,0.10)';
 const TEXT_PRIMARY = '#F5F5F8';
 const TEXT_MUTED = '#999';
 const TEXT_DIM = '#666';
+const CHICAGO = 'America/Chicago';
 
-// ─── Types ──────────────────────────────────────────────────────
+type ChangeType =
+  | 'budget'
+  | 'bid_or_target'
+  | 'status'
+  | 'created'
+  | 'removed'
+  | 'creative'
+  | 'targeting'
+  | 'name'
+  | 'other';
+
 interface Brand {
   id: string;
   name: string;
 }
 
-interface ChangeEntry {
+interface ActivityEntry {
   id: string;
-  brand_id: string;
   platform: 'meta' | 'google';
-  entity_type: 'campaign' | 'adset' | 'ad_group';
-  entity_id: string;
-  entity_name: string;
-  change_type: 'status_change' | 'budget_change' | 'new_entity' | 'removed';
-  old_value: string | null;
-  new_value: string | null;
-  detected_at: string;
+  occurred_at: string;
+  actor: string | null;
+  tool: string | null;
+  change_type: ChangeType;
+  summary: string | null;
+  is_system: boolean;
 }
 
-// ─── Helpers ────────────────────────────────────────────────────
-function changeIcon(type: string) {
-  switch (type) {
-    case 'status_change':
-      return <ArrowRightLeft size={14} />;
-    case 'budget_change':
-      return <DollarSign size={14} />;
-    case 'new_entity':
-      return <PlusCircle size={14} />;
-    case 'removed':
-      return <MinusCircle size={14} />;
-    default:
-      return <Activity size={14} />;
-  }
+interface PlatformSync {
+  connected: boolean;
+  last_success_at: string | null;
+  last_error: string | null;
+  last_error_at: string | null;
 }
 
-function changeColor(type: string) {
+interface FeedResponse {
+  entries: ActivityEntry[];
+  actors: string[];
+  sync: { meta: PlatformSync; google: PlatformSync };
+  empty_reason: 'not_connected' | 'error' | 'no_changes' | null;
+}
+
+const CHANGE_LABELS: Record<ChangeType, string> = {
+  budget: 'Budget',
+  bid_or_target: 'Bid / target',
+  status: 'Status',
+  created: 'Created',
+  removed: 'Removed',
+  creative: 'Creative',
+  targeting: 'Targeting',
+  name: 'Name',
+  other: 'Other',
+};
+
+function chicagoYmd(date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: CHICAGO,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date);
+}
+
+function shiftYmd(ymd: string, days: number): string {
+  const [year, month, day] = ymd.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+}
+
+function formatCtTime(iso: string): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: CHICAGO,
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  }).format(new Date(iso));
+}
+
+function formatCtDay(iso: string): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: CHICAGO,
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(new Date(iso));
+}
+
+function formatSynced(iso: string | null): string {
+  if (!iso) return 'not synced yet';
+  return formatCtTime(iso);
+}
+
+function changeColor(type: string): string {
   switch (type) {
-    case 'status_change':
-      return '#60A5FA'; // blue
-    case 'budget_change':
-      return '#FBBF24'; // amber
-    case 'new_entity':
-      return '#34D399'; // green
+    case 'budget':
+    case 'bid_or_target':
+      return '#FBBF24';
+    case 'status':
+      return '#60A5FA';
+    case 'created':
+      return '#34D399';
     case 'removed':
-      return '#F87171'; // red
+      return '#F87171';
+    case 'creative':
+      return '#C084FC';
+    case 'targeting':
+      return '#2DD4BF';
+    case 'name':
+      return GOLD;
     default:
       return TEXT_MUTED;
   }
-}
-
-function changeLabel(type: string) {
-  switch (type) {
-    case 'status_change':
-      return 'Status Change';
-    case 'budget_change':
-      return 'Budget Change';
-    case 'new_entity':
-      return 'New';
-    case 'removed':
-      return 'Removed';
-    default:
-      return type;
-  }
-}
-
-function formatDate(iso: string) {
-  const d = new Date(iso);
-  const now = new Date();
-  const diff = now.getTime() - d.getTime();
-  const mins = Math.floor(diff / 60000);
-  const hours = Math.floor(diff / 3600000);
-  const days = Math.floor(diff / 86400000);
-
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  if (hours < 24) return `${hours}h ago`;
-  if (days < 7) return `${days}d ago`;
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 function platformBadge(platform: string) {
@@ -121,42 +143,38 @@ function platformBadge(platform: string) {
   );
 }
 
-function entityBadge(type: string) {
-  return (
-    <span
-      className="text-[10px] uppercase px-1.5 py-0.5 rounded"
-      style={{ background: 'rgba(255,255,255,0.05)', color: TEXT_DIM }}
-    >
-      {type === 'ad_group' ? 'ad group' : type}
-    </span>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════
 export default function AdChangelogPage() {
   const router = useRouter();
   const supabase = createClient();
+  const today = chicagoYmd();
 
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [userRole, setUserRole] = useState('');
   const [brands, setBrands] = useState<Brand[]>([]);
   const [selectedBrandId, setSelectedBrandId] = useState('');
-  const [entries, setEntries] = useState<ChangeEntry[]>([]);
+  const [entries, setEntries] = useState<ActivityEntry[]>([]);
+  const [actors, setActors] = useState<string[]>([]);
+  const [sync, setSync] = useState<FeedResponse['sync'] | null>(null);
+  const [emptyReason, setEmptyReason] = useState<FeedResponse['empty_reason']>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [filterPlatform, setFilterPlatform] = useState<'all' | 'meta' | 'google'>('all');
-  const [filterType, setFilterType] = useState<string>('all');
-  const [lastRefreshed, setLastRefreshed] = useState<string | null>(null);
   const [entriesLoading, setEntriesLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
-  const [scanInfo, setScanInfo] = useState<string | null>(null);
+  const [filterPlatform, setFilterPlatform] = useState<'all' | 'meta' | 'google'>('all');
+  const [filterType, setFilterType] = useState<string>('all');
+  const [filterActor, setFilterActor] = useState('all');
+  const [fromDate, setFromDate] = useState(shiftYmd(today, -6));
+  const [toDate, setToDate] = useState(today);
+  const [showSystem, setShowSystem] = useState(false);
 
-  // ─── Auth ───────────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) { router.push('/'); return; }
+      if (!session) {
+        router.push('/');
+        return;
+      }
       setAuthToken(session.access_token);
 
       const { data: profile } = await supabase
@@ -180,21 +198,19 @@ export default function AdChangelogPage() {
           .order('name');
         setBrands(allBrands || []);
         const saved = localStorage.getItem('melch_selected_brand');
-        if (saved && allBrands?.find((b: Brand) => b.id === saved)) {
+        if (saved && allBrands?.find((brand: Brand) => brand.id === saved)) {
           setSelectedBrandId(saved);
         } else if (allBrands?.length) {
           setSelectedBrandId(allBrands[0].id);
         }
-      } else {
-        if (profile.brand_id) {
-          setSelectedBrandId(profile.brand_id);
-          const { data: brand } = await supabase
-            .from('brands')
-            .select('id, name')
-            .eq('id', profile.brand_id)
-            .single();
-          if (brand) setBrands([brand]);
-        }
+      } else if (profile.brand_id) {
+        setSelectedBrandId(profile.brand_id);
+        const { data: brandRow } = await supabase
+          .from('brands')
+          .select('id, name')
+          .eq('id', profile.brand_id)
+          .single();
+        if (brandRow) setBrands([brandRow]);
       }
 
       setLoading(false);
@@ -202,40 +218,52 @@ export default function AdChangelogPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ─── Fetch changelog entries ────────────────────────────────────
   const fetchEntries = useCallback(async () => {
     if (!authToken || !selectedBrandId) return;
     setEntriesLoading(true);
     setFetchError(null);
     try {
-      const res = await fetch(`/api/ad-changelog?brand_id=${selectedBrandId}&limit=200`, {
+      const params = new URLSearchParams({
+        brand_id: selectedBrandId,
+        from: fromDate,
+        to: toDate,
+        include_system: showSystem ? '1' : '0',
+      });
+      if (filterPlatform !== 'all') params.set('platform', filterPlatform);
+      if (filterType !== 'all') params.set('change_type', filterType);
+      if (filterActor !== 'all') params.set('actor', filterActor);
+      const res = await fetch(`/api/ad-changelog?${params.toString()}`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         setFetchError(body?.error || `Failed to load changelog (${res.status})`);
         setEntries([]);
+        setSync(null);
+        setEmptyReason(null);
         return;
       }
-      setEntries(body.entries || []);
-    } catch (e: unknown) {
-      setFetchError(e instanceof Error ? e.message : 'Failed to load changelog');
+      const feed = body as FeedResponse;
+      setEntries(feed.entries || []);
+      setActors(feed.actors || []);
+      setSync(feed.sync || null);
+      setEmptyReason(feed.empty_reason ?? null);
+    } catch (error: unknown) {
+      setFetchError(error instanceof Error ? error.message : 'Failed to load changelog');
       setEntries([]);
     } finally {
       setEntriesLoading(false);
     }
-  }, [authToken, selectedBrandId]);
+  }, [authToken, selectedBrandId, fromDate, toDate, showSystem, filterPlatform, filterType, filterActor]);
 
   useEffect(() => {
     fetchEntries();
   }, [fetchEntries]);
 
-  // ─── Manual refresh ─────────────────────────────────────────────
   const handleRefresh = async () => {
     if (!authToken || !selectedBrandId || refreshing) return;
     setRefreshing(true);
     setScanError(null);
-    setScanInfo(null);
     try {
       const res = await fetch('/api/ad-changelog', {
         method: 'POST',
@@ -246,60 +274,48 @@ export default function AdChangelogPage() {
         body: JSON.stringify({ brand_id: selectedBrandId }),
       });
       const result = await res.json().catch(() => ({}));
-      if (!res.ok || !result.success) {
-        setScanError(result?.error || `Scan failed (${res.status})`);
+      if (res.status === 429) {
+        setScanError(result?.error || 'Refresh is limited to once a minute.');
         return;
       }
-      setLastRefreshed(new Date().toISOString());
-      const scanned = result.entities_scanned ?? 0;
-      const changes = result.changes_detected ?? 0;
-      let info = `Scanned ${scanned} entities · ${changes} change${changes === 1 ? '' : 's'} detected`;
-      if (Array.isArray(result.errors) && result.errors.length > 0) {
-        info += ` · warnings: ${result.errors.join('; ')}`;
+      if (!res.ok) {
+        setScanError(result?.error || `Refresh failed (${res.status})`);
+        return;
+      }
+      if (result.connected === false) {
+        setScanError('This brand has no Meta or Google ad account.');
+      } else if (Array.isArray(result.errors) && result.errors.length > 0) {
         setScanError(result.errors.join(' · '));
       }
-      setScanInfo(info);
       await fetchEntries();
-    } catch (e: unknown) {
-      setScanError(e instanceof Error ? e.message : 'Scan failed');
+    } catch (error: unknown) {
+      setScanError(error instanceof Error ? error.message : 'Refresh failed');
     } finally {
       setRefreshing(false);
     }
   };
 
-  // ─── Brand switch ───────────────────────────────────────────────
   const handleBrandChange = (id: string) => {
     setSelectedBrandId(id);
+    setFilterActor('all');
     localStorage.setItem('melch_selected_brand', id);
   };
 
-  // ─── Filtered entries ───────────────────────────────────────────
-  const filtered = entries.filter((e) => {
-    if (filterPlatform !== 'all' && e.platform !== filterPlatform) return false;
-    if (filterType !== 'all' && e.change_type !== filterType) return false;
-    return true;
-  });
-
-  // ─── Group by date ──────────────────────────────────────────────
-  const grouped = new Map<string, ChangeEntry[]>();
-  for (const e of filtered) {
-    const day = new Date(e.detected_at).toLocaleDateString('en-US', {
-      weekday: 'long',
-      month: 'long',
-      day: 'numeric',
-      year: 'numeric',
-    });
-    if (!grouped.has(day)) grouped.set(day, []);
-    grouped.get(day)!.push(e);
+  const grouped: { day: string; dayEntries: ActivityEntry[] }[] = [];
+  for (const entry of entries) {
+    const day = formatCtDay(entry.occurred_at);
+    const last = grouped[grouped.length - 1];
+    if (last && last.day === day) last.dayEntries.push(entry);
+    else grouped.push({ day, dayEntries: [entry] });
   }
-  const groupedDays: { day: string; dayEntries: ChangeEntry[] }[] = [];
-  grouped.forEach((dayEntries, day) => {
-    groupedDays.push({ day, dayEntries });
-  });
 
-  const brandName = brands.find((b) => b.id === selectedBrandId)?.name || '';
+  const brandName = brands.find((brand) => brand.id === selectedBrandId)?.name || '';
+  const narrowed = filterType !== 'all' || filterActor !== 'all' || filterPlatform !== 'all';
+  const syncProblems = [
+    sync?.meta.connected && sync.meta.last_error ? `Meta: ${sync.meta.last_error}` : null,
+    sync?.google.connected && sync.google.last_error ? `Google: ${sync.google.last_error}` : null,
+  ].filter((line): line is string => !!line);
 
-  // ═══════════════════════════════════════════════════════════════
   if (loading) {
     return (
       <Navbar>
@@ -313,13 +329,9 @@ export default function AdChangelogPage() {
   return (
     <Navbar>
       <div className="min-h-screen bg-[#0a0a0a] px-4 md:px-8 py-6 max-w-[1000px] mx-auto">
-        {/* ── Header ──────────────────────────────────────────── */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
           <div className="flex items-center gap-3">
-            <div
-              className="w-10 h-10 rounded-xl flex items-center justify-center"
-              style={{ background: GOLD_DIM }}
-            >
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: GOLD_DIM }}>
               <Activity size={20} style={{ color: GOLD }} />
             </div>
             <div>
@@ -327,28 +339,24 @@ export default function AdChangelogPage() {
                 Ad Account Changelog
               </h1>
               <p className="text-xs mt-0.5" style={{ color: TEXT_MUTED }}>
-                {brandName ? `${brandName} — ` : ''}Status & budget changes across Meta and Google
+                {brandName ? `${brandName} — ` : ''}Live changes from Meta and Google. Times in CT.
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
-            {/* Brand selector (admin only) */}
             {userRole === 'admin' && brands.length > 1 && (
               <div className="relative">
                 <select
+                  aria-label="Brand"
                   value={selectedBrandId}
-                  onChange={(e) => handleBrandChange(e.target.value)}
+                  onChange={(event) => handleBrandChange(event.target.value)}
                   className="appearance-none pl-3 pr-8 py-2 rounded-lg text-sm cursor-pointer"
-                  style={{
-                    background: BG_CARD,
-                    color: TEXT_PRIMARY,
-                    border: `1px solid ${BORDER}`,
-                  }}
+                  style={{ background: BG_CARD, color: TEXT_PRIMARY, border: `1px solid ${BORDER}` }}
                 >
-                  {brands.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name}
+                  {brands.map((brand) => (
+                    <option key={brand.id} value={brand.id}>
+                      {brand.name}
                     </option>
                   ))}
                 </select>
@@ -360,71 +368,109 @@ export default function AdChangelogPage() {
               </div>
             )}
 
-            {/* Refresh button */}
             <button
               onClick={handleRefresh}
-              disabled={refreshing}
+              disabled={refreshing || !selectedBrandId}
               className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all hover:brightness-110 disabled:opacity-50"
               style={{ background: GOLD, color: '#0a0a0a' }}
             >
               <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
-              {refreshing ? 'Scanning...' : 'Refresh Now'}
+              {refreshing ? 'Refreshing…' : 'Refresh'}
             </button>
           </div>
         </div>
 
-        {/* ── Filters ─────────────────────────────────────────── */}
         <div
-          className="flex items-center gap-3 mb-6 px-4 py-3 rounded-xl"
+          className="flex flex-wrap items-center gap-3 mb-4 px-4 py-3 rounded-xl"
           style={{ background: BG_CARD, border: `1px solid ${BORDER}` }}
         >
           <Filter size={14} style={{ color: TEXT_DIM }} />
-          <span className="text-xs font-medium" style={{ color: TEXT_DIM }}>
-            Filter:
-          </span>
-
-          {/* Platform filter */}
-          {(['all', 'meta', 'google'] as const).map((p) => (
+          {(['all', 'meta', 'google'] as const).map((platform) => (
             <button
-              key={p}
-              onClick={() => setFilterPlatform(p)}
+              key={platform}
+              onClick={() => setFilterPlatform(platform)}
               className="text-xs px-2.5 py-1 rounded-md transition-all"
               style={{
-                background: filterPlatform === p ? GOLD_DIM : 'transparent',
-                color: filterPlatform === p ? GOLD : TEXT_DIM,
-                border: `1px solid ${filterPlatform === p ? 'rgba(200,184,154,0.3)' : 'transparent'}`,
+                background: filterPlatform === platform ? GOLD_DIM : 'transparent',
+                color: filterPlatform === platform ? GOLD : TEXT_DIM,
+                border: `1px solid ${filterPlatform === platform ? 'rgba(200,184,154,0.3)' : 'transparent'}`,
               }}
             >
-              {p === 'all' ? 'All Platforms' : p === 'meta' ? 'Meta' : 'Google'}
+              {platform === 'all' ? 'All platforms' : platform === 'meta' ? 'Meta' : 'Google'}
             </button>
           ))}
 
-          <span style={{ color: 'rgba(255,255,255,0.08)' }}>|</span>
+          <select
+            aria-label="Change type"
+            value={filterType}
+            onChange={(event) => setFilterType(event.target.value)}
+            className="text-xs px-2 py-1 rounded-md"
+            style={{ background: '#0a0a0a', color: TEXT_PRIMARY, border: `1px solid ${BORDER}` }}
+          >
+            <option value="all">All change types</option>
+            {(Object.keys(CHANGE_LABELS) as ChangeType[]).map((type) => (
+              <option key={type} value={type}>
+                {CHANGE_LABELS[type]}
+              </option>
+            ))}
+          </select>
 
-          {/* Type filter */}
-          {(['all', 'status_change', 'budget_change', 'new_entity', 'removed'] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setFilterType(t)}
-              className="text-xs px-2.5 py-1 rounded-md transition-all"
-              style={{
-                background: filterType === t ? GOLD_DIM : 'transparent',
-                color: filterType === t ? GOLD : TEXT_DIM,
-                border: `1px solid ${filterType === t ? 'rgba(200,184,154,0.3)' : 'transparent'}`,
-              }}
-            >
-              {t === 'all' ? 'All Types' : changeLabel(t)}
-            </button>
-          ))}
+          <select
+            aria-label="Person"
+            value={filterActor}
+            onChange={(event) => setFilterActor(event.target.value)}
+            className="text-xs px-2 py-1 rounded-md max-w-[180px]"
+            style={{ background: '#0a0a0a', color: TEXT_PRIMARY, border: `1px solid ${BORDER}` }}
+          >
+            <option value="all">Everyone</option>
+            {actors.map((actor) => (
+              <option key={actor} value={actor}>
+                {actor}
+              </option>
+            ))}
+          </select>
+
+          <label className="flex items-center gap-1.5 text-xs" style={{ color: TEXT_MUTED }}>
+            <span>From</span>
+            <input
+              type="date"
+              aria-label="From date"
+              value={fromDate}
+              onChange={(event) => setFromDate(event.target.value)}
+              className="px-2 py-1 rounded-md"
+              style={{ background: '#0a0a0a', color: TEXT_PRIMARY, border: `1px solid ${BORDER}` }}
+            />
+          </label>
+          <label className="flex items-center gap-1.5 text-xs" style={{ color: TEXT_MUTED }}>
+            <span>To</span>
+            <input
+              type="date"
+              aria-label="To date"
+              value={toDate}
+              onChange={(event) => setToDate(event.target.value)}
+              className="px-2 py-1 rounded-md"
+              style={{ background: '#0a0a0a', color: TEXT_PRIMARY, border: `1px solid ${BORDER}` }}
+            />
+          </label>
+
+          <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: TEXT_MUTED }}>
+            <input
+              type="checkbox"
+              checked={showSystem}
+              onChange={(event) => setShowSystem(event.target.checked)}
+            />
+            System events
+          </label>
         </div>
 
-        {/* ── Status banners ──────────────────────────────────── */}
-        {(lastRefreshed || scanInfo) && (
-          <p className="text-[10px] mb-3" style={{ color: TEXT_DIM }}>
-            {scanInfo || `Last scanned: ${formatDate(lastRefreshed!)}`}
-          </p>
+        {sync && (
+          <div className="flex flex-wrap gap-4 mb-4 text-[11px]" style={{ color: TEXT_DIM }}>
+            <PlatformSyncLine name="Meta" state={sync.meta} />
+            <PlatformSyncLine name="Google" state={sync.google} />
+          </div>
         )}
-        {(fetchError || scanError) && (
+
+        {(fetchError || scanError || syncProblems.length > 0) && (
           <div
             className="flex items-start gap-2 mb-4 px-4 py-3 rounded-xl text-sm"
             style={{
@@ -437,11 +483,13 @@ export default function AdChangelogPage() {
             <div className="min-w-0">
               {fetchError && <p>{fetchError}</p>}
               {scanError && <p>{scanError}</p>}
+              {syncProblems.map((line) => (
+                <p key={line}>{line}</p>
+              ))}
             </div>
           </div>
         )}
 
-        {/* ── Timeline ────────────────────────────────────────── */}
         {entriesLoading ? (
           <div
             className="rounded-xl p-12 flex flex-col items-center justify-center gap-3"
@@ -452,103 +500,62 @@ export default function AdChangelogPage() {
               Loading changelog…
             </p>
           </div>
-        ) : filtered.length === 0 ? (
-          <div
-            className="rounded-xl p-12 text-center"
-            style={{ background: BG_CARD, border: `1px solid ${BORDER}` }}
-          >
-            <Activity size={36} style={{ color: TEXT_DIM }} className="mx-auto mb-3" />
-            <p className="text-sm mb-1" style={{ color: TEXT_MUTED }}>
-              {entries.length > 0
-                ? 'No changes match these filters'
-                : 'No changes detected yet'}
-            </p>
-            <p className="text-xs mb-4" style={{ color: TEXT_DIM }}>
-              {entries.length > 0
-                ? 'Try clearing platform or type filters.'
-                : 'Click “Refresh Now” to snapshot Meta campaigns/ad sets and Google campaigns (Pipeboard). First scan seeds the baseline; later scans show diffs. Scanning is manual — there is no weekly cron.'}
-            </p>
-            {entries.length === 0 && (
-              <button
-                onClick={handleRefresh}
-                disabled={refreshing || !selectedBrandId}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
-                style={{ background: GOLD, color: '#0a0a0a' }}
-              >
-                <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
-                {refreshing ? 'Scanning...' : 'Scan Now'}
-              </button>
-            )}
-          </div>
+        ) : entries.length === 0 && !fetchError ? (
+          <EmptyState
+            reason={emptyReason}
+            narrowed={narrowed}
+            sync={sync}
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+          />
         ) : (
           <div className="space-y-6">
-            {groupedDays.map(({ day, dayEntries }) => (
+            {grouped.map(({ day, dayEntries }) => (
               <div key={day}>
                 <h3 className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: TEXT_MUTED }}>
                   {day}
                 </h3>
                 <div className="space-y-2">
-                  {dayEntries.map((e) => (
+                  {dayEntries.map((entry) => (
                     <div
-                      key={e.id}
-                      className="flex items-start gap-3 px-4 py-3 rounded-xl transition-all hover:border-[rgba(200,184,154,0.2)]"
-                      style={{ background: BG_CARD, border: `1px solid ${BORDER}` }}
+                      key={entry.id}
+                      className="flex items-start gap-3 px-4 py-3 rounded-xl"
+                      style={{
+                        background: BG_CARD,
+                        border: `1px solid ${BORDER}`,
+                        opacity: entry.is_system ? 0.72 : 1,
+                      }}
                     >
-                      {/* Icon */}
                       <div
                         className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5"
-                        style={{ background: `${changeColor(e.change_type)}15`, color: changeColor(e.change_type) }}
+                        style={{ background: `${changeColor(entry.change_type)}15`, color: changeColor(entry.change_type) }}
                       >
-                        {changeIcon(e.change_type)}
+                        <Activity size={14} />
                       </div>
-
-                      {/* Content */}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1 flex-wrap">
-                          {platformBadge(e.platform)}
-                          {entityBadge(e.entity_type)}
+                          {platformBadge(entry.platform)}
                           <span
                             className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
-                            style={{ background: `${changeColor(e.change_type)}15`, color: changeColor(e.change_type) }}
+                            style={{
+                              background: `${changeColor(entry.change_type)}15`,
+                              color: changeColor(entry.change_type),
+                            }}
                           >
-                            {changeLabel(e.change_type)}
+                            {CHANGE_LABELS[entry.change_type] || entry.change_type}
                           </span>
+                          {entry.is_system && (
+                            <span className="text-[10px] uppercase px-1.5 py-0.5 rounded" style={{ color: TEXT_DIM }}>
+                              System
+                            </span>
+                          )}
                         </div>
-
-                        <p className="text-sm font-medium truncate" style={{ color: TEXT_PRIMARY }}>
-                          {e.entity_name || e.entity_id}
+                        <p className="text-sm" style={{ color: TEXT_PRIMARY }}>
+                          {entry.summary || 'Change recorded'}
                         </p>
-
-                        {/* Change detail */}
-                        {e.change_type === 'status_change' && (
-                          <p className="text-xs mt-0.5" style={{ color: TEXT_MUTED }}>
-                            <span style={{ color: '#F87171' }}>{e.old_value}</span>
-                            {' → '}
-                            <span style={{ color: '#34D399' }}>{e.new_value}</span>
-                          </p>
-                        )}
-                        {e.change_type === 'budget_change' && (
-                          <p className="text-xs mt-0.5" style={{ color: TEXT_MUTED }}>
-                            <span style={{ color: '#F87171' }}>{e.old_value}</span>
-                            {' → '}
-                            <span style={{ color: '#34D399' }}>{e.new_value}</span>
-                          </p>
-                        )}
-                        {e.change_type === 'new_entity' && (
-                          <p className="text-xs mt-0.5" style={{ color: TEXT_MUTED }}>
-                            Detected with status: <span style={{ color: '#34D399' }}>{e.new_value}</span>
-                          </p>
-                        )}
-                        {e.change_type === 'removed' && (
-                          <p className="text-xs mt-0.5" style={{ color: TEXT_MUTED }}>
-                            Previously: <span style={{ color: '#F87171' }}>{e.old_value}</span>
-                          </p>
-                        )}
                       </div>
-
-                      {/* Timestamp */}
                       <span className="text-[10px] shrink-0 mt-1" style={{ color: TEXT_DIM }}>
-                        {formatDate(e.detected_at)}
+                        {formatCtTime(entry.occurred_at)}
                       </span>
                     </div>
                   ))}
@@ -559,5 +566,79 @@ export default function AdChangelogPage() {
         )}
       </div>
     </Navbar>
+  );
+}
+
+function PlatformSyncLine({ name, state }: { name: string; state: PlatformSync }) {
+  if (!state.connected) {
+    return (
+      <span>
+        {name} · not connected
+      </span>
+    );
+  }
+  if (state.last_error && !state.last_success_at) {
+    return (
+      <span style={{ color: '#F87171' }} title={state.last_error}>
+        {name} · error{state.last_error_at ? ` ${formatSynced(state.last_error_at)}` : ''}
+      </span>
+    );
+  }
+  return (
+    <span title={state.last_error || undefined}>
+      {name} · last synced {formatSynced(state.last_success_at)}
+      {state.last_error ? ' · last attempt failed' : ''}
+    </span>
+  );
+}
+
+function EmptyState({
+  reason,
+  narrowed,
+  sync,
+  refreshing,
+  onRefresh,
+}: {
+  reason: FeedResponse['empty_reason'];
+  narrowed: boolean;
+  sync: FeedResponse['sync'] | null;
+  refreshing: boolean;
+  onRefresh: () => void;
+}) {
+  const errorText = [sync?.meta.last_error, sync?.google.last_error].filter(Boolean).join(' · ');
+  let title = 'No changes';
+  let body = 'Nothing changed in this range.';
+  if (reason === 'not_connected') {
+    title = 'Not connected';
+    body = 'This brand has no Meta ad account or Google Ads customer ID.';
+  } else if (reason === 'error') {
+    title = 'Couldn’t load activity';
+    body = errorText || 'The last sync failed. Refresh to try again.';
+  } else if (narrowed) {
+    title = 'No changes';
+    body = 'No changes match these filters.';
+  }
+
+  return (
+    <div className="rounded-xl p-12 text-center" style={{ background: BG_CARD, border: `1px solid ${BORDER}` }}>
+      <Activity size={36} style={{ color: TEXT_DIM }} className="mx-auto mb-3" />
+      <p className="text-sm mb-1" style={{ color: TEXT_MUTED }}>
+        {title}
+      </p>
+      <p className="text-xs mb-4" style={{ color: TEXT_DIM }}>
+        {body}
+      </p>
+      {reason !== 'not_connected' && (
+        <button
+          onClick={onRefresh}
+          disabled={refreshing}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
+          style={{ background: GOLD, color: '#0a0a0a' }}
+        >
+          <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
+          {refreshing ? 'Refreshing…' : 'Refresh'}
+        </button>
+      )}
+    </div>
   );
 }

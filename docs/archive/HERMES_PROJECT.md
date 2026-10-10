@@ -495,7 +495,6 @@ All routes are under `src/app/api/`. Auth is typically via `Authorization: Beare
 | `/api/shopify-sync` | POST | Admin/Founder | Full Shopify sync: fetches orders, enriches customer NC/RC, aggregates daily_pnl, fetches Meta+Google ad spend, syncs products. `maxDuration: 300` |
 | `/api/shopify-sync` | GET | Auth | Reads daily_pnl data for a brand+year. Cached in Redis (60s TTL) |
 | `/api/sync-products` | POST | Admin | Standalone product sync from Shopify |
-| `/api/external/shopify-ingest/[...path]` | POST | MELCH_GADGET_SECRET | Receives forwarded data from Gadget.dev connector. Sub-paths: /shop-installed, /shop-uninstalled, /order, /product |
 
 ### Creative Pipeline
 
@@ -594,8 +593,6 @@ The Shopify embedded app uses a separate auth flow:
 - Also syncs products into `shopify_products`
 
 **Webhook-driven ingestion**: Shopify webhooks -> `/api/shopify/webhooks/[topic]` -> Inngest events -> `shopify-functions.ts` -> upsert into `shopify_orders`
-
-**Gadget.dev connector**: Alternative ingestion path via `/api/external/shopify-ingest/` for shops using the Gadget.dev Shopify connector. Auth via `MELCH_GADGET_SECRET`.
 
 **Shopify app config**: `shopify.app.toml` defines the app. Client ID: `379ad0c5fe46c693184a6a8f3477436f`. Scopes: `read_customers,read_price_rules,read_discounts,read_fulfillments,read_inventory,read_locations,read_marketing_events,read_orders,read_products,read_returns`. API version: `2026-04`. Embedded: true.
 
@@ -750,7 +747,6 @@ The Shopify embedded app uses a separate auth flow:
 | `NEXT_PUBLIC_APP_URL` | Application URL for email links |
 | `NEXT_PUBLIC_SITE_URL` | Site URL (used in Dropbox OAuth redirect) |
 | `CRON_SECRET` | Secret for Vercel Cron job authentication |
-| `MELCH_GADGET_SECRET` | Auth secret for Gadget.dev Shopify connector |
 | `SLACK_WEBHOOK_URL` | Slack webhook for notifications |
 
 ---

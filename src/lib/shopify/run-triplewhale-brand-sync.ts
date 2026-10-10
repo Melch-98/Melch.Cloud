@@ -6,6 +6,7 @@ import {
   invalidatePnlCache,
 } from '@/lib/redis';
 import { currencyFromShopInfo, resolveReportingCurrency } from '@/lib/currency';
+import { upsertDailyPnl } from '@/lib/shopify/upsert-daily-pnl';
 
 // ─── Helpers ───────────────────────────────────────────────────
 
@@ -259,9 +260,7 @@ export async function runTripleWhaleBrandSync(
     const allRows = [...rows, ...spendOnlyRows];
 
     if (allRows.length > 0) {
-      const { error: upsertError } = await supabase
-        .from('daily_pnl')
-        .upsert(allRows, { onConflict: 'brand_id,date' });
+      const { error: upsertError } = await upsertDailyPnl(supabase, allRows);
 
       if (upsertError) {
         console.error('Upsert error:', upsertError);

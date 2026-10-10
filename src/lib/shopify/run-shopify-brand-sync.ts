@@ -13,6 +13,13 @@ import {
   toReportingCurrency,
 } from '@/lib/currency';
 import { fetchGoogleAdsCurrency } from '@/lib/pipeboard-google';
+import { fetchDailyAdSpend } from '@/lib/shopify/fetch-ad-spend';
+import { collectPagedOrders, ordersFromPayload, type OrdersPageResult } from '@/lib/shopify/orders-pages';
+import { buildFullCoveredDayRows, buildSpendOnlyCoveredDayRows } from '@/lib/shopify/pnl-covered-days';
+import { aggregateOrdersByDay, type PnlShopifyOrder } from '@/lib/shopify/pnl-days';
+import { resolveShopIanaTimeZone } from '@/lib/shopify/shop-timezone';
+import { addCalendarDays, fullyCoveredShopDays, ymdInTimeZone, zonedMidnight } from '@/lib/shopify/shop-time';
+import { upsertDailyPnl } from '@/lib/shopify/upsert-daily-pnl';
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -66,38 +73,9 @@ interface ShopifyRefund {
   }[];
 }
 
-interface DayBucket {
-  nc_orders: number;
-  nc_revenue: number;
-  rc_orders: number;
-  rc_revenue: number;
-  gross_sales: number;
-  discounts: number;
-  refunds: number;
-  taxes: number;
-  shipping: number;
-}
-
-
-async function upsertDailyPnl(
-  supabase: any,
-  rows: any[]
-): Promise<{ error: any }> {
-  if (!rows.length) return { error: null };
-  const first = await supabase.from('daily_pnl').upsert(rows, { onConflict: 'brand_id,date' });
-  if (!first.error) return first;
-  const msg = String(first.error.message || '');
-  // If currency column missing (migration not applied), retry without it.
-  if (/currency/i.test(msg) && (msg.includes('column') || msg.includes('schema'))) {
-    const stripped = rows.map(({ currency: _c, ...rest }) => rest);
-    return await supabase.from('daily_pnl').upsert(stripped, { onConflict: 'brand_id,date' });
-  }
-  return first;
-}
-
 // ─── Reporting currency + spend FX ──────────────────────────────
 
-function convertSpendMap(
+export function convertSpendMap(
   daily: Map<string, number>,
   native: string,
   reporting: string,
@@ -113,7 +91,7 @@ function convertSpendMap(
   return out;
 }
 
-async function fetchMetaAccountCurrency(
+export async function fetchMetaAccountCurrency(
   adAccountId: string | null | undefined,
   metaToken: string
 ): Promise<string | null> {
@@ -130,7 +108,7 @@ async function fetchMetaAccountCurrency(
   }
 }
 
-async function fetchGoogleAccountCurrency(
+export async function fetchGoogleAccountCurrency(
   customerId: string | null | undefined,
   pipeboardToken: string
 ): Promise<string | null> {
@@ -240,9 +218,6 @@ async function fetchAllOrders(
   sinceDate: string,
   untilDate: string
 ): Promise<ShopifyOrder[]> {
-  const allOrders: ShopifyOrder[] = [];
-  let nextUrl: string | null = null;
-
   // First request
   const params: Record<string, string> = {
     status: 'any',
@@ -255,43 +230,35 @@ async function fetchAllOrders(
   };
 
   const first = await shopifyFetch(domain, token, 'orders', params);
-  const firstData = first.data as { orders: ShopifyOrder[] };
-  allOrders.push(...firstData.orders);
-  nextUrl = first.nextLink;
+  const firstOrders = ordersFromPayload(first.data) as ShopifyOrder[];
+  const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+  return collectPagedOrders(firstOrders, first.nextLink, (url) => readShopifyOrdersPage(url, token), sleep, 100);
+}
 
-  // Paginate
-  while (nextUrl) {
-    const res = await fetch(nextUrl, {
-      headers: {
-        'X-Shopify-Access-Token': token,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!res.ok) break;
-
-    const linkHeader = res.headers.get('Link') || '';
-    const nextMatch = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
-    nextUrl = nextMatch ? nextMatch[1] : null;
-
-    const data = (await res.json()) as { orders: ShopifyOrder[] };
-    allOrders.push(...data.orders);
-
-    // Shopify rate limit: 2 req/sec — short pause is enough
-    await new Promise((r) => setTimeout(r, 100));
-  }
-
-  return allOrders;
+async function readShopifyOrdersPage(url: string, token: string): Promise<OrdersPageResult> {
+  const res = await fetch(url, {
+    headers: {
+      'X-Shopify-Access-Token': token,
+      'Content-Type': 'application/json',
+    },
+  });
+  return {
+    ok: res.ok,
+    status: res.status,
+    retryAfter: res.headers.get('Retry-After'),
+    link: res.headers.get('Link'),
+    body: res.ok ? await res.json() : null,
+  };
 }
 
 // ─── Enrich orders with reliable lifetime order counts ─────────
 // The embedded `customer.orders_count` on the orders endpoint is unreliable
 // (often missing/zero). Fetch each unique customer directly to get the
 // authoritative lifetime count, then stamp it on every order in this window.
-async function enrichCustomerOrderCounts(
+export async function enrichCustomerOrderCounts(
   domain: string,
   token: string,
-  orders: ShopifyOrder[]
+  orders: Array<PnlShopifyOrder & { customer: { id: number; orders_count?: number } | null }>
 ): Promise<void> {
   const uniqueCustomerIds = new Set<number>();
   for (const o of orders) {
@@ -349,129 +316,9 @@ async function enrichCustomerOrderCounts(
 
   for (const o of orders) {
     if (o.customer?.id && counts.has(o.customer.id)) {
-      (o as ShopifyOrder & { lifetimeOrdersCount?: number }).lifetimeOrdersCount =
-        counts.get(o.customer.id);
+      o.lifetimeOrdersCount = counts.get(o.customer.id);
     }
   }
-}
-
-// ─── Aggregation ────────────────────────────────────────────────
-
-function aggregateOrdersByDay(orders: ShopifyOrder[]): Map<string, DayBucket> {
-  const buckets = new Map<string, DayBucket>();
-
-  const getOrCreate = (dateStr: string): DayBucket => {
-    if (!buckets.has(dateStr)) {
-      buckets.set(dateStr, {
-        nc_orders: 0,
-        nc_revenue: 0,
-        rc_orders: 0,
-        rc_revenue: 0,
-        gross_sales: 0,
-        discounts: 0,
-        refunds: 0,
-        taxes: 0,
-        shipping: 0,
-      });
-    }
-    return buckets.get(dateStr)!;
-  };
-
-  // ── NC/RC classification ──
-  // An order is "new customer" iff it is that customer's FIRST order ever.
-  // Previous logic marked the earliest order *within the sync window* as NC,
-  // which mis-classified returning customers whose prior orders fell outside
-  // the window. We now compare window-order-count vs customer.orders_count
-  // (Shopify's lifetime count snapshot). If lifetime > window count, the
-  // customer already had prior orders → ALL their window orders are RC.
-  const customerOrders = new Map<number, ShopifyOrder[]>();
-  const guestOrders: ShopifyOrder[] = [];
-
-  for (const order of orders) {
-    if (order.financial_status === 'voided') continue;
-    if (!order.customer) {
-      guestOrders.push(order); // No customer → treat as NC
-    } else {
-      const custId = order.customer.id;
-      if (!customerOrders.has(custId)) customerOrders.set(custId, []);
-      customerOrders.get(custId)!.push(order);
-    }
-  }
-
-  // Build set of first-order IDs per customer. We rely on lifetimeOrdersCount
-  // which is populated by the caller (fetched via /customers/{id}.json — the
-  // embedded customer object on orders is unreliable for orders_count).
-  const firstOrderIds = new Set<number>();
-  for (const [, custOrds] of customerOrders) {
-    custOrds.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-    const enriched = custOrds[0] as ShopifyOrder & { lifetimeOrdersCount?: number };
-    const lifetimeCount = enriched.lifetimeOrdersCount ?? 0;
-    if (lifetimeCount > 0) {
-      // Enrichment succeeded — use reliable lifetime count
-      if (lifetimeCount <= custOrds.length) {
-        firstOrderIds.add(custOrds[0].id);
-      }
-    } else {
-      // Enrichment failed (lifetimeCount=0) — fall back to embedded orders_count
-      const embeddedCount = custOrds[0].customer?.orders_count ?? 0;
-      if (embeddedCount <= 1 || embeddedCount <= custOrds.length) {
-        firstOrderIds.add(custOrds[0].id);
-      }
-    }
-  }
-
-  // Process all non-voided orders
-  const allOrders = [...guestOrders];
-  for (const [, custOrds] of customerOrders) allOrders.push(...custOrds);
-
-  for (const order of allOrders) {
-    const dateStr = order.created_at.split('T')[0];
-    const bucket = getOrCreate(dateStr);
-
-    const subtotal = parseFloat(order.subtotal_price);
-    const totalDiscounts = parseFloat(order.total_discounts);
-    const grossSales = subtotal + totalDiscounts;
-    const discounts = -Math.abs(totalDiscounts);
-    const taxes = parseFloat(order.total_tax);
-    // Use post-discount shipping (what customer actually paid), not gross shipping price
-    const shipping = (order.shipping_lines || []).reduce((sum: number, line) => {
-      return sum + parseFloat(line.discounted_price_set?.shop_money?.amount || line.discounted_price || line.price || '0');
-    }, 0);
-
-    // NC = guest order OR first order for this customer
-    const isNewCustomer = !order.customer || firstOrderIds.has(order.id);
-
-    // Use grossSales (subtotal + discounts) for NC/RC revenue so the proportional
-    // split in calcFields reconciles with the grossSales total
-    if (isNewCustomer) {
-      bucket.nc_orders += 1;
-      bucket.nc_revenue += grossSales;
-    } else {
-      bucket.rc_orders += 1;
-      bucket.rc_revenue += grossSales;
-    }
-
-    bucket.gross_sales += grossSales;
-    bucket.discounts += discounts;
-    bucket.taxes += taxes;
-    bucket.shipping += shipping;
-
-    // Process refunds — attribute to the day the refund was created
-    for (const refund of order.refunds || []) {
-      const refundDate = refund.created_at.split('T')[0];
-      const refundBucket = getOrCreate(refundDate);
-
-      let refundAmount = 0;
-      for (const txn of refund.transactions || []) {
-        if (txn.kind === 'refund') {
-          refundAmount += parseFloat(txn.amount);
-        }
-      }
-      refundBucket.refunds -= Math.abs(refundAmount);
-    }
-  }
-
-  return buckets;
 }
 
 // ─── Shared Daily P&L sync (manual route and cron) ─────────────
@@ -564,103 +411,42 @@ export async function runShopifyBrandSync(
     );
   }
 
-  // Default date range: last 30 days (covers MTD always)
+  // Default date range: last 60 shop-local days, from local midnight.
   const now = new Date();
-  const defaultSince = new Date(now);
-  defaultSince.setDate(defaultSince.getDate() - 60);
-
-  const sinceDate = since_date || defaultSince.toISOString();
-  const untilDate = until_date || now.toISOString();
+  let sinceDate = since_date || '';
+  let untilDate = until_date || '';
+  let timeZone = 'UTC';
 
   try {
     let ordersProcessed = 0;
     let daysSynced = 0;
     let productsSynced = 0;
-
-    // ── Ad spend fetch functions (shared by full-sync and spend-only paths) ──
     const adSpendErrors: string[] = [];
     let googleDaysSynced = 0;
     let metaDaysSynced = 0;
 
-    const fetchGoogle = async (): Promise<Map<string, number>> => {
-      const dailyGoogle = new Map<string, number>();
-      if (!brand.google_ads_customer_id || !brand.google_ads_customer_id.trim()) return dailyGoogle;
-      let pipeboardToken = process.env.PIPEBOARD_API_TOKEN || '';
-      if (!pipeboardToken) {
-        const { data: settings } = await supabase
-          .from('app_settings')
-          .select('value')
-          .eq('key', 'pipeboard_api_token')
-          .single();
-        pipeboardToken = settings?.value || '';
-      }
-      if (!pipeboardToken) return dailyGoogle;
-      try {
-        const custId = brand.google_ads_customer_id.replace(/\D/g, '');
-        const from = sinceDate.split('T')[0];
-        const to = untilDate.split('T')[0];
-        const query = `SELECT segments.date, metrics.cost_micros FROM campaign WHERE segments.date BETWEEN "${from}" AND "${to}" ORDER BY segments.date`;
-        const res = await fetch(`https://google-ads.mcp.pipeboard.co/?token=${encodeURIComponent(pipeboardToken)}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: 1,
-            method: 'tools/call',
-            params: { name: 'execute_google_ads_gaql_query', arguments: { customer_id: custId, query } },
-          }),
-        });
-        if (!res.ok) return dailyGoogle;
-        const j = await res.json();
-        const text = j?.result?.content?.[0]?.text;
-        if (!text) return dailyGoogle;
-        const parsed = JSON.parse(text);
-        const results = Array.isArray(parsed) ? parsed : parsed?.results || [];
-        for (const r of results) {
-          const date = r?.segments?.date;
-          const costMicros = Number(r?.metrics?.costMicros || 0);
-          if (date && costMicros > 0) {
-            const spend = costMicros / 1_000_000;
-            dailyGoogle.set(date, (dailyGoogle.get(date) || 0) + spend);
-          }
-        }
-      } catch (e: any) {
-        adSpendErrors.push(`Google: ${e.message}`);
-      }
-      return dailyGoogle;
-    };
-
-    const fetchMeta = async (): Promise<Map<string, number>> => {
-      const dailyMeta = new Map<string, number>();
-      if (!brand.meta_ad_account_id || !brand.meta_ad_account_id.trim()) return dailyMeta;
-      const metaToken = process.env.META_ACCESS_TOKEN || '';
-      if (!metaToken) return dailyMeta;
-      try {
-        const metaUrl = `https://graph.facebook.com/v21.0/${brand.meta_ad_account_id}/insights?` +
-          `time_range=${encodeURIComponent(JSON.stringify({ since: sinceDate.split('T')[0], until: untilDate.split('T')[0] }))}` +
-          `&time_increment=1&fields=spend&limit=500&access_token=${metaToken}`;
-        const mRes = await fetch(metaUrl);
-        const mData = await mRes.json();
-        if (mData.data && mData.data.length > 0) {
-          for (const r of mData.data) {
-            dailyMeta.set(r.date_start, parseFloat(r.spend || '0'));
-          }
-        }
-      } catch (e: any) {
-        adSpendErrors.push(`Meta: ${e.message}`);
-      }
-      return dailyMeta;
-    };
+    let shopifyToken = oauthAccessToken;
+    if (!spendOnly && !shopifyToken) {
+      shopifyToken = await getShopifyToken(
+        brand.shopify_store_domain,
+        brand.shopify_client_id!,
+        brand.shopify_client_secret!
+      );
+    }
+    const zone = await resolveShopIanaTimeZone(supabase, brand, shopifyToken);
+    timeZone = zone.timeZone;
+    if (!sinceDate) {
+      const today = ymdInTimeZone(now, timeZone);
+      sinceDate = zonedMidnight(addCalendarDays(today, -60), timeZone).toISOString();
+    }
+    if (!untilDate) untilDate = now.toISOString();
+    const spendFrom = ymdInTimeZone(new Date(sinceDate), timeZone);
+    const spendTo = ymdInTimeZone(new Date(untilDate), timeZone);
+    const coveredDays = fullyCoveredShopDays(sinceDate, untilDate, timeZone);
 
     // ── Shopify order sync (skip if spend-only mode) ──
     if (!spendOnly) {
-    const shopifyToken = oauthAccessToken
-      ? oauthAccessToken
-      : await getShopifyToken(
-          brand.shopify_store_domain,
-          brand.shopify_client_id!,
-          brand.shopify_client_secret!
-        );
+    if (!shopifyToken) throw new Error('Shopify access token missing');
 
     const orders = await fetchAllOrders(
       brand.shopify_store_domain,
@@ -675,10 +461,13 @@ export async function runShopifyBrandSync(
       console.error('Customer enrichment failed (non-fatal):', e);
     }
 
-    const dayBuckets = aggregateOrdersByDay(orders);
+    const dayBuckets = aggregateOrdersByDay(orders, timeZone);
 
-    // Fetch ad spend in parallel with order processing
-    const [dailyGoogleNative, dailyMetaNative] = await Promise.all([fetchGoogle(), fetchMeta()]);
+    // Fetch ad spend for the shop-local dates the window touches.
+    const nativeSpend = await fetchDailyAdSpend(supabase, brand, spendFrom, spendTo);
+    adSpendErrors.push(...nativeSpend.errors);
+    const dailyGoogleNative = nativeSpend.google;
+    const dailyMetaNative = nativeSpend.meta;
 
     // Resolve reporting currency (Shopify settlement) + convert Meta/Google spend into it.
     const metaTokenForFx = process.env.META_ACCESS_TOKEN || '';
@@ -716,29 +505,21 @@ export async function runShopifyBrandSync(
       fxRates
     );
 
-    // Build order rows WITH spend data merged in
-    const rows = Array.from(dayBuckets.entries()).map(([date, bucket]) => ({
-      brand_id: brand.id,
-      date,
-      nc_orders: bucket.nc_orders,
-      nc_revenue: Math.round(bucket.nc_revenue * 100) / 100,
-      rc_orders: bucket.rc_orders,
-      rc_revenue: Math.round(bucket.rc_revenue * 100) / 100,
-      gross_sales: Math.round(bucket.gross_sales * 100) / 100,
-      discounts: Math.round(bucket.discounts * 100) / 100,
-      refunds: Math.round(bucket.refunds * 100) / 100,
-      taxes: Math.round(bucket.taxes * 100) / 100,
-      shipping: Math.round(bucket.shipping * 100) / 100,
+    // One row per fully covered shop-local day, including days with zero
+    // orders. A successful spend fetch writes 0 for days it omitted. A failed
+    // fetch omits that column. Partial edge days are not in coveredDays.
+    const rows = buildFullCoveredDayRows({
+      brandId: brand.id,
       currency: reporting.code,
-      synced_at: new Date().toISOString(),
-      // Merge spend data if we have it for this date — omit if not available
-      // so Supabase won't overwrite existing spend values
-      ...(dailyMeta.has(date) ? { meta_spend: Math.round(dailyMeta.get(date)! * 100) / 100 } : {}),
-      ...(dailyGoogle.has(date) ? { google_spend: Math.round(dailyGoogle.get(date)! * 100) / 100 } : {}),
-    }));
+      syncedAt: new Date().toISOString(),
+      coveredDays,
+      buckets: dayBuckets,
+      meta: { ok: nativeSpend.metaOk, byDay: dailyMeta },
+      google: { ok: nativeSpend.googleOk, byDay: dailyGoogle },
+    });
 
-    googleDaysSynced = dailyGoogle.size;
-    metaDaysSynced = dailyMeta.size;
+    googleDaysSynced = rows.filter((row) => row.google_spend != null).length;
+    metaDaysSynced = rows.filter((row) => row.meta_spend != null).length;
 
     if (rows.length > 0) {
       const { error: upsertError } = await upsertDailyPnl(supabase, rows);
@@ -746,30 +527,6 @@ export async function runShopifyBrandSync(
       if (upsertError) {
         console.error('Upsert error:', upsertError);
         return NextResponse.json({ error: 'Failed to save data', details: upsertError.message }, { status: 500 });
-      }
-    }
-
-    // Upsert any spend-only dates (dates with ad spend but no orders)
-    const orderDates = new Set(dayBuckets.keys());
-    const spendOnlyRows: any[] = [];
-    const allSpendDates = new Set([...dailyGoogle.keys(), ...dailyMeta.keys()]);
-
-    for (const date of allSpendDates) {
-      if (!orderDates.has(date)) {
-        spendOnlyRows.push({
-          brand_id: brand.id,
-          date,
-          currency: reporting.code,
-          ...(dailyMeta.has(date) ? { meta_spend: Math.round(dailyMeta.get(date)! * 100) / 100 } : {}),
-          ...(dailyGoogle.has(date) ? { google_spend: Math.round(dailyGoogle.get(date)! * 100) / 100 } : {}),
-        });
-      }
-    }
-
-    if (spendOnlyRows.length > 0) {
-      const { error: spendOnlyErr } = await upsertDailyPnl(supabase, spendOnlyRows);
-      if (spendOnlyErr) {
-        adSpendErrors.push(`Spend-only upsert: ${spendOnlyErr.message}`);
       }
     }
 
@@ -888,7 +645,10 @@ export async function runShopifyBrandSync(
 
     } else {
       // ── Spend-only mode: fetch and upsert ad spend without touching order columns ──
-      const [dailyGoogleNative, dailyMetaNative] = await Promise.all([fetchGoogle(), fetchMeta()]);
+      const nativeSpend = await fetchDailyAdSpend(supabase, brand, spendFrom, spendTo);
+      adSpendErrors.push(...nativeSpend.errors);
+      const dailyGoogleNative = nativeSpend.google;
+      const dailyMetaNative = nativeSpend.meta;
 
       const metaTokenForFx = process.env.META_ACCESS_TOKEN || '';
       let pipeboardTokenForFx = process.env.PIPEBOARD_API_TOKEN || '';
@@ -925,29 +685,22 @@ export async function runShopifyBrandSync(
         fxRates
       );
 
-      const adSpendByDate = new Map<string, { google_spend?: number; meta_spend?: number }>();
-      for (const [date, spend] of dailyGoogle) {
-        adSpendByDate.set(date, { google_spend: Math.round(spend * 100) / 100 });
-      }
-      for (const [date, spend] of dailyMeta) {
-        const existing = adSpendByDate.get(date) || {};
-        existing.meta_spend = Math.round(spend * 100) / 100;
-        adSpendByDate.set(date, existing);
-      }
+      const adRows = buildSpendOnlyCoveredDayRows({
+        brandId: brand.id,
+        currency: reporting.code,
+        syncedAt: new Date().toISOString(),
+        coveredDays,
+        meta: { ok: nativeSpend.metaOk, byDay: dailyMeta },
+        google: { ok: nativeSpend.googleOk, byDay: dailyGoogle },
+      });
 
-      if (adSpendByDate.size > 0) {
-        const adRows = Array.from(adSpendByDate.entries()).map(([date, vals]) => ({
-          brand_id: brand.id,
-          date,
-          currency: reporting.code,
-          ...vals,
-        }));
+      if (adRows.length > 0) {
         const { error: adErr } = await upsertDailyPnl(supabase, adRows);
         if (adErr) {
           adSpendErrors.push(`Ad spend upsert: ${adErr.message}`);
         } else {
-          googleDaysSynced = dailyGoogle.size;
-          metaDaysSynced = dailyMeta.size;
+          googleDaysSynced = adRows.filter((row) => row.google_spend != null).length;
+          metaDaysSynced = adRows.filter((row) => row.meta_spend != null).length;
         }
       }
     }
@@ -965,7 +718,7 @@ export async function runShopifyBrandSync(
       google_spend_days: googleDaysSynced,
       meta_spend_days: metaDaysSynced,
       ad_spend_errors: adSpendErrors.length > 0 ? adSpendErrors : undefined,
-      date_range: { from: sinceDate.split('T')[0], to: untilDate.split('T')[0] },
+      date_range: { from: spendFrom, to: spendTo, timezone: timeZone },
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -984,8 +737,8 @@ export async function runShopifyBrandSync(
             source: 'shopify',
             errorMessage: message,
             context: {
-              'Since Date': sinceDate.split('T')[0],
-              'Until Date': untilDate.split('T')[0],
+              'Since Date': sinceDate ? ymdInTimeZone(new Date(sinceDate), timeZone) : '',
+              'Until Date': untilDate ? ymdInTimeZone(new Date(untilDate), timeZone) : '',
             },
           },
         },

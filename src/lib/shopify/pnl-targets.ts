@@ -1,3 +1,5 @@
+import { addCalendarDays, usableTimeZone, ymdInTimeZone, zonedMidnight } from './shop-time.ts';
+
 export type PnlPath = 'shopify' | 'triple_whale' | 'skip';
 
 export type PnlBrand = {
@@ -20,6 +22,20 @@ export function pnlPathForBrand(brand: PnlBrand): PnlPath {
   if (!domain) return 'skip';
   if (brand.hasClientCredentials || brand.hasLiveAdminToken) return 'shopify';
   return 'triple_whale';
+}
+
+export type PnlIntegritySkipReason = 'triple_whale' | 'no_shop' | 'archived';
+
+/**
+ * Shopify Admin brands are compared to shopify_orders. Triple Whale-only
+ * brands (Organic Jaguar) are a different order source and must not be flagged.
+ */
+export function pnlIntegritySkipReason(brand: PnlBrand): PnlIntegritySkipReason | null {
+  const path = pnlPathForBrand(brand);
+  if (path === 'shopify') return null;
+  if (path === 'triple_whale') return 'triple_whale';
+  if (brand.archived_at) return 'archived';
+  return 'no_shop';
 }
 
 export function selectPnlRefreshBrands(brands: PnlBrand[]): {
@@ -58,73 +74,62 @@ export const PNL_CAP_DAYS = 45;
  */
 export const PNL_CHUNK_DAYS = 10;
 
-function utcDay(now: Date): Date {
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-}
-
-function addUtcDays(day: Date, days: number): Date {
-  const next = new Date(day);
-  next.setUTCDate(next.getUTCDate() + days);
-  return next;
-}
-
-function formatUtcDay(day: Date): string {
-  return day.toISOString().slice(0, 10);
-}
-
-function parseUtcDay(value: string | null | undefined): Date | null {
+function parseDay(value: string | null | undefined): string | null {
   if (!value) return null;
-  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
-  if (!match) return null;
-  const parsed = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(value);
+  return match ? match[1] : null;
 }
 
-/** Last 3 UTC calendar days plus today, so late edits and refunds settle. */
-export function pnlRefreshWindow(now: Date): PnlRefreshWindow {
-  return pnlCatchUpWindow(now, formatUtcDay(utcDay(now)));
+/** Last 3 shop-local calendar days plus today, so late edits and refunds settle. */
+export function pnlRefreshWindow(now: Date, timeZone: string = 'UTC'): PnlRefreshWindow {
+  return pnlCatchUpWindow(now, ymdInTimeZone(now, timeZone), null, timeZone);
 }
 
 /**
- * Per-brand Daily P&L window.
- * Starts at the earlier of (today minus 3) and (newest daily_pnl date minus 1),
- * and never earlier than today minus 45. A resume date, saved when a previous
- * run stopped mid-catch-up, continues from there instead of repeating the
- * oldest days. At most PNL_CHUNK_DAYS are included; the rest waits for the
- * next run. No stored rows backfills from the 45-day cap.
+ * Per-brand Daily P&L window, in the shop's IANA timezone (UTC when unknown).
+ * Starts at local midnight of the earlier of (today minus 3) and (newest
+ * daily_pnl date minus 1), and never earlier than today minus 45. A resume
+ * date, saved when a previous run stopped mid-catch-up, continues from there
+ * instead of repeating the oldest days. At most PNL_CHUNK_DAYS are included;
+ * the rest waits for the next run. No stored rows backfills from the 45-day cap.
+ * sinceDate is that local midnight. A chunked untilDate is the last millisecond
+ * of endDate in the shop zone, so the end day is complete. An open window runs
+ * through now; the in-progress local day is not a full day.
  */
 export function pnlCatchUpWindow(
   now: Date,
   newestDate: string | null,
-  resumeDate?: string | null
+  resumeDate?: string | null,
+  timeZone: string = 'UTC'
 ): PnlRefreshWindow {
-  const today = utcDay(now);
-  const recentStart = addUtcDays(today, -PNL_RECENT_DAYS);
-  const capStart = addUtcDays(today, -PNL_CAP_DAYS);
-  const newest = parseUtcDay(newestDate);
+  const zone = usableTimeZone(timeZone);
+  const today = ymdInTimeZone(now, zone);
+  const recentStart = addCalendarDays(today, -PNL_RECENT_DAYS);
+  const capStart = addCalendarDays(today, -PNL_CAP_DAYS);
+  const newest = parseDay(newestDate);
 
   let start = recentStart;
   if (newest) {
-    const fromNewest = addUtcDays(newest, -1);
+    const fromNewest = addCalendarDays(newest, -1);
     if (fromNewest < recentStart) start = fromNewest;
   } else if (newestDate === null) {
     start = capStart;
   }
   if (start < capStart) start = capStart;
 
-  const resume = parseUtcDay(resumeDate);
+  const resume = parseDay(resumeDate);
   if (resume && resume > start && resume <= today) start = resume;
 
-  const chunkEnd = addUtcDays(start, PNL_CHUNK_DAYS - 1);
+  const chunkEnd = addCalendarDays(start, PNL_CHUNK_DAYS - 1);
   const end = chunkEnd < today ? chunkEnd : today;
   const chunked = end < today;
-  const startDate = formatUtcDay(start);
-  const endDate = formatUtcDay(end);
+  const since = zonedMidnight(start, zone);
+  const until = chunked ? new Date(zonedMidnight(addCalendarDays(end, 1), zone).getTime() - 1) : now;
   return {
-    startDate,
-    endDate,
-    sinceDate: `${startDate}T00:00:00.000Z`,
-    untilDate: chunked ? `${endDate}T23:59:59.999Z` : now.toISOString(),
+    startDate: start,
+    endDate: end,
+    sinceDate: since.toISOString(),
+    untilDate: until.toISOString(),
     chunked,
   };
 }

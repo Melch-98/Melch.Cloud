@@ -89,7 +89,7 @@ export interface GoogleCampaign {
   [key: string]: any;
 }
 
-// Campaign list + status (for changelog diffing).
+// Campaign list + status.
 export async function getCampaigns(token: string, customerId: string): Promise<GoogleCampaign[]> {
   const data = await rpc(token, 'get_google_ads_campaigns', {
     customer_id: normalizeCustomerId(customerId),
@@ -100,6 +100,8 @@ export async function getCampaigns(token: string, customerId: string): Promise<G
 }
 
 // Arbitrary GAQL query (daily spend per date, etc.).
+// An error string from Pipeboard becomes an empty list so existing callers
+// keep their current fallback. Activity sync uses gaqlQueryStrict instead.
 export async function gaqlQuery(token: string, customerId: string, query: string): Promise<any[]> {
   const data = await rpc(token, 'execute_google_ads_gaql_query', {
     customer_id: normalizeCustomerId(customerId),
@@ -108,6 +110,23 @@ export async function gaqlQuery(token: string, customerId: string, query: string
   if (Array.isArray(data)) return data;
   if (Array.isArray(data?.results)) return data.results;
   return [];
+}
+
+export function gaqlResultRows(data: unknown): any[] {
+  if (Array.isArray(data)) return data;
+  if (data && typeof data === 'object' && Array.isArray((data as { results?: unknown }).results)) {
+    return (data as { results: any[] }).results;
+  }
+  const text = typeof data === 'string' ? data : JSON.stringify(data ?? '');
+  throw new Error(`Pipeboard GAQL: ${text.slice(0, 300)}`);
+}
+
+export async function gaqlQueryStrict(token: string, customerId: string, query: string): Promise<any[]> {
+  const data = await rpc(token, 'execute_google_ads_gaql_query', {
+    customer_id: normalizeCustomerId(customerId),
+    query,
+  });
+  return gaqlResultRows(data);
 }
 
 
