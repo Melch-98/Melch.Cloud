@@ -6,9 +6,9 @@ import {
   checkSaveUrlJob,
   getDropboxFolderLink,
   sanitizeDropboxPathSegment,
+  fileAwaitingDropboxCopy,
   DropboxNotConnectedError,
 } from '@/lib/dropbox';
-import { fileAwaitingDropboxCopy, tagPendingSubmissionFiles, tagSyncBudgetMs } from '@/lib/creative-tag-sync';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -147,15 +147,7 @@ async function syncOneBatch(
   submissionId: string,
   deadlineMs: number
 ): Promise<{ status: string; uploaded: number; skipped: number; total: number; error?: string }> {
-  try {
-    await tagPendingSubmissionFiles(supabase, submissionId, {
-      budgetMs: tagSyncBudgetMs(deadlineMs),
-    });
-  } catch (err) {
-    console.warn('Auto-tag before Dropbox sync failed:', err instanceof Error ? err.message : err);
-  }
-
-  // Load full submission data (after any rename, so Dropbox uses file_name)
+  // Dropbox uses the uploaded file_name.
   const { data: submission, error: subError } = await supabase
     .from('submissions')
     .select(
@@ -184,7 +176,6 @@ async function syncOneBatch(
   const batchPath = `${brandPath}/${batchSegment}`;
 
   const allFiles: any[] = sub.submission_files || [];
-  // tag_source does not gate the copy. tagging and failed rows sync as file_name.
   const pendingFiles = allFiles.filter((f: any) => fileAwaitingDropboxCopy(f) && !f.dropbox_job_id);
   const inProgressFiles = allFiles.filter((f: any) => fileAwaitingDropboxCopy(f) && f.dropbox_job_id);
 

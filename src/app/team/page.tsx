@@ -69,7 +69,6 @@ interface Brand {
   shipping_cost_per_order: number | null;
   creative_cost_static: number | null;
   creative_cost_video: number | null;
-  file_naming_pattern: string | null;
 }
 
 /* ─── Small Components ───────────────────────────────────────── */
@@ -390,7 +389,6 @@ function TeamCard({
   const [returnsPct, setReturnsPct] = useState(String(brand.returns_rate_pct ?? '0'));
   const [creativeCostStatic, setCreativeCostStatic] = useState(String(brand.creative_cost_static ?? '50'));
   const [creativeCostVideo, setCreativeCostVideo] = useState(String(brand.creative_cost_video ?? '150'));
-  const [namingPattern, setNamingPattern] = useState(brand.file_naming_pattern || '');
   // Trybe integration
   const [trybeKey, setTrybeKey] = useState('');
   const [trybeBrandId, setTrybeBrandId] = useState('');
@@ -731,37 +729,6 @@ function TeamCard({
                 </button>
               </div>
             </div>
-          </div>
-
-          <div>
-            <label className="text-[10px] text-gray-500 font-medium block mb-1.5 uppercase tracking-wider">
-              File naming pattern
-            </label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={namingPattern}
-                onChange={(e) => setNamingPattern(e.target.value)}
-                placeholder="{Brand}_{Product}_{HookSlug}_{Type}_{CreatorOrUGC}_{AspectOrLength}"
-                className="flex-1 px-3 py-1.5 rounded-lg text-xs outline-none"
-                style={{
-                  backgroundColor: 'rgba(255,255,255,0.04)',
-                  border: '1px solid rgba(255,255,255,0.08)',
-                  color: '#F5F5F8',
-                }}
-              />
-              <button
-                onClick={() => onUpdateBrand(brand.id, 'file_naming_pattern', namingPattern.trim())}
-                className="px-2 py-1 rounded-lg"
-                style={{ backgroundColor: 'rgba(200,184,154,0.15)', color: '#C8B89A' }}
-              >
-                <Check size={12} />
-              </button>
-            </div>
-            <p className="text-[10px] text-gray-600 mt-1">
-              Leave blank for the default. Missing pieces are skipped, so a file with no creator
-              simply leaves that piece out. Example: Brand_Serum_TiredSkin_GRWM_9x16.jpg
-            </p>
           </div>
 
           {/* Shopify section */}
@@ -1715,7 +1682,7 @@ export default function TeamPage() {
       // Fetch brands
       const { data: allBrands } = await supabase
         .from('brands')
-        .select('id, name, slug, website_url, meta_ad_account_id, google_ads_customer_id, shopify_store_domain, shopify_client_id, shopify_client_secret, gross_margin_pct, target_roas, roas_floor, nc_share_pct, ltv_3m_mult, ltv_6m_mult, ltv_12m_mult, payment_processing_pct, returns_rate_pct, shipping_cost_per_order, creative_cost_static, creative_cost_video, file_naming_pattern')
+        .select('id, name, slug, website_url, meta_ad_account_id, google_ads_customer_id, shopify_store_domain, shopify_client_id, shopify_client_secret, gross_margin_pct, target_roas, roas_floor, nc_share_pct, ltv_3m_mult, ltv_6m_mult, ltv_12m_mult, payment_processing_pct, returns_rate_pct, shipping_cost_per_order, creative_cost_static, creative_cost_video')
         .is('archived_at', null)
         .order('name');
       setBrands(allBrands || []);

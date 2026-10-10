@@ -16,9 +16,6 @@ export default function UploadPage() {
     id: string;
     name: string;
     slug: string;
-    website_url?: string | null;
-    shopify_store_domain?: string | null;
-    file_naming_pattern?: string | null;
   }>>([]);
   const [userBrandId, setUserBrandId] = useState<string | undefined>();
 
@@ -56,12 +53,10 @@ export default function UploadPage() {
         }
       }
 
-      // Fetch brands. The naming-pattern column is optional until the migration is applied.
-      const brandSelect = 'id, name, slug, website_url, shopify_store_domain, file_naming_pattern';
-      const full = await supabase.from('brands').select(brandSelect).is('archived_at', null);
-      const brandsData = full.error
-        ? (await supabase.from('brands').select('id, name, slug, website_url, shopify_store_domain').is('archived_at', null)).data
-        : full.data;
+      const { data: brandsData } = await supabase
+        .from('brands')
+        .select('id, name, slug')
+        .is('archived_at', null);
       setBrands(brandsData || []);
       setUserBrandId(profile?.brand_id || undefined);
       setLoading(false);
@@ -104,7 +99,7 @@ export default function UploadPage() {
         <div className="mb-6">
           <h1 className="text-2xl font-bold text-[#F5F5F8] tracking-tight">Upload Creatives</h1>
           <p className="text-sm text-[#ABABAB] mt-2">
-            Queue up batches of ad creatives with context for your media buyer.
+            Drop in files. A note or creator is optional.
           </p>
         </div>
         <SubmissionForm brands={brands} selectedBrandId={userBrandId} />

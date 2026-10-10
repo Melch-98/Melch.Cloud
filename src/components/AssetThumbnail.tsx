@@ -10,7 +10,7 @@ interface AssetThumbnailProps {
   mediaInfo?: FileMediaInfo;
   isSelected: boolean;
   isTagged: boolean;
-  /** Dropbox name. Shown on the tile; the uploaded name stays in the tooltip. */
+  /** Optional label. Defaults to the uploaded file name. */
   displayName?: string;
   dupeWarning?: string;
   onClick: (index: number, shiftKey: boolean) => void;
@@ -228,7 +228,7 @@ const AssetThumbnail: React.FC<AssetThumbnailProps> = ({
         />
       )}
 
-      {/* Filename strip — the name Dropbox will use */}
+      {/* Filename */}
       <div
         className="absolute bottom-0 left-0 right-0 px-2 py-1 text-[10px] text-white truncate"
         style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}

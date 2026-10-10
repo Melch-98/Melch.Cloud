@@ -67,6 +67,9 @@ CREATE TABLE submissions (
   drive_folder_id text,
   drive_synced_at timestamptz,
   drive_sync_error text,
+  usage_end_date date,
+  notion_page_id text,
+  notion_page_url text,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now(),
   CONSTRAINT not_both_carousel_and_flexible CHECK (NOT (is_carousel AND is_flexible))
@@ -145,7 +148,8 @@ SELECT
   sf.ad_name,
   sf.notes,
   sf.created_at AS submitted_at,
-  s.id AS submission_id
+  s.id AS submission_id,
+  s.usage_end_date
 FROM submission_files sf
 JOIN submissions s ON sf.submission_id = s.id
 JOIN brands b ON s.brand_id = b.id;

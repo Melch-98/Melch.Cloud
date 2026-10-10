@@ -317,3 +317,8 @@ export async function checkSaveUrlJob(
 export function sanitizeDropboxPathSegment(s: string): string {
   return s.replace(/[\\/:*?"<>|]+/g, '_').trim();
 }
+
+/** A file still needs a Dropbox copy when no path has been stored. */
+export function fileAwaitingDropboxCopy(file: { dropbox_path?: string | null }): boolean {
+  return file.dropbox_path == null || file.dropbox_path === '';
+}

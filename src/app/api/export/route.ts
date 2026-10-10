@@ -45,7 +45,7 @@ export async function GET(request: NextRequest) {
       'File Name', 'Batch', 'Brand', 'Creator', 'Type', 'Format', 'Aspect Ratio',
       'Status', 'Landing Page', 'Copy Headline', 'Copy Title',
       'Launch Date', 'Launch Time', 'Ad Name', 'Notes',
-      'Carousel', 'Flexible', 'Whitelist', 'Creator Handle', 'Submitted', 'Original File Name'
+      'Carousel', 'Flexible', 'Whitelist', 'Creator Handle', 'Usage End Date', 'Submitted'
     ];
 
     const rows = (files || []).map((f: any) => [
@@ -55,7 +55,8 @@ export async function GET(request: NextRequest) {
       f.launch_date || '', f.launch_time || '', f.ad_name || '', f.notes || '',
       f.is_carousel ? 'Yes' : 'No', f.is_flexible ? 'Yes' : 'No',
       f.is_whitelist ? 'Yes' : 'No', f.creator_social_handle || '',
-      f.submitted_at, f.original_file_name || ''
+      f.usage_end_date || '',
+      f.submitted_at
     ]);
 
     const csvContent = [

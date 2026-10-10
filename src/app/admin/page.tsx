@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
+import { localToday, usageEndDateError } from '@/lib/usage-end-date';
 
 interface BatchSubmission {
   id: string;
@@ -39,6 +40,9 @@ interface BatchSubmission {
   is_carousel: boolean;
   is_flexible: boolean;
   is_whitelist: boolean;
+  usage_end_date?: string | null;
+  notion_page_id?: string | null;
+  notion_page_url?: string | null;
   batch_status: 'new' | 'building' | 'ready' | 'launched';
   drive_folder_url?: string | null;
   drive_sync_status?: string | null;
@@ -53,7 +57,6 @@ interface BatchSubmission {
 interface BatchFile {
   id: string;
   file_name: string;
-  original_file_name?: string | null;
   file_url: string;
   media_format: string | null;
   aspect_ratio: string | null;
@@ -149,11 +152,59 @@ function BatchCard({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [usageEndDate, setUsageEndDate] = useState(batch.usage_end_date || '');
+  const [notionPageUrl, setNotionPageUrl] = useState(batch.notion_page_url || '');
+  const [notionPageId, setNotionPageId] = useState(batch.notion_page_id || '');
+  const [usageMessage, setUsageMessage] = useState('');
+  const [usageBusy, setUsageBusy] = useState(false);
+
+  const saveUsageDate = async (value: string) => {
+    const dateError = usageEndDateError(value, localToday());
+    if (dateError) {
+      setUsageMessage(dateError);
+      return;
+    }
+    setUsageBusy(true);
+    setUsageMessage('');
+    try {
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch('/api/submissions/usage-task', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({
+          submission_id: batch.id,
+          usage_end_date: value || null,
+        }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setUsageMessage(payload.error || 'Could not save the usage end date');
+        return;
+      }
+      if (payload.notion_page_url) setNotionPageUrl(payload.notion_page_url);
+      if (payload.notion_page_id) setNotionPageId(payload.notion_page_id);
+      if (payload.taskOk === false) setUsageMessage('Saved. The usage task will retry.');
+      else if (payload.action === 'missing_key') setUsageMessage('Saved. Notion is not configured yet.');
+      else if (payload.action === 'updated') setUsageMessage('Due date updated');
+      else if (payload.action === 'created') setUsageMessage('Usage task saved');
+      else setUsageMessage(value ? 'Saved' : '');
+    } catch {
+      setUsageMessage('Saved date could not reach the usage task');
+    } finally {
+      setUsageBusy(false);
+    }
+  };
+
   const config = statusConfig[batch.batch_status];
   const StatusIcon = config.icon;
 
   return (
     <div
+      id={`batch-${batch.id}`}
       className="rounded-xl overflow-hidden transition-all"
       style={{
         backgroundColor: 'rgba(255,255,255,0.03)',
@@ -210,6 +261,12 @@ function BatchCard({
                 <>
                   <span>·</span>
                   <span>{batch.creator_name}</span>
+                </>
+              )}
+              {usageEndDate && (
+                <>
+                  <span>·</span>
+                  <span>Usage ends {usageEndDate}</span>
                 </>
               )}
               <span>·</span>
@@ -402,6 +459,41 @@ function BatchCard({
                 <span className="text-gray-300">{batch.creator_social_handle}</span>
               </div>
             )}
+            {(batch.is_whitelist || batch.creator_name || batch.creator_social_handle || usageEndDate) && (
+              <div>
+                <span className="text-gray-500 block mb-0.5">Usage end date</span>
+                <input
+                  type="date"
+                  value={usageEndDate}
+                  min={localToday()}
+                  disabled={usageBusy}
+                  onChange={(e) => setUsageEndDate(e.target.value)}
+                  className="w-full bg-transparent text-gray-300 focus:outline-none"
+                  style={{ colorScheme: 'dark' }}
+                />
+                {usageEndDateError(usageEndDate, localToday()) && (
+                  <span className="text-red-400 block mt-0.5">{usageEndDateError(usageEndDate, localToday())}</span>
+                )}
+                <div className="flex items-center gap-2 mt-1">
+                  {notionPageUrl ? (
+                    <a href={notionPageUrl} target="_blank" rel="noopener noreferrer" className="text-amber-400 hover:underline">
+                      Usage task
+                    </a>
+                  ) : null}
+                  {usageEndDate && (
+                    <button
+                      type="button"
+                      disabled={usageBusy}
+                      onClick={() => void saveUsageDate(usageEndDate)}
+                      className="text-amber-400 hover:underline disabled:opacity-50"
+                    >
+                      {usageBusy ? 'Saving…' : notionPageId ? 'Update due date' : 'Retry usage task'}
+                    </button>
+                  )}
+                </div>
+                {usageMessage && <span className="text-gray-500 block mt-0.5">{usageMessage}</span>}
+              </div>
+            )}
           </div>
 
           {/* Files grid */}
@@ -472,19 +564,9 @@ function BatchCard({
                     </div>
                     {/* Info */}
                     <div className="p-1.5">
-                      <p
-                        className="text-[10px] text-gray-300 truncate"
-                        title={
-                          file.original_file_name && file.original_file_name !== file.file_name
-                            ? `Uploaded as ${file.original_file_name}`
-                            : file.file_name
-                        }
-                      >
+                      <p className="text-[10px] text-gray-300 truncate" title={file.file_name}>
                         {file.file_name}
                       </p>
-                      {file.original_file_name && file.original_file_name !== file.file_name && (
-                        <p className="text-[9px] text-gray-600 truncate">was {file.original_file_name}</p>
-                      )}
                       <div className="flex gap-1 mt-0.5">
                         {file.media_format && (
                           <span className="text-[9px] text-gray-500 uppercase">{file.media_format}</span>
@@ -710,7 +792,6 @@ export default function AdminPage() {
           submission_files (
             id,
             file_name,
-            original_file_name,
             file_url,
             media_format,
             aspect_ratio,
