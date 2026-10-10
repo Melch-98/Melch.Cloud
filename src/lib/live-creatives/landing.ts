@@ -52,7 +52,8 @@ const LANG = new Set([
 
 export function labelFromHandle(handle: string): string {
   const decoded = safeDecode(handle).replace(/[-_]+/g, ' ').trim();
-  return decoded || handle;
+  if (!decoded) return handle;
+  return decoded.replace(/\S+/g, (word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase());
 }
 
 export function hostnameOf(value: string | null | undefined): string | null {

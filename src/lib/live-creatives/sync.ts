@@ -12,6 +12,7 @@ export interface SyncBrandResult {
   ok: boolean;
   ads: number;
   rows: number;
+  duplicates: number;
   truncated: boolean;
   error?: string;
 }
@@ -195,6 +196,7 @@ export async function syncLiveCreatives(input: {
         ok: false,
         ads: 0,
         rows: 0,
+        duplicates: 0,
         truncated: false,
         error: message,
       });
@@ -225,6 +227,7 @@ async function syncBrand(input: {
     ok: true,
     ads: 0,
     rows: 0,
+    duplicates: 0,
     truncated: false,
   };
   const params = new URLSearchParams({
@@ -273,14 +276,25 @@ async function syncBrand(input: {
   const merged = drafts.map((row) => omitCronProtected(
     mergeCronRow(existing.get(`${row.ad_id}::${row.asset_key}`) || null, row, nowIso) as unknown as Record<string, unknown>,
   ));
+  const seen = new Set<string>();
+  const unique: Array<Record<string, unknown>> = [];
+  for (const row of merged) {
+    const key = `${row.ad_id}::${row.asset_key}`;
+    if (seen.has(key)) {
+      base.duplicates += 1;
+      continue;
+    }
+    seen.add(key);
+    unique.push(row);
+  }
 
-  for (let i = 0; i < merged.length; i += 200) {
-    const chunk = merged.slice(i, i + 200);
+  for (let i = 0; i < unique.length; i += 200) {
+    const chunk = unique.slice(i, i + 200);
     const { error } = await input.supabase
       .from('live_creatives')
       .upsert(chunk, { onConflict: 'brand_id,platform,ad_id,asset_key' });
     if (error) throw new Error(error.message);
   }
-  base.rows = merged.length;
+  base.rows = unique.length;
   return base;
 }

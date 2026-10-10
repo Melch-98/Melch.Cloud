@@ -84,7 +84,7 @@ describe('mapLandingUrl', () => {
     expect(mapped).toEqual([
       { url: sample[0], product_key: 'product:tallow-balm', product_label: 'Tallow Balm', product_kind: 'product' },
       { url: sample[1], product_key: 'product:soap', product_label: 'Soap Bar', product_kind: 'product' },
-      { url: sample[2], product_key: 'product:not-a-real-sku', product_label: 'not a real sku', product_kind: 'product' },
+      { url: sample[2], product_key: 'product:not-a-real-sku', product_label: 'Not A Real Sku', product_kind: 'product' },
       { url: sample[3], product_key: 'homepage', product_label: 'Homepage', product_kind: 'homepage' },
       { url: sample[4], product_key: 'shop_all', product_label: 'Shop All', product_kind: 'shop_all' },
       { url: sample[5], product_key: 'shop_all', product_label: 'Shop All', product_kind: 'shop_all' },
@@ -95,6 +95,19 @@ describe('mapLandingUrl', () => {
       { url: sample[10], product_key: 'none', product_label: 'No landing page', product_kind: 'none' },
       { url: '(missing)', product_key: 'none', product_label: 'No landing page', product_kind: 'none' },
     ]);
+  });
+
+  it('title-cases an unknown product or collection handle', () => {
+    expect(mapLandingUrl('https://mintier.com/products/not-a-real-sku', hosts, products)).toMatchObject({
+      product_key: 'product:not-a-real-sku',
+      product_label: 'Not A Real Sku',
+      product_kind: 'product',
+    });
+    expect(mapLandingUrl('https://mintier.com/collections/summer-edit', hosts, products, collections)).toMatchObject({
+      product_key: 'collection:summer-edit',
+      product_label: 'Collection: Summer Edit',
+      product_kind: 'collection',
+    });
   });
 
   it('treats a catalog template token as no landing page', () => {

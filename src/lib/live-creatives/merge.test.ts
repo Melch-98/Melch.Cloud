@@ -233,4 +233,50 @@ describe('syncLiveCreatives manual override', () => {
       product_source: row?.product_source as string,
     }).product_key).toBe('product:tallow-balm');
   });
+
+  it('keeps the first draft when a flexible ad repeats an image hash', async () => {
+    const upserts: unknown[][] = [];
+    const { results } = await syncLiveCreatives({
+      supabase: fakeSupabase(new Map(), upserts, []),
+      token: 'meta-token-should-not-leak',
+      now: new Date('2026-10-10T12:00:00.000Z'),
+      budgetMs: 60_000,
+      graph: async (url, token) => {
+        expect(token).toBe('meta-token-should-not-leak');
+        if (url.includes('/ads?')) {
+          return {
+            data: [{
+              id: 'ad-1',
+              name: 'Flexible soap',
+              creative: { id: 'cr-1' },
+              adset: { is_dynamic_creative: true, promoted_object: {} },
+            }],
+          };
+        }
+        return {
+          'cr-1': {
+            id: 'cr-1',
+            asset_feed_spec: {
+              ad_formats: ['AUTOMATIC_FORMAT'],
+              images: [
+                { hash: 'hash-dup', url: 'https://cdn.example/a.jpg' },
+                { hash: 'hash-dup', url: 'https://cdn.example/a-copy.jpg' },
+              ],
+              link_urls: [
+                { website_url: 'https://mintier.com/products/soap' },
+                { website_url: 'https://mintier.com/products/tallow-balm' },
+              ],
+            },
+          },
+        };
+      },
+    });
+
+    expect(results[0]).toMatchObject({ ok: true, ads: 1, rows: 1, duplicates: 1 });
+    const rows = upserts[0] as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].asset_key).toBe('hash-dup');
+    expect(rows[0].ad_id).toBe('ad-1');
+    expect(rows[0].product_key).toBe('product:soap');
+  });
 });
