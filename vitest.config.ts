@@ -2,6 +2,9 @@ import path from 'path';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  esbuild: {
+    jsx: 'automatic',
+  },
   test: {
     environment: 'node',
     include: [
@@ -23,6 +26,13 @@ export default defineConfig({
       'src/app/api/bfcm-goals/**/*.test.ts',
       'src/lib/live-creatives/**/*.test.ts',
       'src/app/api/live-creatives/**/*.test.ts',
+      'src/lib/supabase-session-cookie.test.ts',
+      'src/lib/dropbox-oauth-state.test.ts',
+      'src/lib/sync-brand-access.test.ts',
+      'src/app/api/auth/dropbox/**/*.test.ts',
+      'src/app/api/shopify-sync/**/*.test.ts',
+      'src/app/api/triplewhale-sync/**/*.test.ts',
+      'src/app/admin/dropbox/**/*.test.ts',
     ],
   },
   resolve: {

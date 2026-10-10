@@ -1,3 +1,6 @@
+import { cookies } from 'next/headers';
+import { redirect } from 'next/navigation';
+import { requireAdminActor } from '@/lib/admin-actor';
 import { createServiceClient } from '@/lib/supabase-server';
 
 export const dynamic = 'force-dynamic';
@@ -7,6 +10,14 @@ export default async function DropboxAdminPage({
 }: {
   searchParams: { connected?: string; error?: string };
 }) {
+  const admin = await requireAdminActor({
+    authorization: null,
+    cookies: cookies().getAll(),
+  });
+  if (!admin.ok) {
+    redirect(admin.status === 403 ? '/submissions' : '/');
+  }
+
   const supabase = createServiceClient();
   const { data: row } = await supabase
     .from('integrations')
