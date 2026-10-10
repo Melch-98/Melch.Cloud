@@ -1,4 +1,4 @@
-import { logGrantedScopeHandles } from './access-scopes';
+import { logGrantedScopeHandles } from './access-scopes.ts';
 import { classifyShopifyConnection } from './brand-connection';
 import { clearCatchUpCursor, loadCatchUpCursors, saveCatchUpCursor } from './catchup-cursor';
 import { exchangeClientCredentials } from './client-credentials';

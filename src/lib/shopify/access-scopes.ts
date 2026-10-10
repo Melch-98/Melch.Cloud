@@ -1,4 +1,4 @@
-import { isValidShopDomain } from './config';
+import { isValidShopDomain } from './config.ts';
 
 const READ_ALL_ORDERS = 'read_all_orders';
 

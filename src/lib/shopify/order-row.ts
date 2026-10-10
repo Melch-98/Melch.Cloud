@@ -1,4 +1,4 @@
-import { readShopifyAmount } from './rest-payload';
+import { readShopifyAmount } from './rest-payload.ts';
 
 /**
  * Maps a Shopify order payload onto a shopify_orders row.
