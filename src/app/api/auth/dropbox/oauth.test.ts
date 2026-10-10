@@ -8,11 +8,11 @@ const mocks = vi.hoisted(() => ({
   authed: true,
   exchange: vi.fn(),
   email: vi.fn(async () => 'ops@example.com'),
-  upsert: vi.fn(async (payload: Record<string, unknown>, options?: { onConflict?: string }) => ({
-    error: null as { message: string } | null,
-    payload,
-    options,
-  })),
+  upsert: vi.fn(async (payload: Record<string, unknown>, options?: { onConflict?: string }) => {
+    void payload;
+    void options;
+    return { error: null as { message: string } | null };
+  }),
 }));
 
 vi.mock('@supabase/supabase-js', () => ({
