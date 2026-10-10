@@ -19,6 +19,8 @@ export default defineConfig({
       'src/app/api/admin/invite-security.test.ts',
       'src/lib/bfcm/**/*.test.ts',
       'src/app/api/bfcm-goals/**/*.test.ts',
+      'src/lib/live-creatives/**/*.test.ts',
+      'src/app/api/live-creatives/**/*.test.ts',
     ],
   },
   resolve: {
