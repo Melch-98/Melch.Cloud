@@ -100,7 +100,53 @@ interface CampaignToday {
   l7Roas: number;
   spendPaceVsL7: number;
   roasDeltaVsL7: number;
+  budget?: number | null;
+  budgetKind?: 'daily' | 'lifetime' | null;
 }
+
+type PnlFigure = number | 'no data';
+type PnlRatio = number | 'no data' | null;
+
+interface LastYearBfcmDay {
+  date: string;
+  label: string;
+  alignedDate: string;
+  inCore: boolean;
+  orders: PnlFigure;
+  gross: PnlFigure;
+  net: PnlFigure;
+  ncRevenue: PnlFigure;
+  metaSpend: PnlFigure;
+  googleSpend: PnlFigure;
+  mer: PnlRatio;
+  amer: PnlRatio;
+}
+
+interface LastYearBfcmTotals {
+  orders: PnlFigure;
+  gross: PnlFigure;
+  net: PnlFigure;
+  ncRevenue: PnlFigure;
+  metaSpend: PnlFigure;
+  googleSpend: PnlFigure;
+  mer: PnlRatio;
+  amer: PnlRatio;
+}
+
+interface LastYearBfcmPnl {
+  year: number;
+  rangeStart: string;
+  rangeEnd: string;
+  coreStart: string;
+  coreEnd: string;
+  currency: string;
+  ncEstimated: boolean;
+  days: LastYearBfcmDay[];
+  core: LastYearBfcmTotals;
+  extended: LastYearBfcmTotals;
+}
+
+const NC_EST_TIP = 'Imported from a Shopify CSV; new vs returning estimated from email and subscription renewals.';
 
 interface BfcmPacingData {
   currency: string;
@@ -144,7 +190,9 @@ interface BfcmPacingData {
   thisYearBfcm: {
     fullWindow: DailyPoint[];
   };
+  lastYearBfcmPnl?: LastYearBfcmPnl;
   campaigns: CampaignToday[];
+  campaignsError?: string | null;
   reportingCurrency?: string;
   timezoneSource?: string;
   warnings?: string[];
@@ -490,6 +538,7 @@ function BfcmWindowChart({
   windowStart,
   windowEnd,
   earliestOrderDay = null,
+  lastYearContext = null,
 }: {
   thisYear: DailyPoint[];
   lastYear: DailyPoint[];
@@ -499,6 +548,7 @@ function BfcmWindowChart({
   windowStart?: string;
   windowEnd?: string;
   earliestOrderDay?: string | null;
+  lastYearContext?: string | null;
 }) {
   const lyPoint = (amount: number, day: string | undefined, scale: number): number | null => {
     const figure = lastYearFigure(amount, day || '', earliestOrderDay);
@@ -532,6 +582,11 @@ function BfcmWindowChart({
           <div className="text-sm" style={{ color: '#666' }}>
             {daysAway} {daysAway === 1 ? 'day' : 'days'} until the window opens
           </div>
+          {lastYearContext && (
+            <div className="text-sm mt-2" style={{ color: '#888' }}>
+              vs last year · {lastYearContext}
+            </div>
+          )}
         </div>
         {lastYear.length > 0 && (
           <>
@@ -651,6 +706,138 @@ function shortDay(dayLabel: string): string {
   return dayLabel.slice(0, 3);
 }
 
+function fmtPnlMoney(figure: PnlFigure, currency: string, convert: (amount: number) => number): string {
+  if (figure === 'no data') return 'no data';
+  return fmtMoney(convert(figure), currency);
+}
+
+function fmtPnlCount(figure: PnlFigure): string {
+  if (figure === 'no data') return 'no data';
+  return fmtNum(figure);
+}
+
+function fmtPnlRatio(figure: PnlRatio): string {
+  if (figure === 'no data') return 'no data';
+  if (figure == null) return '—';
+  return fmtRoas(figure);
+}
+
+function NcRevenueCell({
+  figure,
+  estimated,
+  currency,
+  convert,
+}: {
+  figure: PnlFigure;
+  estimated: boolean;
+  currency: string;
+  convert: (amount: number) => number;
+}) {
+  if (figure === 'no data') return <>no data</>;
+  return (
+    <>
+      {fmtMoney(convert(figure), currency)}
+      {estimated && (
+        <span title={NC_EST_TIP} style={{ color: '#C8B89A' }}> est.</span>
+      )}
+    </>
+  );
+}
+
+function LastYearBfcmTable({
+  pnl,
+  currency,
+  convert,
+}: {
+  pnl: LastYearBfcmPnl;
+  currency: string;
+  convert: (amount: number) => number;
+}) {
+  const money = (figure: PnlFigure) => fmtPnlMoney(figure, currency, convert);
+  const totals = (label: string, row: LastYearBfcmTotals) => (
+    <tr style={{ borderTop: '1px solid rgba(200,184,154,0.35)' }}>
+      <td className="py-2.5 pr-3 font-medium" style={{ color: '#F5F5F8' }}>{label}</td>
+      <td className="py-2.5 pr-3" style={{ color: '#777' }} />
+      <td className="py-2.5 pr-3 text-right tabular-nums" style={{ color: '#F5F5F8' }}>{fmtPnlCount(row.orders)}</td>
+      <td className="py-2.5 pr-3 text-right tabular-nums" style={{ color: '#F5F5F8' }}>{money(row.gross)}</td>
+      <td className="py-2.5 pr-3 text-right tabular-nums" style={{ color: '#F5F5F8' }}>{money(row.net)}</td>
+      <td className="py-2.5 pr-3 text-right tabular-nums" style={{ color: '#F5F5F8' }}>
+        <NcRevenueCell figure={row.ncRevenue} estimated={pnl.ncEstimated && row.ncRevenue !== 'no data'} currency={currency} convert={convert} />
+      </td>
+      <td className="py-2.5 pr-3 text-right tabular-nums" style={{ color: '#F5F5F8' }}>{money(row.metaSpend)}</td>
+      <td className="py-2.5 pr-3 text-right tabular-nums" style={{ color: '#F5F5F8' }}>{money(row.googleSpend)}</td>
+      <td className="py-2.5 pr-3 text-right tabular-nums" style={{ color: '#F5F5F8' }}>{fmtPnlRatio(row.mer)}</td>
+      <td className="py-2.5 text-right tabular-nums" style={{ color: '#F5F5F8' }}>{fmtPnlRatio(row.amer)}</td>
+    </tr>
+  );
+  return (
+    <div className="rounded-xl p-5 mb-6" style={{ backgroundColor: '#111111' }}>
+      <div className="flex flex-wrap items-end justify-between gap-3 mb-1">
+        <h3 className="text-sm font-semibold" style={{ color: '#F5F5F8' }}>Last year BFCM</h3>
+        <div className="text-xs" style={{ color: '#777' }}>
+          {pnl.rangeStart} – {pnl.rangeEnd}
+          {pnl.ncEstimated && (
+            <span title={NC_EST_TIP} style={{ color: '#C8B89A' }}> · NC est.</span>
+          )}
+        </div>
+      </div>
+      <p className="text-xs mb-4" style={{ color: '#666' }}>
+        Daily P&L aligned to this year&apos;s Black Friday. MER is gross after discounts ÷ Meta + Google. aMER is new-customer gross ÷ Meta + Google.
+      </p>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr style={{ color: '#555', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+              <th className="text-left py-2 pr-3 font-medium">Day</th>
+              <th className="text-left py-2 pr-3 font-medium">This year</th>
+              <th className="text-right py-2 pr-3 font-medium">Orders</th>
+              <th className="text-right py-2 pr-3 font-medium">Gross</th>
+              <th className="text-right py-2 pr-3 font-medium">Net</th>
+              <th className="text-right py-2 pr-3 font-medium" title={pnl.ncEstimated ? NC_EST_TIP : undefined}>NC revenue</th>
+              <th className="text-right py-2 pr-3 font-medium">Meta</th>
+              <th className="text-right py-2 pr-3 font-medium">Google</th>
+              <th className="text-right py-2 pr-3 font-medium">MER</th>
+              <th className="text-right py-2 font-medium">aMER</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pnl.days.map((day) => {
+              const highlight = day.label === 'Black Friday' || day.label === 'Cyber Monday';
+              return (
+                <tr
+                  key={day.date}
+                  style={{
+                    borderTop: '1px solid rgba(255,255,255,0.04)',
+                    backgroundColor: highlight ? 'rgba(200,184,154,0.12)' : 'transparent',
+                  }}
+                >
+                  <td className="py-2 pr-3" style={{ color: highlight ? '#C8B89A' : '#F5F5F8' }}>
+                    {day.label}
+                    <div style={{ color: '#555' }}>{day.date}</div>
+                  </td>
+                  <td className="py-2 pr-3" style={{ color: '#ABABAB' }}>{day.alignedDate}</td>
+                  <td className="py-2 pr-3 text-right tabular-nums" style={{ color: '#F5F5F8' }}>{fmtPnlCount(day.orders)}</td>
+                  <td className="py-2 pr-3 text-right tabular-nums" style={{ color: '#F5F5F8' }}>{money(day.gross)}</td>
+                  <td className="py-2 pr-3 text-right tabular-nums" style={{ color: '#F5F5F8' }}>{money(day.net)}</td>
+                  <td className="py-2 pr-3 text-right tabular-nums" style={{ color: '#F5F5F8' }}>
+                    <NcRevenueCell figure={day.ncRevenue} estimated={pnl.ncEstimated} currency={currency} convert={convert} />
+                  </td>
+                  <td className="py-2 pr-3 text-right tabular-nums" style={{ color: '#F5F5F8' }}>{money(day.metaSpend)}</td>
+                  <td className="py-2 pr-3 text-right tabular-nums" style={{ color: '#F5F5F8' }}>{money(day.googleSpend)}</td>
+                  <td className="py-2 pr-3 text-right tabular-nums" style={{ color: '#F5F5F8' }}>{fmtPnlRatio(day.mer)}</td>
+                  <td className="py-2 text-right tabular-nums" style={{ color: '#F5F5F8' }}>{fmtPnlRatio(day.amer)}</td>
+                </tr>
+              );
+            })}
+            {totals('Core window', pnl.core)}
+            {totals('Extended', pnl.extended)}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // ─── Campaign Command Table ─────────────────────────────────────
 
 type SortKey = 'spend' | 'roas' | 'purchaseValue' | 'purchases' | 'cpa' | 'spendPaceVsL7' | 'roasDeltaVsL7';
@@ -661,12 +848,14 @@ function CampaignTable({
   targetRoas,
   breakevenRoas,
   factor = 1,
+  error = null,
 }: {
   campaigns: CampaignToday[];
   currency: string;
   targetRoas: number;
   breakevenRoas: number | null;
   factor?: number;
+  error?: string | null;
 }) {
   const [sortKey, setSortKey] = useState<SortKey>('spend');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
@@ -697,8 +886,8 @@ function CampaignTable({
     return (
       <div className="rounded-xl p-6" style={{ backgroundColor: '#111111' }}>
         <h3 className="text-sm font-semibold mb-3" style={{ color: '#F5F5F8' }}>Campaign Command (Meta)</h3>
-        <div className="text-sm py-8 text-center" style={{ color: '#666' }}>
-          No campaign spend today yet.
+        <div className="text-sm py-8 text-center" style={{ color: error ? '#fcd34d' : '#666' }}>
+          {error || 'No campaign spend today yet.'}
         </div>
       </div>
     );
@@ -733,6 +922,7 @@ function CampaignTable({
               <th className="text-left py-2 pr-4 font-medium" style={{ color: '#555' }}>Campaign</th>
               <th className="text-left py-2 pr-4 font-medium" style={{ color: '#555' }}>Status</th>
               <SortHeader label="Spend" k="spend" />
+              <th className="text-right py-2 pr-4 font-medium" style={{ color: '#555' }}>Budget</th>
               <SortHeader label="Rev" k="purchaseValue" />
               <SortHeader label="ROAS" k="roas" />
               <SortHeader label="CPA" k="cpa" />
@@ -765,6 +955,9 @@ function CampaignTable({
                     </span>
                   </td>
                   <td className="py-2.5 pr-4 text-right tabular-nums" style={{ color: '#F5F5F8' }}>{fmtMoney(c.spend * factor, currency)}</td>
+                  <td className="py-2.5 pr-4 text-right tabular-nums" style={{ color: '#ABABAB' }}>
+                    {c.budget == null ? '—' : `${c.budgetKind === 'lifetime' ? 'LT ' : ''}${fmtMoney(c.budget * factor, currency)}`}
+                  </td>
                   <td className="py-2.5 pr-4 text-right tabular-nums" style={{ color: '#ABABAB' }}>{fmtMoney(c.purchaseValue * factor, currency)}</td>
                   <td className="py-2.5 pr-4 text-right tabular-nums" style={{ color: c.roas >= targetRoas ? '#22C55E' : '#F5F5F8' }}>{fmtRoas(c.roas)}</td>
                   <td className="py-2.5 pr-4 text-right tabular-nums" style={{ color: '#ABABAB' }}>{c.cpa > 0 ? fmtMoney(c.cpa * factor, currency) : '—'}</td>
@@ -1015,6 +1208,13 @@ export default function BfcmPacingPage() {
   const base = data?.baseCurrency || baseCurrency;
   const native = data?.currency || 'USD';
   const convert = (v: number, fromCurrency?: string) => toBase(v, fromCurrency || native, fx, base);
+  const lastYearMoney = (figure: PnlFigure) => {
+    if (!data?.lastYearBfcmPnl || figure === 'no data') return figure === 'no data' ? 'no data' : '—';
+    return fmtMoney(convert(figure, data.lastYearBfcmPnl.currency), base);
+  };
+  const lastYearContext = data?.lastYearBfcmPnl
+    ? `${data.lastYearBfcmPnl.coreStart} – ${data.lastYearBfcmPnl.coreEnd} gross ${lastYearMoney(data.lastYearBfcmPnl.core.gross)}`
+    : null;
 
   const metaSpendBase = data ? convert(data.today.totalSpendSoFar, data.currencies.meta || native) : 0;
   const googleSpendBase = data ? convert(data.today.googleSpend, data.currencies.google || data.currencies.meta || native) : 0;
@@ -1449,6 +1649,11 @@ export default function BfcmPacingPage() {
                           <tr key={day.date} style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
                             <td className="py-2 pr-3" style={{ color: day.date === data.today.date ? '#C8B89A' : '#F5F5F8' }}>
                               {day.dayLabel}<div style={{ color: '#555' }}>{day.date}</div>
+                              {(() => {
+                                const ly = data.lastYearBfcmPnl?.days.find((item) => item.alignedDate === day.date);
+                                if (!ly) return null;
+                                return <div style={{ color: '#777' }}>vs last year {lastYearMoney(ly.gross)}</div>;
+                              })()}
                             </td>
                             <td className="py-2 pr-3"><GoalField compact label="" value={goal?.revenueGoal ?? null} disabled={goalAccess !== 'write'} onCommit={(value) => saveGoal(day.date, { revenueGoal: value })} /></td>
                             <td className="py-2 pr-3"><GoalField compact label="" value={goal?.spendBudget ?? null} disabled={goalAccess !== 'write'} onCommit={(value) => saveGoal(day.date, { spendBudget: value })} /></td>
@@ -1460,6 +1665,14 @@ export default function BfcmPacingPage() {
                   </table>
                 </div>
               </div>
+            )}
+
+            {data.lastYearBfcmPnl && (
+              <LastYearBfcmTable
+                pnl={data.lastYearBfcmPnl}
+                currency={base}
+                convert={(amount) => convert(amount, data.lastYearBfcmPnl?.currency)}
+              />
             )}
 
             {/* Hourly curve */}
@@ -1482,6 +1695,7 @@ export default function BfcmPacingPage() {
                 targetRoas={effTargetRoas}
                 breakevenRoas={breakevenRoas}
                 factor={convert(1)}
+                error={data.campaignsError}
               />
             </div>
 
@@ -1496,6 +1710,7 @@ export default function BfcmPacingPage() {
                 windowStart={data.bfcmWindow.start}
                 windowEnd={data.bfcmWindow.end}
                 earliestOrderDay={data.shopify?.lastYear.earliestOrderDay ?? null}
+                lastYearContext={lastYearContext}
               />
             </div>
 
