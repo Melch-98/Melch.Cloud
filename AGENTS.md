@@ -130,11 +130,11 @@ Do not invent `shopify_stores` rows. Do not register Shopify webhooks for a bran
 
 ## BFCM command center
 
-`GET /api/bfcm-pacing` is shop-local. Shopify revenue is `shopify_orders` gross (subtotal + discounts) through the same new-customer classification as Daily P&L. MER is that gross divided by Meta + Google spend; aMER uses new-customer gross. A last-year day before the brand's earliest stored order is `no_last_year_data`, not zero. Meta `time_range` dates use the ad account timezone. A since/until after that account-local today is clamped, and a range that has not started (the BFCM window before it opens) is not requested. Today is cached 60 seconds; L7, last year, and the BFCM window are cached 15 minutes. Meta insights use an `Authorization` header, not `access_token` in the URL. One ranged hourly call covers L7.
+`GET /api/bfcm-pacing` is shop-local. Shopify revenue is `shopify_orders` gross (subtotal + discounts) through the same new-customer classification as Daily P&L. MER is that gross divided by Meta + Google spend; aMER uses new-customer gross. A last-year day before the brand's earliest stored order is `no_last_year_data`. The page shows `no data` for that day, not $0. Meta `time_range` dates use the ad account timezone, fetched only when Meta is configured and remembered for an hour. A since/until after that account-local today is clamped, and a range that has not started (the BFCM window before it opens) is not requested. Today is cached 60 seconds; L7, last year, and the BFCM window are cached 15 minutes. Meta insights use an `Authorization` header, not `access_token` in the URL. One ranged hourly call covers L7.
 
 Goals: `PUT /api/bfcm-goals` with `{ brandId, date, revenueGoal, spendBudget, amerTarget }`. Admins write any brand. Founders write their own. Strategists read their own. Apply `supabase/migrations/add_bfcm_goals.sql` before saving goals.
 
-Order backfill is admin-only or `Authorization: Bearer CRON_SECRET`. It does not run in this app's cron and does not rebuild `daily_pnl`. Call the same body again while `truncated` is true:
+Order backfill is admin-only or `Authorization: Bearer CRON_SECRET`. It does not run in this app's cron and does not rebuild `daily_pnl`. Call the same body again while `truncated` is true. A finished call with 0 orders and a `start_date` older than 60 days is not success: the JSON `warning` names `read_all_orders` and the status is 422. Custom apps without that scope only return the last 60 days.
 
 ```
 POST /api/admin/shopify-order-backfill

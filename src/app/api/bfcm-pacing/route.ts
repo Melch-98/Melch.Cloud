@@ -22,7 +22,10 @@ import {
   metaGet,
   metaHistoryRanges,
   parseHourlySpendRows,
+  readMetaAccountCache,
+  rememberMetaAccount,
   type HourlySpend,
+  type MetaAccountCache,
 } from '@/lib/bfcm/meta-insights';
 import { merRatio } from '@/lib/bfcm/pacing';
 import {
@@ -131,6 +134,7 @@ interface LiveSlice {
 
 const historyCache = new Map<string, { data: HistorySlice; ts: number }>();
 const liveCache = new Map<string, { data: LiveSlice; ts: number }>();
+const metaAccountCache: MetaAccountCache = new Map();
 
 function r2(n: number): number {
   return Math.round(n * 100) / 100;
@@ -209,12 +213,16 @@ function fillWindow(days: BfcmDay[], rows: DailyPoint[]): DailyPoint[] {
 }
 
 async function metaAccount(token: string, adAccountId: string): Promise<{ currency: string; timezone: string }> {
+  const cached = readMetaAccountCache(metaAccountCache, adAccountId);
+  if (cached) return cached;
   const account = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
   const json = await metaGet(`${META_BASE}/${account}?fields=currency,timezone_name`, token);
-  return {
+  const details = {
     currency: typeof json?.currency === 'string' ? json.currency : 'USD',
     timezone: typeof json?.timezone_name === 'string' ? json.timezone_name : 'UTC',
   };
+  rememberMetaAccount(metaAccountCache, adAccountId, details);
+  return details;
 }
 
 export async function GET(request: NextRequest) {
@@ -778,12 +786,7 @@ async function loadLive(input: {
       slice.purchaseValue = firstAction(totals[0].action_values);
       if (slice.totalSpendSoFar === 0) slice.totalSpendSoFar = parseFloat(totals[0].spend || '0');
     }
-    try {
-      const accountInfo = await metaAccount(input.metaToken, account);
-      slice.metaCurrency = accountInfo.currency;
-    } catch {
-      slice.metaCurrency = input.metaCurrency || null;
-    }
+    slice.metaCurrency = input.metaCurrency || null;
     slice.campaigns = await campaignsFromRows(campaignRows, input.campaignL7, input.metaToken);
     slice.metaOk = true;
   })().catch((err) => {

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { backfillAuth } from '@/lib/bfcm/goals-access';
-import { backfillBrandOrders } from '@/lib/shopify/order-backfill';
+import { backfillBrandOrders, backfillResponseStatus } from '@/lib/shopify/order-backfill';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -102,11 +102,8 @@ export async function POST(request: NextRequest) {
       endDate,
       deadlineMs: Date.now() + BUDGET_MS,
     });
-    if (result.error && result.upserted === 0 && !result.truncated) {
-      const status = result.error.includes('YYYY-MM-DD') || result.error.includes('No Shopify') ? 400 : 502;
-      return NextResponse.json({ ok: false, ...result }, { status });
-    }
-    return NextResponse.json({ ok: !result.error, ...result });
+    const outcome = backfillResponseStatus(result);
+    return NextResponse.json({ ok: outcome.ok, ...result }, { status: outcome.status });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Backfill failed';
     const status = message.includes('YYYY-MM-DD') || message.includes('Backfill at most') ? 400 : 500;

@@ -28,7 +28,7 @@ import {
 } from 'recharts';
 import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
-import { zonedClock } from '@/lib/bfcm/calendar';
+import { lastYearFigure, lastYearTotal, zonedClock } from '@/lib/bfcm/calendar';
 import { paceSnapshot, vsBaselinePct, type PaceTone } from '@/lib/bfcm/pacing';
 
 // ─── Types ──────────────────────────────────────────────────────
@@ -365,7 +365,7 @@ function HourlySalesChart({
           {showLy ? (
             <span className="flex items-center gap-1.5"><span className="w-3 h-0.5 rounded" style={{ backgroundColor: '#888' }} />Last year</span>
           ) : (
-            <span>no last-year data</span>
+            <span>no data</span>
           )}
         </div>
       </div>
@@ -489,6 +489,7 @@ function BfcmWindowChart({
   factor = 1,
   windowStart,
   windowEnd,
+  earliestOrderDay = null,
 }: {
   thisYear: DailyPoint[];
   lastYear: DailyPoint[];
@@ -497,7 +498,16 @@ function BfcmWindowChart({
   factor?: number;
   windowStart?: string;
   windowEnd?: string;
+  earliestOrderDay?: string | null;
 }) {
+  const lyPoint = (amount: number, day: string | undefined, scale: number): number | null => {
+    const figure = lastYearFigure(amount, day || '', earliestOrderDay);
+    return figure === 'no data' ? null : figure * scale;
+  };
+  const lySpendTotal = lastYearTotal(
+    lastYear.map((day) => ({ date: day.date, amount: day.spend })),
+    earliestOrderDay
+  );
   const [metric, setMetric] = useState<'spend' | 'roas'>('spend');
   const s = sym(currency);
 
@@ -528,7 +538,7 @@ function BfcmWindowChart({
             <div className="text-xs mb-3" style={{ color: '#555' }}>Last year&apos;s window for reference</div>
             <ResponsiveContainer width="100%" height={200}>
               <BarChart
-                data={lastYear.map(ly => ({ shortLabel: shortDay(ly.dayLabel), value: ly.spend * factor }))}
+                data={lastYear.map(ly => ({ shortLabel: shortDay(ly.dayLabel), value: lyPoint(ly.spend, ly.date, factor) }))}
                 margin={{ top: 5, right: 20, left: 10, bottom: 5 }}
               >
                 <CartesianGrid stroke="rgba(255,255,255,0.04)" strokeDasharray="3 3" />
@@ -537,7 +547,7 @@ function BfcmWindowChart({
                   tickFormatter={(v: number) => `${s}${v >= 1000 ? (v / 1000).toFixed(0) + 'K' : v.toFixed(0)}`} />
                 <Tooltip
                   contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#F5F5F8' }}
-                  formatter={(value: any, name: any) => [`${s}${Number(value).toLocaleString()}`, String(name)]} />
+                  formatter={(value: any, name: any) => [value == null ? 'no data' : `${s}${Number(value).toLocaleString()}`, String(name)]} />
                 <Bar dataKey="value" fill="#444444" name="Last Year Spend" maxBarSize={32} />
               </BarChart>
             </ResponsiveContainer>
@@ -545,7 +555,7 @@ function BfcmWindowChart({
               <span>
                 Last year total:{' '}
                 <span style={{ color: '#F5F5F8', fontWeight: 600 }}>
-                  {fmtMoney(lastYear.reduce((sum, d) => sum + d.spend, 0) * factor, currency)}
+                  {lySpendTotal === 'no data' ? 'no data' : fmtMoney(lySpendTotal * factor, currency)}
                 </span>
               </span>
             </div>
@@ -558,12 +568,14 @@ function BfcmWindowChart({
   const data = thisYear.map((ty, i) => ({
     shortLabel: shortDay(ty.dayLabel),
     thisYear: metric === 'spend' ? ty.spend * factor : ty.roas,
-    lastYear: metric === 'spend' ? (lastYear[i]?.spend || 0) * factor : (lastYear[i]?.roas || 0),
+    lastYear: metric === 'spend'
+      ? lyPoint(lastYear[i]?.spend || 0, lastYear[i]?.date, factor)
+      : lyPoint(lastYear[i]?.roas || 0, lastYear[i]?.date, 1),
     isFuture: ty.date > currentDate,
   }));
 
   const tyTotalRaw = thisYear.reduce((sum, d) => sum + d.spend, 0);
-  const lyTotalRaw = lastYear.reduce((sum, d) => sum + d.spend, 0);
+  const lyTotalRaw = lySpendTotal === 'no data' ? 0 : lySpendTotal;
   const tyTotal = tyTotalRaw * factor;
   const lyTotal = lyTotalRaw * factor;
   const yoyPct = lyTotalRaw > 0 ? ((tyTotalRaw - lyTotalRaw) / lyTotalRaw) * 100 : 0;
@@ -600,7 +612,7 @@ function BfcmWindowChart({
           <Tooltip
             contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#F5F5F8' }}
             formatter={(value: any, name: any) => [
-              metric === 'spend' ? `${s}${Number(value).toLocaleString()}` : `${Number(value).toFixed(2)}×`,
+              value == null ? 'no data' : metric === 'spend' ? `${s}${Number(value).toLocaleString()}` : `${Number(value).toFixed(2)}×`,
               String(name),
             ]}
           />
@@ -614,7 +626,7 @@ function BfcmWindowChart({
           Window Meta spend: <span style={{ color: '#F5F5F8', fontWeight: 600 }}>{fmtMoney(tyTotal, currency)}</span>
         </span>
         <span>
-          Last year: <span style={{ color: '#F5F5F8', fontWeight: 600 }}>{fmtMoney(lyTotal, currency)}</span>
+          Last year: <span style={{ color: '#F5F5F8', fontWeight: 600 }}>{lySpendTotal === 'no data' ? 'no data' : fmtMoney(lyTotal, currency)}</span>
         </span>
         {lyTotal > 0 && (
           <span>
@@ -1340,7 +1352,7 @@ export default function BfcmPacingPage() {
               <KpiCard
                 label="vs last year sales"
                 value={data.shopify?.lastYear.status === 'no_last_year_data'
-                  ? 'no last-year data'
+                  ? 'no data'
                   : (() => {
                       const pct = vsBaselinePct(data.shopify?.today.revenue || 0, data.shopify?.lastYear.sales?.revenue || 0, data.shopify?.lastYear.status || 'no_last_year_data');
                       return pct == null ? '—' : fmtPct(pct);
@@ -1353,7 +1365,9 @@ export default function BfcmPacingPage() {
               />
               <KpiCard
                 label="vs last year Meta spend"
-                value={data.meta?.available && lySameDay && lySameDay.totalSpend > 0 ? fmtPct(vsLastYearSpendPct) : data.meta?.available ? '—' : 'n/a'}
+                value={data.shopify?.lastYear.status === 'no_last_year_data' && !(lySameDay && lySameDay.totalSpend > 0)
+                  ? 'no data'
+                  : data.meta?.available && lySameDay && lySameDay.totalSpend > 0 ? fmtPct(vsLastYearSpendPct) : data.meta?.available ? '—' : 'n/a'}
                 accent={data.meta?.available && lySameDay && lySameDay.totalSpend > 0 ? (vsLastYearSpendPct >= 0 ? 'green' : 'red') : 'default'}
                 sub={lySameDay?.date ? `${lySameDay.dayLabel} ${lySameDay.date}` : 'no LY data'}
               />
@@ -1481,6 +1495,7 @@ export default function BfcmPacingPage() {
                 factor={convert(1)}
                 windowStart={data.bfcmWindow.start}
                 windowEnd={data.bfcmWindow.end}
+                earliestOrderDay={data.shopify?.lastYear.earliestOrderDay ?? null}
               />
             </div>
 
