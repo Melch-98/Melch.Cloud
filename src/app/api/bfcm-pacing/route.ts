@@ -16,9 +16,11 @@ import {
   averageHourlySpend,
   emptyHourlySpend,
   insightUrl,
+  clampMetaRange,
   l7HourlyInsightQuery,
   metaCollect,
   metaGet,
+  metaHistoryRanges,
   parseHourlySpendRows,
   type HourlySpend,
 } from '@/lib/bfcm/meta-insights';
@@ -286,14 +288,18 @@ export async function GET(request: NextRequest) {
   });
   let timezone = shopZone.timeZone;
   let timezoneSource: 'shop' | 'ad_account' | 'utc' = shopZone.source === 'utc_fallback' ? 'utc' : 'shop';
+  let accountTimeZone = timezone;
   let metaCurrency = 'USD';
-  if (shopZone.source === 'utc_fallback' && metaReady) {
+  if (metaReady) {
     try {
       const account = await metaAccount(metaToken, brand.meta_ad_account_id);
       metaCurrency = account.currency;
-      if (account.timezone && account.timezone !== 'UTC') {
-        timezone = account.timezone;
-        timezoneSource = 'ad_account';
+      if (account.timezone) {
+        accountTimeZone = account.timezone;
+        if (shopZone.source === 'utc_fallback' && account.timezone !== 'UTC') {
+          timezone = account.timezone;
+          timezoneSource = 'ad_account';
+        }
       }
     } catch (err) {
       warnings.push(`Meta account lookup failed: ${err instanceof Error ? err.message : 'request failed'}`);
@@ -304,10 +310,11 @@ export async function GET(request: NextRequest) {
 
   const now = new Date();
   const clock = shopTodayAndL7(now, timezone);
+  const metaClock = shopTodayAndL7(now, accountTimeZone);
   const window = bfcmWindow(year);
   const alignment = alignLastYear(clock.today);
-  const historyKey = `bfcm:hist:${brandId}:${year}:${clock.today}:${baseCurrency}:${timezone}`;
-  const liveKey = `bfcm:live:${brandId}:${clock.today}:${baseCurrency}:${timezone}`;
+  const historyKey = `bfcm:hist:${brandId}:${year}:${clock.today}:${metaClock.today}:${baseCurrency}:${timezone}:${accountTimeZone}`;
+  const liveKey = `bfcm:live:${brandId}:${clock.today}:${metaClock.today}:${baseCurrency}:${timezone}:${accountTimeZone}`;
   let history = readCache(historyCache, historyKey, HISTORY_TTL, bypassCache);
   let live = readCache(liveCache, liveKey, TODAY_TTL, bypassCache);
 
@@ -339,12 +346,15 @@ export async function GET(request: NextRequest) {
         metaReady,
         adAccountId: brand.meta_ad_account_id,
         clock,
+        metaClock,
         window,
         alignment,
         timezone,
         connection,
       });
-      historyCache.set(historyKey, { data: history, ts: Date.now() });
+      if (!history.warnings.some((warning) => warning.includes('cannot be in the future'))) {
+        historyCache.set(historyKey, { data: history, ts: Date.now() });
+      }
     }
     if (!live) {
       live = await loadLive({
@@ -356,6 +366,7 @@ export async function GET(request: NextRequest) {
         metaCurrency,
         adAccountId: brand.meta_ad_account_id,
         today: clock.today,
+        metaToday: metaClock.today,
         timezone,
         connection,
         campaignL7: history.campaignL7,
@@ -490,6 +501,7 @@ async function loadHistory(input: {
   metaReady: boolean;
   adAccountId: string | null;
   clock: { today: string; l7: string[] };
+  metaClock: { today: string; l7: string[] };
   window: ReturnType<typeof bfcmWindow>;
   alignment: ReturnType<typeof alignLastYear>;
   timezone: string;
@@ -585,28 +597,55 @@ async function loadHistory(input: {
   const meta = (async () => {
     if (!input.metaReady || !input.adAccountId) return;
     const account = input.adAccountId;
-    const l7Start = input.clock.l7[0];
-    const l7End = input.clock.l7[input.clock.l7.length - 1];
-    const range = (since: string, until: string, extra: string) =>
+    const ranges = metaHistoryRanges({
+      accountToday: input.metaClock.today,
+      l7Since: input.metaClock.l7[0],
+      l7Until: input.metaClock.l7[input.metaClock.l7.length - 1],
+      lastYearStart: lastWindow.start,
+      lastYearEnd: lastWindow.end,
+      thisYearStart: input.window.start,
+      thisYearEnd: input.window.end,
+      sameDay: input.alignment.date,
+    });
+    const found = (name: string) => ranges.find((range) => range.name === name) || null;
+    const rangeUrl = (since: string, until: string, extra: string) =>
       insightUrl(account, `level=account&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&${extra}&limit=500`);
+    const collect = (name: string, extra: string) => {
+      const bounded = found(name);
+      if (!bounded) return Promise.resolve([] as any[]);
+      return metaCollect(rangeUrl(bounded.since, bounded.until, extra), input.metaToken);
+    };
+    const l7 = found('l7');
     const lyOutside = input.alignment.date < lastWindow.start || input.alignment.date > lastWindow.end;
-    const campaignQuery = `level=campaign&time_range=${encodeURIComponent(JSON.stringify({ since: l7Start, until: l7End }))}&fields=spend,actions,action_values&${ATTRIBUTION}&limit=500`;
+    const sameDay = found('sameDay');
     const [hourlyRows, l7Agg, lyDaily, tyDaily, lyHourly, lyOutsideTotals, campaignRows] = await Promise.all([
-      metaCollect(insightUrl(account, l7HourlyInsightQuery(l7Start, l7End)), input.metaToken),
-      metaCollect(range(l7Start, l7End, `fields=spend,actions,action_values&${ATTRIBUTION}`), input.metaToken),
-      metaCollect(range(lastWindow.start, lastWindow.end, `time_increment=1&fields=spend,actions,action_values&${ATTRIBUTION}`), input.metaToken),
-      metaCollect(range(input.window.start, input.window.end, `time_increment=1&fields=spend,actions,action_values&${ATTRIBUTION}`), input.metaToken),
-      metaCollect(
-        range(input.alignment.date, input.alignment.date, 'breakdowns=hourly_stats_aggregated_by_advertiser_time_zone&fields=spend'),
-        input.metaToken
-      ),
-      lyOutside
-        ? metaCollect(range(input.alignment.date, input.alignment.date, `fields=spend,actions,action_values&${ATTRIBUTION}`), input.metaToken)
+      l7
+        ? metaCollect(insightUrl(account, l7HourlyInsightQuery(l7.since, l7.until)), input.metaToken)
         : Promise.resolve([] as any[]),
-      metaCollect(insightUrl(account, campaignQuery), input.metaToken).catch(() => [] as any[]),
+      collect('l7', `fields=spend,actions,action_values&${ATTRIBUTION}`),
+      collect('lastYearWindow', `time_increment=1&fields=spend,actions,action_values&${ATTRIBUTION}`),
+      collect('thisYearWindow', `time_increment=1&fields=spend,actions,action_values&${ATTRIBUTION}`),
+      sameDay
+        ? metaCollect(
+            rangeUrl(sameDay.since, sameDay.until, 'breakdowns=hourly_stats_aggregated_by_advertiser_time_zone&fields=spend'),
+            input.metaToken
+          )
+        : Promise.resolve([] as any[]),
+      lyOutside && sameDay
+        ? metaCollect(rangeUrl(sameDay.since, sameDay.until, `fields=spend,actions,action_values&${ATTRIBUTION}`), input.metaToken)
+        : Promise.resolve([] as any[]),
+      l7
+        ? metaCollect(
+            insightUrl(
+              account,
+              `level=campaign&time_range=${encodeURIComponent(JSON.stringify({ since: l7.since, until: l7.until }))}&fields=spend,actions,action_values&${ATTRIBUTION}&limit=500`
+            ),
+            input.metaToken
+          ).catch(() => [] as any[])
+        : Promise.resolve([] as any[]),
     ]);
     const byDay = parseHourlySpendRows(hourlyRows);
-    const dailyHourly = input.clock.l7.map((date) => {
+    const dailyHourly = input.metaClock.l7.map((date) => {
       const hourlySpend = byDay.get(date) || emptyHourlySpend();
       const dayTotal = hourlySpend.reduce((sum, point) => sum + point.spend, 0);
       return { date, hourlySpend, dayTotal: r2(dayTotal) };
@@ -664,6 +703,7 @@ async function loadLive(input: {
   metaCurrency: string;
   adAccountId: string | null;
   today: string;
+  metaToday: string;
   timezone: string;
   connection: { domain: string | null; token: string | null; connection: 'shopify_admin' | 'triple_whale' | 'none' };
   campaignL7: Record<string, { spend: number; purchaseValue: number }>;
@@ -710,7 +750,12 @@ async function loadLive(input: {
   const meta = (async () => {
     if (!input.metaReady || !input.adAccountId) return;
     const account = input.adAccountId;
-    const range = encodeURIComponent(JSON.stringify({ since: input.today, until: input.today }));
+    const today = clampMetaRange(input.metaToday, input.metaToday, input.metaToday);
+    if (!today) {
+      slice.metaOk = true;
+      return;
+    }
+    const range = encodeURIComponent(JSON.stringify({ since: today.since, until: today.until }));
     const [hourlyRows, totals, campaignRows] = await Promise.all([
       metaCollect(
         insightUrl(account, `level=account&time_range=${range}&breakdowns=hourly_stats_aggregated_by_advertiser_time_zone&fields=spend&limit=500`),
@@ -725,7 +770,7 @@ async function loadLive(input: {
         input.metaToken
       ),
     ]);
-    const hours = parseHourlySpendRows(hourlyRows).get(input.today) || emptyHourlySpend();
+    const hours = parseHourlySpendRows(hourlyRows).get(today.since) || emptyHourlySpend();
     slice.hourlySpend = hours;
     slice.totalSpendSoFar = hours.reduce((sum, point) => sum + point.spend, 0);
     if (totals[0]) {
