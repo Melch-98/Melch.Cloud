@@ -16,7 +16,6 @@ import {
   UserCircle,
   BarChart3,
   TrendingUp,
-  CalendarDays,
   FileText,
   Lightbulb,
   Rocket,
@@ -174,13 +173,6 @@ export default function Navbar({ children }: { children?: React.ReactNode }) {
       href: '/ad-changelog',
       icon: Activity,
       roles: ['admin', 'founder'],
-      badge: 'Beta',
-    },
-    {
-      label: 'Calendar',
-      href: '/calendar',
-      icon: CalendarDays,
-      roles: ['admin', 'strategist', 'founder'],
       badge: 'Beta',
     },
     {
