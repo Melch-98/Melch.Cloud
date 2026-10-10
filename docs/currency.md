@@ -31,7 +31,7 @@
 | Geo Performance | Already converted (shared FX helpers) |
 | Ad Perspective | `makeFmt` (Meta account currency) |
 | Campaigns | Fixed — Meta **and** Google native → reporting FX in `/api/campaign-metrics`; UI uses reporting symbol (incl. chart ticks) |
-| Triple Whale sync | Passes reporting currency into TW SQL; **prefer Shopify sync for spend truth** (TW channel spend may still be native/USD-ish depending on TW) |
+| Triple Whale sync | Orders and other-channel spend still come from TW SQL in the reporting currency. When `fetchDailyAdSpend` returns `metaOk`, `meta_spend` is Meta's own daily spend (0 on days with no spend) instead of TW `facebook-ads`. A failed Meta fetch keeps the TW value. Google follows that same success rule. Those amounts are the ad-account daily totals, the same figures Shopify sync converts when the account currency differs from settlement. |
 
 ## Residual risks
 
