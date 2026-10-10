@@ -3,11 +3,11 @@ import { resolveShopIanaTimeZone } from '@/lib/shopify/shop-timezone';
 import { nextOrdersPage, type OrdersPageResult } from '@/lib/shopify/orders-pages';
 import { upsertShopifyOrders } from '@/lib/shopify/order-sync';
 import { fetchTripleWhaleOrders, tripleWhaleOrderRows } from '@/lib/shopify/triple-whale-orders';
+import { SHOPIFY_CONFIG } from '@/lib/shopify/config';
 import { resolveOrderConnection, type OrderBrand } from '@/lib/shopify/order-connection';
 
 type SupabaseLike = { from: (table: string) => any };
 
-const ORDERS_API_VERSION = '2024-01';
 const PAGE_CAP = 80;
 const UPSERT_CHUNK = 200;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -234,7 +234,7 @@ async function backfillAdmin(
   const key = backfillCursorKey(base.brand_id, base.start_date, base.end_date);
   const saved = await readCursor(supabase, key);
   const initial =
-    `https://${domain}/admin/api/${ORDERS_API_VERSION}/orders.json?` +
+    `https://${domain}/admin/api/${SHOPIFY_CONFIG.apiVersion}/orders.json?` +
     new URLSearchParams({
       status: 'any',
       limit: '250',

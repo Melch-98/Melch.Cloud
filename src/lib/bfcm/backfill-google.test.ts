@@ -17,7 +17,7 @@ describe('Google today rows', () => {
 describe('Shopify backfill resume URL', () => {
   it('keeps a same-shop orders page and drops an access token', () => {
     const next = safeShopifyNextUrl(
-      'https://mintier.myshopify.com/admin/api/2024-01/orders.json?limit=250&page_info=abc&access_token=secret',
+      'https://mintier.myshopify.com/admin/api/2026-04/orders.json?limit=250&page_info=abc&access_token=secret',
       'mintier.myshopify.com'
     );
     expect(next).toContain('page_info=abc');

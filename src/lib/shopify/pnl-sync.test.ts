@@ -35,6 +35,27 @@ function order(id: number, createdAt: string, subtotal: string): PnlShopifyOrder
   };
 }
 
+test('removed shipping lines are left out and money sets fill a missing flat amount', () => {
+  const row = order(1, '2026-10-02T12:00:00Z', '10.00');
+  row.total_discounts = '';
+  row.total_discounts_set = { shop_money: { amount: '2.00' } };
+  row.shipping_lines = [
+    { price: '5.00', discounted_price: '4.00', is_removed: true },
+    { price: '8.00', discounted_price: '3.50' },
+  ];
+  row.refunds = [
+    {
+      created_at: '2026-10-02T13:00:00Z',
+      transactions: [{ kind: 'refund', amount: 1.25 }],
+    },
+  ];
+  const buckets = aggregateOrdersByDay([row], 'UTC');
+  const day = buckets.get('2026-10-02');
+  assert.equal(day?.gross_sales, 12);
+  assert.equal(day?.shipping, 3.5);
+  assert.equal(day?.refunds, -1.25);
+});
+
 test('order timestamps bucket on the shop-local date in Toronto, Chicago, and UTC', () => {
   const stamp = '2026-10-02T00:30:00Z';
   assert.equal(shopLocalDay(stamp, 'UTC'), '2026-10-02');

@@ -23,6 +23,8 @@ export const maxDuration = 300;
  *    fetch writes 0 for days it omits; a failed fetch does not.
  * 3. Pull shopify_orders since the newest stored row (48 hour floor, 45 day
  *    cap). A longer gap is the oldest 10 days, then the next run continues.
+ *    Each Shopify Admin brand logs access_scopes.json handles once. The line
+ *    is handles only.
  * 4. Compare daily_pnl.gross_sales to shopify_orders gross for Shopify Admin
  *    brands over the last 14 complete shop-local days. Triple Whale-only
  *    brands are skipped. The check is skipped when under 20s remain before

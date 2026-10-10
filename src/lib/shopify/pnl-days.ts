@@ -1,3 +1,4 @@
+import { readShopifyAmount } from './rest-payload.ts';
 import { shopLocalDay } from './shop-time.ts';
 
 /**
@@ -8,17 +9,21 @@ export interface PnlShopifyOrder {
   id: number;
   created_at: string;
   financial_status: string;
-  subtotal_price: string;
-  total_discounts: string;
-  total_tax: string;
+  subtotal_price: string | number;
+  subtotal_price_set?: unknown;
+  total_discounts: string | number;
+  total_discounts_set?: unknown;
+  total_tax: string | number;
+  total_tax_set?: unknown;
   shipping_lines?: Array<{
-    discounted_price_set?: { shop_money: { amount: string } };
-    discounted_price?: string;
-    price: string;
+    is_removed?: boolean;
+    discounted_price_set?: { shop_money: { amount: string | number } };
+    discounted_price?: string | number;
+    price?: string | number;
   }>;
   refunds?: Array<{
     created_at: string;
-    transactions?: Array<{ amount: string; kind: string }>;
+    transactions?: Array<{ amount: string | number; amount_set?: unknown; kind: string }>;
   }>;
   customer: { id: number; orders_count: number } | null;
   lifetimeOrdersCount?: number;
@@ -110,14 +115,21 @@ export function aggregateOrdersByDay(
     const dateStr = shopLocalDay(order.created_at, timeZone);
     const bucket = getOrCreate(dateStr);
 
-    const subtotal = parseFloat(order.subtotal_price);
-    const totalDiscounts = parseFloat(order.total_discounts);
+    const subtotal = readShopifyAmount(order.subtotal_price, order.subtotal_price_set) ?? 0;
+    const totalDiscounts = readShopifyAmount(order.total_discounts, order.total_discounts_set) ?? 0;
     const grossSales = subtotal + totalDiscounts;
     const discounts = -Math.abs(totalDiscounts);
-    const taxes = parseFloat(order.total_tax);
-    // Use post-discount shipping (what customer actually paid), not gross shipping price
+    const taxes = readShopifyAmount(order.total_tax, order.total_tax_set) ?? 0;
+    // Post-discount shipping the customer paid. 2024-04 and later keep removed
+    // shipping lines on the order and mark them is_removed; 2024-01 omitted them.
     const shipping = (order.shipping_lines || []).reduce((sum: number, line) => {
-      return sum + parseFloat(line.discounted_price_set?.shop_money?.amount || line.discounted_price || line.price || '0');
+      if (line.is_removed) return sum;
+      const amount =
+        readShopifyAmount(line.discounted_price_set?.shop_money?.amount) ??
+        readShopifyAmount(line.discounted_price) ??
+        readShopifyAmount(line.price) ??
+        0;
+      return sum + amount;
     }, 0);
 
     // NC = guest order OR first order for this customer
@@ -146,7 +158,7 @@ export function aggregateOrdersByDay(
       let refundAmount = 0;
       for (const txn of refund.transactions || []) {
         if (txn.kind === 'refund') {
-          refundAmount += parseFloat(txn.amount);
+          refundAmount += readShopifyAmount(txn.amount, txn.amount_set) ?? 0;
         }
       }
       refundBucket.refunds -= Math.abs(refundAmount);

@@ -18,6 +18,7 @@ export default defineConfig({
       'src/lib/set-password-token.test.ts',
       'src/lib/set-password-limit.test.ts',
       'src/app/api/admin/invite-security.test.ts',
+      'src/app/api/admin/shopify-scopes/**/*.test.ts',
       'src/lib/bfcm/**/*.test.ts',
       'src/app/api/bfcm-goals/**/*.test.ts',
       'src/lib/live-creatives/**/*.test.ts',

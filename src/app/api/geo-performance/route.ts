@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { gaqlQuery, normalizeCustomerId } from '@/lib/pipeboard-google';
 import { getFxRates, toBase } from '@/lib/currency';
+import { SHOPIFY_CONFIG } from '@/lib/shopify/config';
+import { readShopifyAmount } from '@/lib/shopify/rest-payload';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -381,7 +383,7 @@ async function resolveShopifyAuth(
 }
 
 async function fetchShopTimeZone(domain: string, token: string): Promise<string | null> {
-  const res = await fetch(`https://${domain}/admin/api/2024-01/shop.json?fields=iana_timezone`, {
+  const res = await fetch(`https://${domain}/admin/api/${SHOPIFY_CONFIG.apiVersion}/shop.json?fields=iana_timezone`, {
     headers: { 'X-Shopify-Access-Token': token },
   });
   if (!res.ok) return null;
@@ -407,7 +409,7 @@ async function fetchLifetimeOrderCounts(
   const CHUNK = 100;
   for (let i = 0; i < customerIds.length; i += CHUNK) {
     const slice = customerIds.slice(i, i + CHUNK);
-    const res = await fetch(`https://${domain}/admin/api/2024-01/graphql.json`, {
+    const res = await fetch(`https://${domain}/admin/api/${SHOPIFY_CONFIG.apiVersion}/graphql.json`, {
       method: 'POST',
       headers: {
         'X-Shopify-Access-Token': token,
@@ -509,7 +511,7 @@ async function catchUpShopifyOrders(
   let nextUrl: string | null = null;
   let truncated = false;
   const firstUrl =
-    `https://${domain}/admin/api/2024-01/orders.json?status=any&limit=250` +
+    `https://${domain}/admin/api/${SHOPIFY_CONFIG.apiVersion}/orders.json?status=any&limit=250` +
     `&created_at_min=${encodeURIComponent(createdMin)}` +
     `&created_at_max=${encodeURIComponent(new Date().toISOString())}`;
 
@@ -540,10 +542,10 @@ async function catchUpShopifyOrders(
       shopify_order_id: o.id,
       order_number: o.name ?? null,
       email: o.email ?? null,
-      total_price: o.total_price ?? null,
-      subtotal_price: o.subtotal_price ?? null,
-      total_tax: o.total_tax ?? null,
-      total_discounts: o.total_discounts ?? null,
+      total_price: readShopifyAmount(o.total_price, o.total_price_set),
+      subtotal_price: readShopifyAmount(o.subtotal_price, o.subtotal_price_set),
+      total_tax: readShopifyAmount(o.total_tax, o.total_tax_set),
+      total_discounts: readShopifyAmount(o.total_discounts, o.total_discounts_set),
       currency: o.currency ?? null,
       financial_status: o.financial_status ?? null,
       fulfillment_status: o.fulfillment_status ?? null,

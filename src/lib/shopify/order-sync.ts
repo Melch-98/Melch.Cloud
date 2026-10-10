@@ -1,15 +1,14 @@
+import { logGrantedScopeHandles } from './access-scopes.ts';
 import { classifyShopifyConnection } from './brand-connection';
 import { clearCatchUpCursor, loadCatchUpCursors, saveCatchUpCursor } from './catchup-cursor';
 import { exchangeClientCredentials } from './client-credentials';
-import { isValidShopDomain, normalizeShopDomain } from './config';
+import { isValidShopDomain, normalizeShopDomain, SHOPIFY_CONFIG } from './config';
 import { shopifyOrderToRow } from './order-row';
 import { orderCatchUpPlan, type OrderCatchUpPlan } from './order-window';
 import { fetchTripleWhaleOrders, tripleWhaleOrderRows } from './triple-whale-orders';
 
 const ORDER_CURSOR_PREFIX = 'shopify_order_catchup:';
 
-/** Same Admin API version shopify-sync and Geo catch-up already call. */
-const ORDERS_API_VERSION = '2024-01';
 const PAGE_CAP = 80;
 const UPSERT_CHUNK = 200;
 
@@ -81,6 +80,35 @@ function latestCreatedAt(orders: Record<string, unknown>[]): string | null {
   return iso;
 }
 
+/** Scope handles for one Shopify Admin brand. Token and secret stay out of the log. */
+async function logBrandScopes(
+  brand: BrandRow,
+  token: string | null,
+  domain: string | null
+): Promise<void> {
+  if (!domain || !isValidShopDomain(domain)) return;
+  try {
+    const accessToken =
+      token ||
+      (brand.shopify_client_id && brand.shopify_client_secret
+        ? (
+            await exchangeClientCredentials(
+              domain,
+              brand.shopify_client_id,
+              brand.shopify_client_secret
+            )
+          ).accessToken
+        : null);
+    if (!accessToken) return;
+    await logGrantedScopeHandles(brand.name, domain, accessToken);
+  } catch (err) {
+    let message = err instanceof Error ? err.message : 'Shopify access scopes failed';
+    if (brand.shopify_client_secret) message = message.split(brand.shopify_client_secret).join('[redacted]');
+    if (token) message = message.split(token).join('[redacted]');
+    console.warn(`Shopify granted scopes lookup failed for ${brand.name} (${domain}): ${message}`);
+  }
+}
+
 async function rememberOrderCursor(
   supabase: SupabaseLike,
   brandId: string,
@@ -115,7 +143,7 @@ async function fetchOrdersUpdatedSince(
     params.set('updated_at_min', plan.since);
   }
   const firstUrl =
-    `https://${domain}/admin/api/${ORDERS_API_VERSION}/orders.json?${params.toString()}`;
+    `https://${domain}/admin/api/${SHOPIFY_CONFIG.apiVersion}/orders.json?${params.toString()}`;
   let nextUrl: string | null = firstUrl;
 
   for (let page = 0; page < PAGE_CAP && nextUrl; page++) {
@@ -201,6 +229,8 @@ async function syncBrand(
   base.shop_domain = domain;
   base.source = 'shopify_admin';
 
+  let scopeToken: string | null = oauth;
+
   const pull = async (token: string) => {
     const newest = await newestCreatedAt(supabase, domain);
     const plan = orderCatchUpPlan(newest, Date.now(), resumeIso);
@@ -220,34 +250,36 @@ async function syncBrand(
   };
 
   try {
-    const token = oauth
-      ? oauth
-      : (
-          await exchangeClientCredentials(
-            domain,
-            brand.shopify_client_id!,
-            brand.shopify_client_secret!
-          )
-        ).accessToken;
-    try {
-      await pull(token);
-    } catch (err) {
-      // A stale install token should not block a brand that also has custom-app credentials.
-      const shopifyRejected = err instanceof Error && err.message.startsWith('Shopify ');
-      if (!oauth || !clientReady || !shopifyRejected) throw err;
-      const clientToken = (
+    if (!scopeToken) {
+      scopeToken = (
         await exchangeClientCredentials(
           domain,
           brand.shopify_client_id!,
           brand.shopify_client_secret!
         )
       ).accessToken;
-      await pull(clientToken);
+    }
+    try {
+      await pull(scopeToken);
+    } catch (err) {
+      // A stale install token should not block a brand that also has custom-app credentials.
+      const shopifyRejected = err instanceof Error && err.message.startsWith('Shopify ');
+      if (!oauth || !clientReady || !shopifyRejected) throw err;
+      scopeToken = (
+        await exchangeClientCredentials(
+          domain,
+          brand.shopify_client_id!,
+          brand.shopify_client_secret!
+        )
+      ).accessToken;
+      await pull(scopeToken);
     }
     return base;
   } catch (err) {
     base.error = err instanceof Error ? err.message : 'Order sync failed';
     return base;
+  } finally {
+    if (scopeToken) await logGrantedScopeHandles(brand.name, domain, scopeToken);
   }
 }
 
@@ -358,6 +390,7 @@ export async function syncConnectedBrandOrders(
     });
     if (connection === 'none' || (connection === 'triple_whale' && !domain)) continue;
     if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
+      if (connection === 'shopify_admin') await logBrandScopes(brand, liveToken, tokenDomain);
       results.push({
         brand_id: brand.id,
         name: brand.name,

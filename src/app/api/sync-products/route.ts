@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { SHOPIFY_CONFIG } from '@/lib/shopify/config';
+import { shopifyProductTags, shopifyProductsFromPayload } from '@/lib/shopify/rest-payload';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -77,7 +79,7 @@ export async function POST(request: NextRequest) {
 
       let allProducts: any[] = [];
       let url: string | null =
-        `https://${brand.shopify_store_domain}/admin/api/2024-01/products.json?limit=250&status=active`;
+        `https://${brand.shopify_store_domain}/admin/api/${SHOPIFY_CONFIG.apiVersion}/products.json?limit=250&status=active`;
 
       while (url) {
         const res: Response = await fetch(url, {
@@ -93,7 +95,7 @@ export async function POST(request: NextRequest) {
         }
 
         const data = await res.json();
-        allProducts = allProducts.concat(data.products || []);
+        allProducts = allProducts.concat(shopifyProductsFromPayload(data));
 
         // Handle Shopify Link header pagination
         const linkHeader: string | null = res.headers.get('link');
@@ -116,7 +118,7 @@ export async function POST(request: NextRequest) {
             status: product.status,
             product_type: product.product_type || '',
             vendor: product.vendor || '',
-            tags: product.tags ? product.tags.split(', ') : [],
+            tags: shopifyProductTags(product.tags),
             variants: product.variants || [],
             images: product.images || [],
             shopify_created_at: product.created_at,

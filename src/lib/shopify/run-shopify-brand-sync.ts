@@ -13,7 +13,10 @@ import {
   toReportingCurrency,
 } from '@/lib/currency';
 import { fetchGoogleAdsCurrency } from '@/lib/pipeboard-google';
+import { exchangeClientCredentials } from '@/lib/shopify/client-credentials';
+import { SHOPIFY_CONFIG } from '@/lib/shopify/config';
 import { fetchDailyAdSpend } from '@/lib/shopify/fetch-ad-spend';
+import { readShopifyAmount, shopifyProductTags, shopifyProductsFromPayload } from '@/lib/shopify/rest-payload';
 import { collectPagedOrders, ordersFromPayload, type OrdersPageResult } from '@/lib/shopify/orders-pages';
 import { buildFullCoveredDayRows, buildSpendOnlyCoveredDayRows } from '@/lib/shopify/pnl-covered-days';
 import { aggregateOrdersByDay, type PnlShopifyOrder } from '@/lib/shopify/pnl-days';
@@ -31,9 +34,13 @@ interface ShopifyOrder {
   financial_status: string;
   fulfillment_status: string | null;
   total_price: string;
+  total_price_set?: unknown;
   subtotal_price: string;
+  subtotal_price_set?: unknown;
   total_discounts: string;
+  total_discounts_set?: unknown;
   total_tax: string;
+  total_tax_set?: unknown;
   currency: string;
   total_shipping_price_set: {
     shop_money: { amount: string };
@@ -153,32 +160,6 @@ export async function resolveBrandReportingCurrency(
   });
 }
 
-// ─── Shopify Token Exchange (Client Credentials Grant) ──────────
-
-async function getShopifyToken(
-  domain: string,
-  clientId: string,
-  clientSecret: string
-): Promise<string> {
-  const res = await fetch(`https://${domain}/admin/oauth/access_token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'client_credentials',
-      client_id: clientId,
-      client_secret: clientSecret,
-    }),
-  });
-
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Shopify token exchange failed (${res.status}): ${body}`);
-  }
-
-  const data = await res.json();
-  return data.access_token;
-}
-
 // ─── Shopify API helper ─────────────────────────────────────────
 
 async function shopifyFetch(
@@ -187,7 +168,7 @@ async function shopifyFetch(
   endpoint: string,
   params: Record<string, string> = {}
 ): Promise<{ data: unknown; nextLink: string | null }> {
-  const url = new URL(`https://${domain}/admin/api/2024-01/${endpoint}.json`);
+  const url = new URL(`https://${domain}/admin/api/${SHOPIFY_CONFIG.apiVersion}/${endpoint}.json`);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
 
   const res = await fetch(url.toString(), {
@@ -284,7 +265,7 @@ export async function enrichCustomerOrderCounts(
     }`;
     try {
       const res = await fetch(
-        `https://${domain}/admin/api/2024-01/graphql.json`,
+        `https://${domain}/admin/api/${SHOPIFY_CONFIG.apiVersion}/graphql.json`,
         {
           method: 'POST',
           headers: {
@@ -427,11 +408,13 @@ export async function runShopifyBrandSync(
 
     let shopifyToken = oauthAccessToken;
     if (!spendOnly && !shopifyToken) {
-      shopifyToken = await getShopifyToken(
-        brand.shopify_store_domain,
-        brand.shopify_client_id!,
-        brand.shopify_client_secret!
-      );
+      shopifyToken = (
+        await exchangeClientCredentials(
+          brand.shopify_store_domain,
+          brand.shopify_client_id!,
+          brand.shopify_client_secret!
+        )
+      ).accessToken;
     }
     const zone = await resolveShopIanaTimeZone(supabase, brand, shopifyToken);
     timeZone = zone.timeZone;
@@ -542,10 +525,10 @@ export async function runShopifyBrandSync(
           shopify_order_id: o.id,
           order_number: o.name ?? null,
           email: o.email ?? null,
-          total_price: o.total_price ?? null,
-          subtotal_price: o.subtotal_price ?? null,
-          total_tax: o.total_tax ?? null,
-          total_discounts: o.total_discounts ?? null,
+          total_price: readShopifyAmount(o.total_price, o.total_price_set),
+          subtotal_price: readShopifyAmount(o.subtotal_price, o.subtotal_price_set),
+          total_tax: readShopifyAmount(o.total_tax, o.total_tax_set),
+          total_discounts: readShopifyAmount(o.total_discounts, o.total_discounts_set),
           currency: o.currency ?? null,
           financial_status: o.financial_status ?? null,
           fulfillment_status: o.fulfillment_status ?? null,
@@ -588,8 +571,7 @@ export async function runShopifyBrandSync(
         'products',
         { limit: '250', status: 'active' }
       );
-      const firstProductData = firstProducts.data as { products: any[] };
-      allProducts.push(...firstProductData.products);
+      allProducts.push(...shopifyProductsFromPayload(firstProducts.data));
       nextProductUrl = firstProducts.nextLink;
 
       while (nextProductUrl) {
@@ -603,8 +585,7 @@ export async function runShopifyBrandSync(
         const linkHeader = res.headers.get('Link') || '';
         const nextMatch = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
         nextProductUrl = nextMatch ? nextMatch[1] : null;
-        const data = (await res.json()) as { products: any[] };
-        allProducts.push(...data.products);
+        allProducts.push(...shopifyProductsFromPayload(await res.json()));
         await new Promise((r) => setTimeout(r, 100));
       }
 
@@ -618,7 +599,7 @@ export async function runShopifyBrandSync(
           status: p.status,
           product_type: p.product_type || '',
           vendor: p.vendor || '',
-          tags: p.tags ? p.tags.split(', ') : [],
+          tags: shopifyProductTags(p.tags),
           variants: p.variants || [],
           images: p.images || [],
           shopify_created_at: p.created_at,
