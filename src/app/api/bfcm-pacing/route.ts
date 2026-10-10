@@ -27,6 +27,17 @@ import {
   type HourlySpend,
   type MetaAccountCache,
 } from '@/lib/bfcm/meta-insights';
+import {
+  attributedMetric,
+  campaignEmptyMessage,
+  campaignInsightsUrl,
+  campaignsFromInsightRows,
+  readCampaignMeta,
+  type CampaignCommandRow,
+  type CampaignInsightRow,
+  type CampaignMetaInfo,
+} from '@/lib/bfcm/campaigns';
+import { buildLastYearBfcmPnl, lastYearBfcmRange, type LastYearBfcmPnl, type LastYearPnlInputRow } from '@/lib/bfcm/last-year-pnl';
 import { merRatio } from '@/lib/bfcm/pacing';
 import {
   averageSalesByHour,
@@ -60,27 +71,6 @@ interface DailyPoint {
   roas: number;
 }
 
-interface CampaignToday {
-  campaignId: string;
-  campaignName: string;
-  objective: string;
-  status: string;
-  spend: number;
-  impressions: number;
-  clicks: number;
-  ctr: number;
-  cpm: number;
-  cpc: number;
-  purchases: number;
-  purchaseValue: number;
-  roas: number;
-  cpa: number;
-  l7DailySpend: number;
-  l7Roas: number;
-  spendPaceVsL7: number;
-  roasDeltaVsL7: number;
-}
-
 interface HistorySlice {
   l7HourlyAvg: HourlySpend[];
   l7DailyAvg: number;
@@ -105,6 +95,7 @@ interface HistorySlice {
   shopifyLastYear: DaySales | null;
   earliestOrderDay: string | null;
   pnl: { ncRev: number; meta: number; google: number; other: number; hasData: boolean };
+  lastYearBfcmPnl: LastYearBfcmPnl;
   warnings: string[];
 }
 
@@ -113,7 +104,8 @@ interface LiveSlice {
   totalSpendSoFar: number;
   purchases: number;
   purchaseValue: number;
-  campaigns: CampaignToday[];
+  campaigns: CampaignCommandRow[];
+  campaignsError: string | null;
   shopifyToday: DaySales;
   newestOrderAt: string | null;
   google: {
@@ -358,6 +350,8 @@ export async function GET(request: NextRequest) {
         window,
         alignment,
         timezone,
+        reportingCurrency,
+        fxRates,
         connection,
       });
       if (!history.warnings.some((warning) => warning.includes('cannot be in the future'))) {
@@ -469,8 +463,10 @@ export async function GET(request: NextRequest) {
       sameDay: history.lySameDay,
       fullWindow: history.lyWindow,
     },
+    lastYearBfcmPnl: history.lastYearBfcmPnl,
     thisYearBfcm: { fullWindow: clock.today < window.start ? [] : history.tyWindow },
     campaigns: live.campaigns,
+    campaignsError: live.campaignsError,
     google: live.google,
     shopify: {
       currency: shopifyCurrency,
@@ -513,6 +509,8 @@ async function loadHistory(input: {
   window: ReturnType<typeof bfcmWindow>;
   alignment: ReturnType<typeof alignLastYear>;
   timezone: string;
+  reportingCurrency: string;
+  fxRates: Record<string, number>;
   connection: { domain: string | null; token: string | null };
 }): Promise<HistorySlice> {
   const warnings: string[] = [];
@@ -542,6 +540,14 @@ async function loadHistory(input: {
     shopifyLastYear: null,
     earliestOrderDay: null,
     pnl: { ncRev: 0, meta: 0, google: 0, other: 0, hasData: false },
+    lastYearBfcmPnl: buildLastYearBfcmPnl({
+      year: Number(input.window.start.slice(0, 4)),
+      rows: [],
+      earliestOrderDay: null,
+      ncEstimated: false,
+      reportingCurrency: input.reportingCurrency,
+      fxRates: input.fxRates,
+    }),
     warnings,
   };
 
@@ -602,6 +608,40 @@ async function loadHistory(input: {
     slice.pnl = { ncRev, meta, google, other, hasData: true };
   })().catch(() => undefined);
 
+  const viewedYear = Number(input.window.start.slice(0, 4));
+  const lastYearRange = lastYearBfcmRange(viewedYear);
+  let lastYearRows: LastYearPnlInputRow[] = [];
+  let ncEstimated = false;
+  const lastYearPnl = (async () => {
+    const { data, error } = await input.supabase
+      .from('daily_pnl')
+      .select('date, nc_orders, rc_orders, nc_revenue, gross_sales, discounts, refunds, meta_spend, google_spend, currency')
+      .eq('brand_id', input.brandId)
+      .gte('date', lastYearRange.start)
+      .lte('date', lastYearRange.end);
+    if (error) {
+      warnings.push(`Last year BFCM P&L failed: ${error.message}`);
+      return;
+    }
+    lastYearRows = (data || []) as LastYearPnlInputRow[];
+    const bounds = shopDayRangeIso(lastYearRange.start, lastYearRange.end, input.timezone);
+    const imported = await input.supabase
+      .from('shopify_orders')
+      .select('shopify_order_id')
+      .eq('brand_id', input.brandId)
+      .gte('shopify_created_at', bounds.min)
+      .lte('shopify_created_at', bounds.max)
+      .filter('raw->_import->>source', 'like', 'csv_import*')
+      .limit(1);
+    if (imported.error) {
+      warnings.push(`Last year NC estimate check failed: ${imported.error.message}`);
+      return;
+    }
+    ncEstimated = Array.isArray(imported.data) && imported.data.length > 0;
+  })().catch((err) => {
+    warnings.push(`Last year BFCM P&L failed: ${err instanceof Error ? err.message : 'query failed'}`);
+  });
+
   const meta = (async () => {
     if (!input.metaReady || !input.adAccountId) return;
     const account = input.adAccountId;
@@ -643,13 +683,7 @@ async function loadHistory(input: {
         ? metaCollect(rangeUrl(sameDay.since, sameDay.until, `fields=spend,actions,action_values&${ATTRIBUTION}`), input.metaToken)
         : Promise.resolve([] as any[]),
       l7
-        ? metaCollect(
-            insightUrl(
-              account,
-              `level=campaign&time_range=${encodeURIComponent(JSON.stringify({ since: l7.since, until: l7.until }))}&fields=spend,actions,action_values&${ATTRIBUTION}&limit=500`
-            ),
-            input.metaToken
-          ).catch(() => [] as any[])
+        ? metaCollect(campaignInsightsUrl(account, l7.since, l7.until), input.metaToken).catch(() => [] as any[])
         : Promise.resolve([] as any[]),
     ]);
     const byDay = parseHourlySpendRows(hourlyRows);
@@ -691,14 +725,22 @@ async function loadHistory(input: {
       if (!id) continue;
       const current = slice.campaignL7[id] || { spend: 0, purchaseValue: 0 };
       current.spend += parseFloat(row.spend || '0');
-      current.purchaseValue += firstAction(row.action_values);
+      current.purchaseValue += attributedMetric(row.action_values);
       slice.campaignL7[id] = current;
     }
   })().catch((err) => {
     warnings.push(`Meta history failed: ${err instanceof Error ? err.message : 'request failed'}`);
   });
 
-  await Promise.all([shopifyL7, shopifyLy, pnl, meta]);
+  await Promise.all([shopifyL7, shopifyLy, pnl, lastYearPnl, meta]);
+  slice.lastYearBfcmPnl = buildLastYearBfcmPnl({
+    year: viewedYear,
+    rows: lastYearRows,
+    earliestOrderDay: slice.earliestOrderDay,
+    ncEstimated,
+    reportingCurrency: input.reportingCurrency,
+    fxRates: input.fxRates,
+  });
   return slice;
 }
 
@@ -724,6 +766,7 @@ async function loadLive(input: {
     purchases: 0,
     purchaseValue: 0,
     campaigns: [],
+    campaignsError: null,
     shopifyToday: emptyDaySales(),
     newestOrderAt: null,
     google: {
@@ -764,7 +807,7 @@ async function loadLive(input: {
       return;
     }
     const range = encodeURIComponent(JSON.stringify({ since: today.since, until: today.until }));
-    const [hourlyRows, totals, campaignRows] = await Promise.all([
+    const [hourlyRows, totals, campaignOutcome] = await Promise.all([
       metaCollect(
         insightUrl(account, `level=account&time_range=${range}&breakdowns=hourly_stats_aggregated_by_advertiser_time_zone&fields=spend&limit=500`),
         input.metaToken
@@ -773,10 +816,12 @@ async function loadLive(input: {
         insightUrl(account, `level=account&time_range=${range}&fields=spend,impressions,clicks,actions,action_values&${ATTRIBUTION}&limit=10`),
         input.metaToken
       ),
-      metaCollect(
-        insightUrl(account, `level=campaign&time_range=${range}&fields=spend,impressions,clicks,actions,action_values&${ATTRIBUTION}&limit=500`),
-        input.metaToken
-      ),
+      metaCollect(campaignInsightsUrl(account, today.since, today.until), input.metaToken)
+        .then((rows) => ({ rows, error: null as string | null }))
+        .catch((err: unknown) => ({
+          rows: [] as CampaignInsightRow[],
+          error: err instanceof Error ? err.message : 'Campaign insights failed',
+        })),
     ]);
     const hours = parseHourlySpendRows(hourlyRows).get(today.since) || emptyHourlySpend();
     slice.hourlySpend = hours;
@@ -787,10 +832,18 @@ async function loadLive(input: {
       if (slice.totalSpendSoFar === 0) slice.totalSpendSoFar = parseFloat(totals[0].spend || '0');
     }
     slice.metaCurrency = input.metaCurrency || null;
-    slice.campaigns = await campaignsFromRows(campaignRows, input.campaignL7, input.metaToken);
+    const metaInfo = await loadCampaignMeta(campaignOutcome.rows, input.metaToken);
+    slice.campaigns = campaignsFromInsightRows(campaignOutcome.rows, input.campaignL7, metaInfo);
+    slice.campaignsError = campaignEmptyMessage({
+      campaignCount: slice.campaigns.length,
+      accountSpend: slice.totalSpendSoFar,
+      error: campaignOutcome.error,
+    });
     slice.metaOk = true;
   })().catch((err) => {
-    warnings.push(`Meta today failed: ${err instanceof Error ? err.message : 'request failed'}`);
+    const message = err instanceof Error ? err.message : 'request failed';
+    warnings.push(`Meta today failed: ${message}`);
+    if (slice.campaigns.length === 0) slice.campaignsError = message;
   });
 
   const google = (async () => {
@@ -823,64 +876,22 @@ async function loadLive(input: {
   return slice;
 }
 
-async function campaignsFromRows(
-  rows: any[],
-  l7: Record<string, { spend: number; purchaseValue: number }>,
-  token: string
-): Promise<CampaignToday[]> {
-  const ids = rows.map((row) => row.campaign_id).filter(Boolean);
-  const meta: Record<string, { objective: string; status: string }> = {};
+async function loadCampaignMeta(rows: { campaign_id?: string | number | null }[], token: string): Promise<Record<string, CampaignMetaInfo>> {
+  const ids = rows.map((row) => row.campaign_id).filter((id) => id != null && id !== '').map(String);
+  const meta: Record<string, CampaignMetaInfo> = {};
   await Promise.all(
     Array.from({ length: Math.ceil(ids.length / 50) }, (_, index) => ids.slice(index * 50, index * 50 + 50)).map(async (chunk) => {
       if (chunk.length === 0) return;
       try {
-        const json = await metaGet(`${META_BASE}/?ids=${chunk.join(',')}&fields=objective,effective_status`, token);
-        for (const [id, info] of Object.entries(json || {})) {
-          const record = info as { objective?: string; effective_status?: string };
-          meta[id] = { objective: record?.objective || 'UNKNOWN', status: record?.effective_status || 'UNKNOWN' };
-        }
+        const json = await metaGet(
+          `${META_BASE}/?ids=${chunk.join(',')}&fields=objective,effective_status,daily_budget,lifetime_budget`,
+          token
+        );
+        Object.assign(meta, readCampaignMeta(json));
       } catch {
-        /* campaign status is optional */
+        /* status and budget are optional; the insight rows still list */
       }
     })
   );
-
-  const campaigns: CampaignToday[] = [];
-  for (const row of rows) {
-    const id = row.campaign_id;
-    if (!id) continue;
-    const spend = parseFloat(row.spend || '0');
-    if (spend <= 0) continue;
-    const purchases = firstAction(row.actions);
-    const purchaseValue = firstAction(row.action_values);
-    const impressions = parseInt(row.impressions || '0', 10);
-    const clicks = parseInt(row.clicks || '0', 10);
-    const prior = l7[id] || { spend: 0, purchaseValue: 0 };
-    const l7DailySpend = prior.spend / 7;
-    const l7Roas = ratio(prior.spend, prior.purchaseValue);
-    const info = meta[id] || { objective: 'UNKNOWN', status: 'UNKNOWN' };
-    const roas = ratio(spend, purchaseValue);
-    campaigns.push({
-      campaignId: id,
-      campaignName: row.campaign_name || id,
-      objective: info.objective,
-      status: info.status,
-      spend,
-      impressions,
-      clicks,
-      ctr: impressions > 0 ? (clicks / impressions) * 100 : 0,
-      cpm: impressions > 0 ? (spend / impressions) * 1000 : 0,
-      cpc: clicks > 0 ? spend / clicks : 0,
-      purchases,
-      purchaseValue,
-      roas,
-      cpa: purchases > 0 ? spend / purchases : 0,
-      l7DailySpend,
-      l7Roas,
-      spendPaceVsL7: l7DailySpend > 0 ? spend / l7DailySpend : 0,
-      roasDeltaVsL7: prior.spend > 0 ? roas - l7Roas : 0,
-    });
-  }
-  campaigns.sort((a, b) => b.spend - a.spend);
-  return campaigns;
+  return meta;
 }
