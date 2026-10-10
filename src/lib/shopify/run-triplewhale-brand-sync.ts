@@ -6,6 +6,9 @@ import {
   invalidatePnlCache,
 } from '@/lib/redis';
 import { currencyFromShopInfo, resolveReportingCurrency } from '@/lib/currency';
+import { fetchDailyAdSpend } from '@/lib/shopify/fetch-ad-spend';
+import { spendFieldsForCoveredDay } from '@/lib/shopify/pnl-covered-days';
+import { addCalendarDays } from '@/lib/shopify/shop-time';
 import { upsertDailyPnl } from '@/lib/shopify/upsert-daily-pnl';
 
 // ─── Helpers ───────────────────────────────────────────────────
@@ -14,6 +17,26 @@ const round2 = (val: number) => Math.round(val * 100) / 100;
 
 const META_CHANNELS = ['facebook-ads'];
 const GOOGLE_CHANNELS = ['google-ads'];
+
+function eachDateInclusive(start: string, end: string): string[] {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || start > end) {
+    return [];
+  }
+  const days: string[] = [];
+  for (let day = start; day <= end; day = addCalendarDays(day, 1)) {
+    days.push(day);
+  }
+  return days;
+}
+
+function spendTotal(values: Map<string, number>): number {
+  let total = 0;
+  for (const value of Array.from(values.values())) {
+    const amount = Number(value);
+    if (Number.isFinite(amount)) total += amount;
+  }
+  return total;
+}
 
 async function tripleWhaleSQL(
   apiKey: string,
@@ -195,6 +218,58 @@ export async function runTripleWhaleBrandSync(
       }
     }
 
+    // Triple Whale facebook-ads stopped returning Organic Jaguar spend. Meta and
+    // Google use the same daily fetch as the Shopify path. A successful fetch
+    // replaces that channel for every day in the window, including explicit 0.
+    // A failed fetch leaves the Triple Whale map alone. Order columns stay on
+    // the blended rows below and are omitted from spend-only rows.
+    const warnings: string[] = [];
+    const accountIds: { meta_ad_account_id: string | null; google_ads_customer_id: string | null } = {
+      meta_ad_account_id: null,
+      google_ads_customer_id: null,
+    };
+    const { data: spendIds, error: spendIdError } = await supabase
+      .from('brands')
+      .select('meta_ad_account_id, google_ads_customer_id')
+      .eq('id', brand.id)
+      .single();
+    if (spendIdError || !spendIds) {
+      console.warn(
+        `Triple Whale sync could not read ad account ids for ${brand.name}; keeping Triple Whale channel spend`
+      );
+    } else {
+      accountIds.meta_ad_account_id = spendIds.meta_ad_account_id ?? null;
+      accountIds.google_ads_customer_id = spendIds.google_ads_customer_id ?? null;
+    }
+    const nativeSpend = await fetchDailyAdSpend(supabase, accountIds, start, end);
+    if (nativeSpend.errors.length > 0) {
+      console.warn(
+        `Triple Whale sync kept channel spend where the ad fetch failed for ${brand.name}: ${nativeSpend.errors.join('; ')}`
+      );
+    }
+    const twMetaTotal = spendTotal(metaSpendMap);
+    const metaTotal = spendTotal(nativeSpend.meta);
+    if (nativeSpend.metaOk && twMetaTotal === 0 && metaTotal > 0) {
+      const warning =
+        `Triple Whale facebook-ads spend is 0 for ${brand.name} (${start} to ${end}) ` +
+        `but Meta reports ${round2(metaTotal)}`;
+      console.warn(warning);
+      warnings.push(warning);
+    }
+    if (nativeSpend.metaOk || nativeSpend.googleOk) {
+      for (const date of eachDateInclusive(start, end)) {
+        const fields = spendFieldsForCoveredDay(
+          date,
+          { ok: nativeSpend.metaOk, byDay: nativeSpend.meta },
+          { ok: nativeSpend.googleOk, byDay: nativeSpend.google }
+        );
+        // metaOk writes Meta's own daily spend, including 0, instead of facebook-ads.
+        if (nativeSpend.metaOk) metaSpendMap.set(date, fields.meta_spend ?? 0);
+        // googleOk matches Shopify spendFieldsForCoveredDay. Otherwise google-ads stays.
+        if (nativeSpend.googleOk) googleSpendMap.set(date, fields.google_spend ?? 0);
+      }
+    }
+
     // Deduplicate blended data by event_date (TW can return multiple rows per date)
     const blendedByDate = new Map<string, Record<string, number>>();
     for (const day of blendedData) {
@@ -336,6 +411,8 @@ export async function runTripleWhaleBrandSync(
       daysUpserted: allRows.length,
       ordersUpserted,
       dateRange: { start, end },
+      ...(warnings.length > 0 ? { warnings } : {}),
+      ...(nativeSpend.errors.length > 0 ? { ad_spend_errors: nativeSpend.errors } : {}),
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
