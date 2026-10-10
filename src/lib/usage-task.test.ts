@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createNotionUsageClient } from '@/lib/notion-usage';
 import {
+  NotionRequestError,
   buildUsageTaskCreate,
   matchClient,
   syncUsageTask,
@@ -53,8 +54,11 @@ describe('usage task payload', () => {
       Client: { relation: [{ id: 'client-1' }] },
     });
     expect(body.properties.Name).toEqual({
-      title: [{ text: { content: 'Turn off Mintier @jane Whitelisted Ads' } }],
+      title: [{ type: 'text', text: { content: 'Turn off Mintier @jane Whitelisted Ads' } }],
     });
+    expect(
+      (body.properties.Notes as { rich_text: Array<{ type: string }> }).rich_text[0].type
+    ).toBe('text');
     const notes = (body.properties.Notes as { rich_text: Array<{ text: { content: string } }> }).rich_text[0].text
       .content;
     expect(notes).toContain('Melch: https://melch.cloud/admin#batch-sub-1');
@@ -114,7 +118,43 @@ describe('syncUsageTask', () => {
       }),
     });
     const result = await syncUsageTask({ row: row(), notion });
-    expect(result).toEqual({ ok: false, action: 'failed', error: 'notion' });
+    expect(result).toMatchObject({
+      ok: false,
+      action: 'failed',
+      error: 'notion',
+      failure: {
+        submissionId: 'sub-1',
+        step: 'page_create',
+        status: 500,
+        code: null,
+        message: 'Notion 500',
+      },
+    });
+  });
+
+  it('creates the task without Client when the client lookup throws', async () => {
+    const notion = notionMock({
+      listClients: vi.fn(async () => {
+        throw new NotionRequestError(404, 'object_not_found', 'Could not find data source');
+      }),
+    });
+    const result = await syncUsageTask({ row: row(), notion, appUrl: 'https://melch.cloud' });
+    expect(result).toMatchObject({
+      ok: true,
+      action: 'created',
+      warnings: [
+        {
+          submissionId: 'sub-1',
+          step: 'client_lookup',
+          status: 404,
+          code: 'object_not_found',
+          message: 'Could not find data source',
+        },
+      ],
+    });
+    const body = (notion.createTask as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(body.properties.Client).toBeUndefined();
+    expect(body.properties.Notes.rich_text[0].text.content).toContain('Brand: Mintier');
   });
 
   it('sends the create body through the Notion client with the data source parent', async () => {

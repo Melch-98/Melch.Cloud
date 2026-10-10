@@ -13,6 +13,9 @@ export const maxDuration = 60;
  * Create Agency Tasks pages for batches that have a usage end date and no
  * Notion page yet. GET is the hourly Vercel cron (Bearer CRON_SECRET).
  * A missing key or a Notion error is counted and does not fail the run.
+ * failures lists each row that did not save a page (sanitized Notion status,
+ * code, message, and step). A client lookup error is a warning; the task
+ * is still created without Client.
  */
 export async function GET(req: NextRequest) {
   const cronSecret = process.env.CRON_SECRET;
