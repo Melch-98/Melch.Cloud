@@ -130,6 +130,30 @@ export async function gaqlQueryStrict(token: string, customerId: string, query: 
 }
 
 
+/** Currency and IANA timezone for one Google Ads customer. Missing fields stay null. */
+export async function fetchGoogleAdsCustomer(
+  token: string,
+  customerId: string | null | undefined
+): Promise<{ currency: string | null; timeZone: string | null }> {
+  if (!customerId || !customerId.trim() || !token) return { currency: null, timeZone: null };
+  try {
+    const rows = await gaqlQuery(
+      token,
+      customerId,
+      'SELECT customer.currency_code, customer.time_zone, customer.id FROM customer LIMIT 1'
+    );
+    const customer = rows?.[0]?.customer || {};
+    const code = customer.currencyCode;
+    const zone = customer.timeZone;
+    return {
+      currency: typeof code === 'string' && code.trim() ? code.trim().toUpperCase() : null,
+      timeZone: typeof zone === 'string' && zone.trim() ? zone.trim() : null,
+    };
+  } catch {
+    return { currency: null, timeZone: null };
+  }
+}
+
 // Account currency for FX into brand reporting currency (Shopify settlement).
 export async function fetchGoogleAdsCurrency(
   token: string,

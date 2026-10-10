@@ -10,7 +10,7 @@ import {
   shopTodayAndL7,
   type BfcmDay,
 } from '@/lib/bfcm/calendar';
-import { googleTodayQuery, sumGoogleToday } from '@/lib/bfcm/google-today';
+import { googleAccountHourRows, googleStoreDayQuery } from '@/lib/bfcm/google-today';
 import { enrichOrders, loadOrderFreshness, loadOrdersBetween } from '@/lib/bfcm/load-orders';
 import {
   averageHourlySpend,
@@ -40,6 +40,7 @@ import {
 import { buildLastYearBfcmPnl, lastYearBfcmRange, type LastYearBfcmPnl, type LastYearPnlInputRow } from '@/lib/bfcm/last-year-pnl';
 import { merRatio } from '@/lib/bfcm/pacing';
 import { pacingDisplayFigures, resolveBfcmDisplayCurrency, resolveBfcmStoreCurrency } from '@/lib/bfcm/store-currency';
+import { accountHourRowsFromMeta, rebucketAccountHoursToStoreDay, storeDayAccountRange } from '@/lib/bfcm/store-day-spend';
 import {
   averageSalesByHour,
   daySalesOrEmpty,
@@ -48,8 +49,8 @@ import {
   type DaySales,
   type HourSales,
 } from '@/lib/bfcm/shopify-sales';
-import { fetchGoogleAdsCurrency, gaqlQueryStrict, resolvePipeboardToken } from '@/lib/pipeboard-google';
-import { shopLocalDay } from '@/lib/shopify/shop-time';
+import { fetchGoogleAdsCustomer, gaqlQueryStrict, resolvePipeboardToken } from '@/lib/pipeboard-google';
+import { shopLocalDay, ymdInTimeZone } from '@/lib/shopify/shop-time';
 import { resolveShopIanaTimeZone } from '@/lib/shopify/shop-timezone';
 import { resolveOrderConnection } from '@/lib/shopify/order-connection';
 import { webhookStatusKey, type StoredWebhookStatus } from '@/lib/shopify/webhook-status';
@@ -379,6 +380,7 @@ export async function GET(request: NextRequest) {
         adAccountId: brand.meta_ad_account_id,
         today: clock.today,
         metaToday: metaClock.today,
+        accountTimeZone,
         timezone,
         connection,
         campaignL7: history.campaignL7,
@@ -777,6 +779,7 @@ async function loadLive(input: {
   adAccountId: string | null;
   today: string;
   metaToday: string;
+  accountTimeZone: string;
   timezone: string;
   connection: { domain: string | null; token: string | null; connection: 'shopify_admin' | 'triple_whale' | 'none' };
   campaignL7: Record<string, { spend: number; purchaseValue: number }>;
@@ -824,32 +827,44 @@ async function loadLive(input: {
   const meta = (async () => {
     if (!input.metaReady || !input.adAccountId) return;
     const account = input.adAccountId;
-    const today = clampMetaRange(input.metaToday, input.metaToday, input.metaToday);
-    if (!today) {
+    const accountDay = clampMetaRange(input.metaToday, input.metaToday, input.metaToday);
+    const storeRange = storeDayAccountRange(input.today, input.timezone, input.accountTimeZone, input.metaToday);
+    if (!accountDay && !storeRange) {
       slice.metaOk = true;
       return;
     }
-    const range = encodeURIComponent(JSON.stringify({ since: today.since, until: today.until }));
+    const accountRange = accountDay
+      ? encodeURIComponent(JSON.stringify({ since: accountDay.since, until: accountDay.until }))
+      : '';
     const [hourlyRows, totals, campaignOutcome] = await Promise.all([
-      metaCollect(
-        insightUrl(account, `level=account&time_range=${range}&breakdowns=hourly_stats_aggregated_by_advertiser_time_zone&fields=spend&limit=500`),
-        input.metaToken
-      ),
-      metaCollect(
-        insightUrl(account, `level=account&time_range=${range}&fields=spend,impressions,clicks,actions,action_values&${ATTRIBUTION}&limit=10`),
-        input.metaToken
-      ),
-      metaCollect(campaignInsightsUrl(account, today.since, today.until), input.metaToken)
-        .then((rows) => ({ rows, error: null as string | null }))
-        .catch((err: unknown) => ({
-          rows: [] as CampaignInsightRow[],
-          error: err instanceof Error ? err.message : 'Campaign insights failed',
-        })),
+      storeRange
+        ? metaCollect(insightUrl(account, l7HourlyInsightQuery(storeRange.since, storeRange.until)), input.metaToken)
+        : Promise.resolve([]),
+      accountDay
+        ? metaCollect(
+            insightUrl(account, `level=account&time_range=${accountRange}&fields=spend,impressions,clicks,actions,action_values&${ATTRIBUTION}&limit=10`),
+            input.metaToken
+          )
+        : Promise.resolve([]),
+      accountDay
+        ? metaCollect(campaignInsightsUrl(account, accountDay.since, accountDay.until), input.metaToken)
+            .then((rows) => ({ rows, error: null as string | null }))
+            .catch((err: unknown) => ({
+              rows: [] as CampaignInsightRow[],
+              error: err instanceof Error ? err.message : 'Campaign insights failed',
+            }))
+        : Promise.resolve({ rows: [] as CampaignInsightRow[], error: null as string | null }),
     ]);
-    const hours = parseHourlySpendRows(hourlyRows).get(today.since) || emptyHourlySpend();
-    slice.hourlySpend = hours;
-    slice.totalSpendSoFar = hours.reduce((sum, point) => sum + point.spend, 0);
-    if (totals[0]) {
+    const storeDay = rebucketAccountHoursToStoreDay({
+      rows: accountHourRowsFromMeta(hourlyRows),
+      storeDate: input.today,
+      storeTimeZone: input.timezone,
+      accountTimeZone: input.accountTimeZone,
+    });
+    slice.hourlySpend = storeDay.hourly;
+    slice.totalSpendSoFar = storeDay.spend;
+    const zonesMatch = input.timezone === input.accountTimeZone;
+    if (zonesMatch && totals[0]) {
       slice.purchases = firstAction(totals[0].actions);
       slice.purchaseValue = firstAction(totals[0].action_values);
       if (slice.totalSpendSoFar === 0) slice.totalSpendSoFar = parseFloat(totals[0].spend || '0');
@@ -857,9 +872,10 @@ async function loadLive(input: {
     slice.metaCurrency = input.metaCurrency || null;
     const metaInfo = await loadCampaignMeta(campaignOutcome.rows, input.metaToken);
     slice.campaigns = campaignsFromInsightRows(campaignOutcome.rows, input.campaignL7, metaInfo);
+    const accountDaySpend = totals[0] ? parseFloat(totals[0].spend || '0') : 0;
     slice.campaignsError = campaignEmptyMessage({
       campaignCount: slice.campaigns.length,
-      accountSpend: slice.totalSpendSoFar,
+      accountSpend: Number.isFinite(accountDaySpend) ? accountDaySpend : 0,
       error: campaignOutcome.error,
     });
     slice.metaOk = true;
@@ -879,16 +895,34 @@ async function loadLive(input: {
       slice.google.error = 'PIPEBOARD_API_TOKEN is not configured';
       return;
     }
-    const [rows, currency] = await Promise.all([
-      gaqlQueryStrict(pipeboardToken, input.brand.google_ads_customer_id, googleTodayQuery(input.today)),
-      fetchGoogleAdsCurrency(pipeboardToken, input.brand.google_ads_customer_id),
-    ]);
-    const totals = sumGoogleToday(rows);
-    slice.google.currency = currency;
-    slice.google.spend = totals.spend;
-    slice.google.conversionValue = totals.conversionValue;
-    slice.google.conversions = totals.conversions;
-    slice.google.roas = totals.spend > 0 ? totals.conversionValue / totals.spend : null;
+    const customer = await fetchGoogleAdsCustomer(pipeboardToken, input.brand.google_ads_customer_id);
+    slice.google.currency = customer.currency;
+    const googleZone = customer.timeZone || input.timezone;
+    const googleToday = ymdInTimeZone(new Date(), googleZone);
+    const googleRange = storeDayAccountRange(input.today, input.timezone, googleZone, googleToday);
+    if (!googleRange) {
+      slice.google.spend = 0;
+      slice.google.conversionValue = 0;
+      slice.google.conversions = 0;
+      slice.google.roas = null;
+      slice.google.valueLabel = 'conversion value';
+      return;
+    }
+    const rows = await gaqlQueryStrict(
+      pipeboardToken,
+      input.brand.google_ads_customer_id,
+      googleStoreDayQuery(googleRange.since, googleRange.until)
+    );
+    const storeDay = rebucketAccountHoursToStoreDay({
+      rows: googleAccountHourRows(rows),
+      storeDate: input.today,
+      storeTimeZone: input.timezone,
+      accountTimeZone: googleZone,
+    });
+    slice.google.spend = storeDay.spend;
+    slice.google.conversionValue = storeDay.conversionValue;
+    slice.google.conversions = storeDay.conversions;
+    slice.google.roas = storeDay.spend > 0 ? storeDay.conversionValue / storeDay.spend : null;
     slice.google.valueLabel = 'conversion value';
   })().catch((err) => {
     slice.google.error = err instanceof Error ? err.message : 'Google request failed';
