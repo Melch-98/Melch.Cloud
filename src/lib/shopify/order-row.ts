@@ -1,6 +1,10 @@
+import { readShopifyAmount } from './rest-payload';
+
 /**
  * Maps a Shopify order payload onto a shopify_orders row.
  * Same shape the webhook upsert has always written.
+ * Flat money strings from 2024-01 and 2026-04 are stored as numbers.
+ * A money set is used only when the flat field is missing.
  */
 export function shopifyOrderToRow(
   shop: string,
@@ -13,9 +17,13 @@ export function shopifyOrderToRow(
     order_number?: number | string;
     email?: string | null;
     total_price?: string | number | null;
+    total_price_set?: unknown;
     subtotal_price?: string | number | null;
+    subtotal_price_set?: unknown;
     total_tax?: string | number | null;
+    total_tax_set?: unknown;
     total_discounts?: string | number | null;
+    total_discounts_set?: unknown;
     currency?: string | null;
     financial_status?: string | null;
     fulfillment_status?: string | null;
@@ -30,22 +38,16 @@ export function shopifyOrderToRow(
     updated_at?: string | null;
   };
 
-  const num = (value: string | number | null | undefined): number | null => {
-    if (value == null || value === '') return null;
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  };
-
   return {
     shop_domain: shop,
     brand_id: brandId,
     shopify_order_id: o.id,
     order_number: o.name ?? (o.order_number != null ? String(o.order_number) : undefined),
     email: o.email,
-    total_price: num(o.total_price),
-    subtotal_price: num(o.subtotal_price),
-    total_tax: num(o.total_tax),
-    total_discounts: num(o.total_discounts),
+    total_price: readShopifyAmount(o.total_price, o.total_price_set),
+    subtotal_price: readShopifyAmount(o.subtotal_price, o.subtotal_price_set),
+    total_tax: readShopifyAmount(o.total_tax, o.total_tax_set),
+    total_discounts: readShopifyAmount(o.total_discounts, o.total_discounts_set),
     currency: o.currency,
     financial_status: o.financial_status,
     fulfillment_status: o.fulfillment_status,

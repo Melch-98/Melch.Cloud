@@ -14,6 +14,8 @@ export type OrderBrand = {
 export type ResolvedOrderConnection = {
   domain: string | null;
   token: string | null;
+  /** Scope string from the client-credentials exchange, or the stored install scopes. */
+  tokenScope: string;
   connection: ShopifyConnection;
 };
 
@@ -33,15 +35,17 @@ export async function resolveOrderConnection(
 ): Promise<ResolvedOrderConnection> {
   const domain = normalizeShopDomain(brand.shopify_store_domain);
   let storeToken: string | null = null;
+  let storedScope = '';
   if (domain) {
     const { data: store } = await supabase
       .from('shopify_stores')
-      .select('access_token, uninstalled_at, shop_domain')
+      .select('access_token, scopes, uninstalled_at, shop_domain')
       .eq('shop_domain', domain)
       .maybeSingle();
     const storeDomain = normalizeShopDomain(store?.shop_domain);
     if (storeDomain === domain) {
       storeToken = liveOauthToken(store?.access_token, store?.uninstalled_at);
+      if (typeof store?.scopes === 'string') storedScope = store.scopes;
     }
   }
 
@@ -53,18 +57,20 @@ export async function resolveOrderConnection(
   });
 
   if (connection !== 'shopify_admin' || !domain || !isValidShopDomain(domain)) {
-    return { domain, token: null, connection };
+    return { domain, token: null, tokenScope: '', connection };
   }
 
-  if (storeToken) return { domain, token: storeToken, connection };
+  if (storeToken) {
+    return { domain, token: storeToken, tokenScope: storedScope, connection };
+  }
   try {
     const exchanged = await exchangeClientCredentials(
       domain,
       brand.shopify_client_id!,
       brand.shopify_client_secret!
     );
-    return { domain, token: exchanged.accessToken, connection };
+    return { domain, token: exchanged.accessToken, tokenScope: exchanged.scope || '', connection };
   } catch {
-    return { domain, token: null, connection };
+    return { domain, token: null, tokenScope: '', connection };
   }
 }

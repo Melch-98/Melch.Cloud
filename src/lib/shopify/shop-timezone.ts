@@ -1,5 +1,5 @@
 import { exchangeClientCredentials } from '@/lib/shopify/client-credentials';
-import { normalizeShopDomain } from '@/lib/shopify/config';
+import { normalizeShopDomain, SHOPIFY_CONFIG } from '@/lib/shopify/config';
 import { isValidIanaTimeZone } from '@/lib/shopify/shop-time';
 
 type SupabaseLike = { from: (table: string) => any };
@@ -68,7 +68,7 @@ async function readShopInfoZone(
 
 /** Same shop.json read Geo Performance uses. */
 export async function fetchShopIanaTimeZone(domain: string, token: string): Promise<string | null> {
-  const res = await fetch(`https://${domain}/admin/api/2024-01/shop.json?fields=iana_timezone`, {
+  const res = await fetch(`https://${domain}/admin/api/${SHOPIFY_CONFIG.apiVersion}/shop.json?fields=iana_timezone`, {
     headers: { 'X-Shopify-Access-Token': token },
   });
   if (!res.ok) return null;
