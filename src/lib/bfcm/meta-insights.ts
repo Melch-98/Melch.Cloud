@@ -3,6 +3,51 @@ export interface HourlySpend {
   spend: number;
 }
 
+export interface MetaDateRange {
+  since: string;
+  until: string;
+}
+
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Meta reads time_range in the ad account timezone and rejects a since that
+ * is still in the future there. Clamp until to account-local today. Skip the
+ * call when since is after that day or the range is empty.
+ */
+export function clampMetaRange(since: string, until: string, accountToday: string): MetaDateRange | null {
+  if (!DAY.test(since) || !DAY.test(until) || !DAY.test(accountToday) || since > until) return null;
+  if (since > accountToday) return null;
+  const cappedUntil = until > accountToday ? accountToday : until;
+  if (since > cappedUntil) return null;
+  return { since, until: cappedUntil };
+}
+
+/** History ranges that are safe to send. A future BFCM window is omitted. */
+export function metaHistoryRanges(input: {
+  accountToday: string;
+  l7Since: string;
+  l7Until: string;
+  lastYearStart: string;
+  lastYearEnd: string;
+  thisYearStart: string;
+  thisYearEnd: string;
+  sameDay: string;
+}): { name: string; since: string; until: string }[] {
+  const candidates: { name: string; since: string; until: string }[] = [
+    { name: 'l7', since: input.l7Since, until: input.l7Until },
+    { name: 'lastYearWindow', since: input.lastYearStart, until: input.lastYearEnd },
+    { name: 'thisYearWindow', since: input.thisYearStart, until: input.thisYearEnd },
+    { name: 'sameDay', since: input.sameDay, until: input.sameDay },
+  ];
+  const kept: { name: string; since: string; until: string }[] = [];
+  for (const candidate of candidates) {
+    const clamped = clampMetaRange(candidate.since, candidate.until, input.accountToday);
+    if (clamped) kept.push({ name: candidate.name, since: clamped.since, until: clamped.until });
+  }
+  return kept;
+}
+
 const META_GRAPH = 'https://graph.facebook.com/v21.0';
 
 /** One insights request for every L7 day, with an hourly breakdown and a daily increment. */

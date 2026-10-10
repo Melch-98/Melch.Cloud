@@ -130,7 +130,7 @@ Do not invent `shopify_stores` rows. Do not register Shopify webhooks for a bran
 
 ## BFCM command center
 
-`GET /api/bfcm-pacing` is shop-local. Shopify revenue is `shopify_orders` gross (subtotal + discounts) through the same new-customer classification as Daily P&L. MER is that gross divided by Meta + Google spend; aMER uses new-customer gross. A last-year day before the brand's earliest stored order is `no_last_year_data`, not zero. Today is cached 60 seconds; L7, last year, and the BFCM window are cached 15 minutes. Meta insights use an `Authorization` header, not `access_token` in the URL. One ranged hourly call covers L7.
+`GET /api/bfcm-pacing` is shop-local. Shopify revenue is `shopify_orders` gross (subtotal + discounts) through the same new-customer classification as Daily P&L. MER is that gross divided by Meta + Google spend; aMER uses new-customer gross. A last-year day before the brand's earliest stored order is `no_last_year_data`, not zero. Meta `time_range` dates use the ad account timezone. A since/until after that account-local today is clamped, and a range that has not started (the BFCM window before it opens) is not requested. Today is cached 60 seconds; L7, last year, and the BFCM window are cached 15 minutes. Meta insights use an `Authorization` header, not `access_token` in the URL. One ranged hourly call covers L7.
 
 Goals: `PUT /api/bfcm-goals` with `{ brandId, date, revenueGoal, spendBudget, amerTarget }`. Admins write any brand. Founders write their own. Strategists read their own. Apply `supabase/migrations/add_bfcm_goals.sql` before saving goals.
 
