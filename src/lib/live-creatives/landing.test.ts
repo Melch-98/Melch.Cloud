@@ -123,6 +123,25 @@ describe('mapLandingUrl', () => {
     expect(isProductKind('nope')).toBe(false);
   });
 
+  it('maps a catalog product on a host that is not the brand website', () => {
+    const fondHosts = ['fondregenerative.com'];
+    const fondProducts = [{ handle: 'best-selling-chicken-sampler', title: 'Chicken Sampler' }];
+    expect(mapLandingUrl(
+      'https://fondbonebroth.com/products/best-selling-chicken-sampler?utm_source=fb',
+      fondHosts,
+      fondProducts,
+    )).toMatchObject({
+      product_key: 'product:best-selling-chicken-sampler',
+      product_label: 'Chicken Sampler',
+      product_kind: 'product',
+    });
+    expect(mapLandingUrl(
+      'https://fondbonebroth.com/products/not-in-catalog',
+      fondHosts,
+      fondProducts,
+    ).product_kind).toBe('none');
+  });
+
   it('treats a catalog template token as no landing page', () => {
     const mapped = mapLandingUrl('https://mintier.com/products/{{product.handle}}', hosts, products);
     expect(mapped.product_kind).toBe('none');

@@ -249,6 +249,24 @@ export function mapNormalized(
   return mapped('other', `other:${path}`, `Other: ${path}`, norm);
 }
 
+/**
+ * A /products/<handle> URL is this brand's product when that handle is in its
+ * Shopify catalog, including when the host is another site the brand sells on.
+ * Same-domain URLs, including unknown handles, stay on mapNormalized.
+ */
+function catalogProductOnOtherHost(
+  norm: NormalizedLanding | null,
+  products: CatalogProduct[],
+): MappedProduct | null {
+  if (!norm || norm.sameDomain || looksDynamic(norm.path)) return null;
+  const match = PRODUCT_PATH.exec(norm.path);
+  if (!match) return null;
+  const handle = safeDecode(match[1]).toLowerCase();
+  const found = products.find((product) => product.handle.toLowerCase() === handle);
+  if (!found) return null;
+  return mapped('product', `product:${handle}`, found.title || labelFromHandle(handle), norm);
+}
+
 export function mapLandingUrl(
   raw: string | null | undefined,
   hosts: string[],
@@ -256,7 +274,8 @@ export function mapLandingUrl(
   collections: CollectionTitle[] = [],
 ): MappedProduct {
   if (!raw || !raw.trim()) return mapped('none', 'none', NONE_LABEL, null);
-  return mapNormalized(normalizeLanding(raw, hosts), products, collections);
+  const norm = normalizeLanding(raw, hosts);
+  return catalogProductOnOtherHost(norm, products) || mapNormalized(norm, products, collections);
 }
 
 export const PRODUCT_KINDS: ProductKind[] = [

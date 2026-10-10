@@ -318,4 +318,35 @@ describe('draftsFromAd', () => {
       product_kind: 'app',
     });
   });
+
+  it('maps a catalog product when the link host is not the brand website', () => {
+    const rows = draftsFromAd({
+      brandId: 'fond',
+      adId: 'ad-fond',
+      adName: 'Chicken sampler',
+      creativeId: 'cr-fond',
+      creative: { link_url: 'https://fondbonebroth.com/products/best-selling-chicken-sampler' },
+      hosts: ['fondregenerative.com'],
+      products: [{ handle: 'best-selling-chicken-sampler', title: 'Chicken Sampler' }],
+    });
+    expect(rows[0]).toMatchObject({
+      product_key: 'product:best-selling-chicken-sampler',
+      product_label: 'Chicken Sampler',
+      product_kind: 'product',
+      landing_url: 'https://fondbonebroth.com/products/best-selling-chicken-sampler',
+    });
+
+    const unknown = draftsFromAd({
+      brandId: 'fond',
+      adId: 'ad-other',
+      creativeId: 'cr-other',
+      creative: { link_url: 'https://fondbonebroth.com/products/not-in-catalog' },
+      hosts: ['fondregenerative.com'],
+      products: [{ handle: 'best-selling-chicken-sampler', title: 'Chicken Sampler' }],
+    });
+    expect(unknown[0]).toMatchObject({
+      product_kind: 'other',
+      product_label: 'Other: fondbonebroth.com/products/not-in-catalog',
+    });
+  });
 });

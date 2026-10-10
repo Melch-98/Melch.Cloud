@@ -18,6 +18,8 @@ export interface SyncBrandResult {
   none: number;
   /** Up to five ad ids among those rows. */
   noneAdIds: string[];
+  /** Page posts that stayed unread after a one-id retry. Creative links are still kept. */
+  postFetchFailed: number;
   error?: string;
 }
 
@@ -32,9 +34,14 @@ type Graph = (url: string, token: string) => Promise<any>;
  * destination_spec is not an AdCreative field in that reference. It is requested
  * and dropped, with any other name Graph rejects as a nonexisting field.
  */
-export const CREATIVE_FIELD_LIST = [
+/** Fields that synced before the destination expansion. A (#100) on a newer field drops that field. */
+export const BASELINE_CREATIVE_FIELDS = [
   'id', 'name', 'object_type', 'thumbnail_url', 'image_url', 'image_hash', 'video_id',
   'product_set_id', 'object_story_spec', 'asset_feed_spec', 'title',
+];
+
+export const CREATIVE_FIELD_LIST = [
+  ...BASELINE_CREATIVE_FIELDS,
   'effective_object_story_id', 'object_story_id', 'link_url', 'object_url', 'template_url',
   'call_to_action_type', 'call_to_action', 'effective_instagram_media_id', 'source_instagram_media_id',
   'instagram_permalink_url', 'destination_spec', 'creative_sourcing_spec', 'url_tags',
@@ -80,6 +87,7 @@ function emptyFailure(brand: { id: string; name?: string | null }, message: stri
     truncated: false,
     none: 0,
     noneAdIds: [],
+    postFetchFailed: 0,
     error: message,
   };
 }
@@ -128,13 +136,110 @@ function absorbNodes(out: Record<string, unknown>, body: unknown) {
   }
 }
 
-async function fetchByIds(input: {
+function bareField(field: string): string {
+  return field.split('{')[0].split('.')[0];
+}
+
+function isBaselineCreativeField(field: string): boolean {
+  return BASELINE_CREATIVE_FIELDS.includes(bareField(field));
+}
+
+/** (#100) that does not name a field. Missing permissions is the page-post and field case. */
+function unnamedGraph100(message: string): boolean {
+  if (rejectedCreativeField(message)) return false;
+  return /\(#100\)/.test(message) || /missing permissions/i.test(message);
+}
+
+function idUrl(ids: string[], fields: string[]): string {
+  return `${graphBase()}/?ids=${ids.map((id) => encodeURIComponent(id)).join(',')}&fields=${fields.join(',')}`;
+}
+
+async function readIdBatch(
+  ids: string[],
+  fields: string[],
+  token: string,
+  graph: Graph,
+): Promise<{ ok: true; body: unknown } | { ok: false; message: string }> {
+  try {
+    const body = await graph(idUrl(ids, fields), token);
+    return { ok: true, body };
+  } catch (err) {
+    const message = scrubSecret(err instanceof Error ? err.message : 'Meta request failed', token);
+    return { ok: false, message };
+  }
+}
+
+function splitNodes(body: unknown, ids: string[]): { good: Record<string, unknown>; bad: string[] } {
+  const record = asRecord(body) || {};
+  const good: Record<string, unknown> = {};
+  const bad: string[] = [];
+  for (const id of ids) {
+    const node = record[id];
+    if (node && typeof node === 'object' && !Array.isArray(node) && !('error' in node)) {
+      good[id] = node;
+    } else {
+      bad.push(id);
+    }
+  }
+  return { good, bad };
+}
+
+/**
+ * A new creative field can (#100) for one ad account. Keep every field the
+ * account accepts, including the pre-merge set, and remember the drop for the
+ * rest of the run.
+ */
+async function isolateCreativeFields(input: {
   ids: string[];
   fields: { list: string[] };
   token: string;
   graph: Graph;
   deadline: number;
-  allowFieldDrop: boolean;
+}): Promise<{ body: unknown } | { retry: true } | null> {
+  const baseline = input.fields.list.filter(isBaselineCreativeField);
+  const extras = input.fields.list.filter((field) => !isBaselineCreativeField(field));
+  if (baseline.length === 0 || extras.length === 0) return null;
+
+  const baselineTry = await readIdBatch(input.ids, baseline, input.token, input.graph);
+  if (!baselineTry.ok) {
+    const rejected = rejectedCreativeField(baselineTry.message);
+    const next = rejected ? dropCreativeField(input.fields.list, rejected) : input.fields.list;
+    if (!rejected || next.length === 0 || next.length === input.fields.list.length) return null;
+    input.fields.list = next;
+    return { retry: true };
+  }
+
+  let kept = baseline;
+  let body = baselineTry.body;
+  for (const extra of extras) {
+    if (Date.now() > input.deadline) break;
+    const attempt = await readIdBatch(input.ids, [...kept, extra], input.token, input.graph);
+    if (attempt.ok) {
+      kept = [...kept, extra];
+      body = attempt.body;
+      continue;
+    }
+    const rejected = rejectedCreativeField(attempt.message);
+    if (rejected && bareField(rejected) !== bareField(extra)) {
+      kept = kept.filter((field) => bareField(field) !== bareField(rejected));
+      if (Date.now() > input.deadline) break;
+      const retry = await readIdBatch(input.ids, [...kept, extra], input.token, input.graph);
+      if (retry.ok) {
+        kept = [...kept, extra];
+        body = retry.body;
+      }
+    }
+  }
+  input.fields.list = kept;
+  return { body };
+}
+
+async function fetchCreatives(input: {
+  ids: string[];
+  fields: { list: string[] };
+  token: string;
+  graph: Graph;
+  deadline: number;
 }): Promise<{ map: Record<string, unknown>; truncated: boolean }> {
   const map: Record<string, unknown> = {};
   let truncated = false;
@@ -146,24 +251,107 @@ async function fetchByIds(input: {
       break;
     }
     const chunk = input.ids.slice(index, index + FIELD_CHUNK);
-    const url = `${graphBase()}/?ids=${chunk.map((id) => encodeURIComponent(id)).join(',')}&fields=${input.fields.list.join(',')}`;
-    try {
-      const body = await input.graph(url, input.token);
-      absorbNodes(map, body);
+    const batch = await readIdBatch(chunk, input.fields.list, input.token, input.graph);
+    if (batch.ok) {
+      absorbNodes(map, batch.body);
       index += chunk.length;
       drops = 0;
-    } catch (err) {
-      const message = scrubSecret(err instanceof Error ? err.message : 'Meta request failed', input.token);
-      const rejected = input.allowFieldDrop ? rejectedCreativeField(message) : null;
-      const next = rejected ? dropCreativeField(input.fields.list, rejected) : input.fields.list;
-      if (!rejected || next.length === 0 || next.length === input.fields.list.length || drops >= 12) {
-        throw new Error(message);
-      }
+      continue;
+    }
+    const rejected = rejectedCreativeField(batch.message);
+    const next = rejected ? dropCreativeField(input.fields.list, rejected) : input.fields.list;
+    if (rejected && next.length > 0 && next.length < input.fields.list.length && drops < 12) {
       input.fields.list = next;
       drops += 1;
+      continue;
     }
+    if (unnamedGraph100(batch.message)) {
+      const isolated = await isolateCreativeFields({
+        ids: chunk,
+        fields: input.fields,
+        token: input.token,
+        graph: input.graph,
+        deadline: input.deadline,
+      });
+      if (isolated && 'body' in isolated) {
+        absorbNodes(map, isolated.body);
+        index += chunk.length;
+        drops = 0;
+        continue;
+      }
+      if (isolated?.retry && drops < 12) {
+        drops += 1;
+        continue;
+      }
+    }
+    throw new Error(batch.message);
   }
   return { map, truncated };
+}
+
+async function fetchPosts(input: {
+  ids: string[];
+  token: string;
+  graph: Graph;
+  deadline: number;
+}): Promise<{ map: Record<string, unknown>; truncated: boolean; failed: number }> {
+  const map: Record<string, unknown> = {};
+  let truncated = false;
+  let failed = 0;
+  const fields = [POST_FIELDS];
+
+  const readOne = async (id: string): Promise<boolean> => {
+    if (Date.now() > input.deadline) {
+      truncated = true;
+      return false;
+    }
+    const single = await readIdBatch([id], fields, input.token, input.graph);
+    if (!single.ok) {
+      failed += 1;
+      return true;
+    }
+    const split = splitNodes(single.body, [id]);
+    if (split.bad.length) {
+      failed += 1;
+      return true;
+    }
+    Object.assign(map, split.good);
+    return true;
+  };
+
+  let index = 0;
+  while (index < input.ids.length) {
+    if (Date.now() > input.deadline) {
+      truncated = true;
+      break;
+    }
+    const chunk = input.ids.slice(index, index + FIELD_CHUNK);
+    const batch = await readIdBatch(chunk, fields, input.token, input.graph);
+    if (!batch.ok) {
+      if (chunk.length === 1) {
+        failed += 1;
+      } else {
+        for (const id of chunk) {
+          const finished = await readOne(id);
+          if (!finished) break;
+        }
+      }
+      index += chunk.length;
+      continue;
+    }
+    const split = splitNodes(batch.body, chunk);
+    Object.assign(map, split.good);
+    if (split.bad.length === 1 && chunk.length === 1) {
+      failed += 1;
+    } else {
+      for (const id of split.bad) {
+        const finished = await readOne(id);
+        if (!finished) break;
+      }
+    }
+    index += chunk.length;
+  }
+  return { map, truncated, failed };
 }
 
 async function hostsForBrand(supabase: any, brand: {
@@ -321,6 +509,7 @@ async function syncBrand(input: {
     truncated: false,
     none: 0,
     noneAdIds: [],
+    postFetchFailed: 0,
   };
   const params = new URLSearchParams({
     fields: 'id,name,effective_status,creative{id},adset{id,is_dynamic_creative,promoted_object}',
@@ -337,13 +526,12 @@ async function syncBrand(input: {
   base.truncated = adsTruncated;
 
   const creativeIds = Array.from(new Set(ads.map((ad) => ad?.creative?.id).filter((id: unknown): id is string => typeof id === 'string' && !!id)));
-  const creatives = await fetchByIds({
+  const creatives = await fetchCreatives({
     ids: creativeIds,
     fields: input.creativeFields,
     token: input.token,
     graph: input.graph,
     deadline: input.deadline,
-    allowFieldDrop: true,
   });
   if (creatives.truncated) base.truncated = true;
 
@@ -352,15 +540,14 @@ async function syncBrand(input: {
       .map((creative) => storyIdForPostFetch(creative))
       .filter((id): id is string => !!id),
   ));
-  const posts = await fetchByIds({
+  const posts = await fetchPosts({
     ids: postIds,
-    fields: { list: [POST_FIELDS] },
     token: input.token,
     graph: input.graph,
     deadline: input.deadline,
-    allowFieldDrop: false,
   });
   if (posts.truncated) base.truncated = true;
+  base.postFetchFailed = posts.failed;
 
   const hosts = await hostsForBrand(input.supabase, input.brand);
   const products = await productsForBrand(input.supabase, input.brand.id);
