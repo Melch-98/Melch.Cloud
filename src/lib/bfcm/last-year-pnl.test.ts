@@ -84,6 +84,37 @@ describe('last year BFCM no-data and totals', () => {
     expect(quiet.core.gross).toBe(0);
   });
 
+  it('shows no data when the day has no daily_pnl row, even if an earlier order exists', () => {
+    const fond = buildLastYearBfcmPnl({
+      year: 2026,
+      rows: [],
+      earliestOrderDay: '2025-10-27',
+      ncEstimated: false,
+      reportingCurrency: 'CAD',
+      fxRates: { USD: 1, CAD: 1.38 },
+    });
+    const blackFriday = fond.days.find((day) => day.date === '2025-11-28');
+    expect(blackFriday?.gross).toBe('no data');
+    expect(blackFriday?.orders).toBe('no data');
+    expect(blackFriday?.net).toBe('no data');
+    expect(blackFriday?.metaSpend).toBe('no data');
+    expect(blackFriday?.mer).toBe('no data');
+    expect(fond.core.gross).toBe('no data');
+    expect(fond.extended.gross).toBe('no data');
+
+    const mixed = buildLastYearBfcmPnl({
+      year: 2026,
+      rows: [{ date: '2025-11-28', gross_sales: 100, nc_revenue: 40, meta_spend: 20, nc_orders: 1 }],
+      earliestOrderDay: '2025-10-27',
+      ncEstimated: false,
+      reportingCurrency: 'CAD',
+      fxRates: { CAD: 1 },
+    });
+    expect(mixed.days.find((day) => day.date === '2025-11-28')?.gross).toBe(100);
+    expect(mixed.days.find((day) => day.date === '2025-11-27')?.gross).toBe('no data');
+    expect(mixed.core.gross).toBe(100);
+  });
+
   it('nets negative discounts and refunds, and splits core from the extended range', () => {
     const pnl = buildLastYearBfcmPnl({
       year: 2026,

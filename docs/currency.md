@@ -3,7 +3,8 @@
 ## Model
 
 - **One reporting currency per brand** = Shopify / store settlement currency.
-- Source priority: `shopify_stores.shop_info.currency` → majority `shopify_orders.currency` → Meta → Google → USD.
+- Source priority when tagging a sync: `shopify_stores.shop_info.currency` → majority `shopify_orders.currency` → Meta → Google → USD.
+- BFCM reads the newest tagged `daily_pnl.currency` first. Active brands have no `shopify_stores` row, so shop info alone falls through to USD.
 - Do **not** invent brand currencies. Prefer leaving USD only as last-resort default when no Shopify signal exists.
 - Applies to **every brand**, not a single store. UI labels and FX conversion must work for CAD, USD, GBP, EUR, etc.
 
@@ -26,7 +27,7 @@
 | Surface | Status |
 |---------|--------|
 | Daily P&L | Fixed — ISO chip + formatters; spend converted at sync |
-| BFCM | Fixed — default AUTO → Shopify settlement |
+| BFCM | Store currency is the newest `daily_pnl.currency` (active brands have no `shopify_stores` row), then shop info, then USD. AUTO displays that currency. Sales and the aMER strip stay in store currency; live Meta and Google spend convert from the ad account. |
 | Geo Performance | Already converted (shared FX helpers) |
 | Ad Perspective | `makeFmt` (Meta account currency) |
 | Campaigns | Fixed — Meta **and** Google native → reporting FX in `/api/campaign-metrics`; UI uses reporting symbol (incl. chart ticks) |
