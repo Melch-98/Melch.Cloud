@@ -21,6 +21,23 @@ describe('metaGraphGet', () => {
     expect(stripAccessToken(seenUrl)).toBe(seenUrl);
   });
 
+  it('does not return a raw token Graph echoed without access_token=', async () => {
+    try {
+      await metaGraphGet(
+        'https://graph.facebook.com/v21.0/act_1/ads',
+        'meta-token-should-not-leak',
+        async () => new Response(JSON.stringify({
+          error: { message: 'Debug meta-token-should-not-leak rejected' },
+        }), { status: 400 }),
+      );
+      throw new Error('expected Meta to reject');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '';
+      expect(message).toContain('(redacted)');
+      expect(message).not.toContain('meta-token-should-not-leak');
+    }
+  });
+
   it('does not return a token that Meta echoed in an error', async () => {
     await expect(metaGraphGet(
       'https://graph.facebook.com/v21.0/act_1/ads',

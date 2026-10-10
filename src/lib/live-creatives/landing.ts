@@ -1,7 +1,20 @@
 // Landing URL → product. Pure. No network, no AI.
 // The cron and the override clear-path both call this.
 
-export type ProductKind = 'product' | 'homepage' | 'collection' | 'shop_all' | 'other' | 'none';
+export type ProductKind =
+  | 'product'
+  | 'homepage'
+  | 'collection'
+  | 'shop_all'
+  | 'other'
+  | 'lead_form'
+  | 'messages'
+  | 'call'
+  | 'ig_profile'
+  | 'meta_shop'
+  | 'app'
+  | 'catalog'
+  | 'none';
 
 export interface CatalogProduct {
   handle: string;
@@ -246,7 +259,11 @@ export function mapLandingUrl(
   return mapNormalized(normalizeLanding(raw, hosts), products, collections);
 }
 
-export const PRODUCT_KINDS: ProductKind[] = ['product', 'homepage', 'collection', 'shop_all', 'other', 'none'];
+export const PRODUCT_KINDS: ProductKind[] = [
+  'product', 'homepage', 'collection', 'shop_all', 'other',
+  'lead_form', 'messages', 'call', 'ig_profile', 'meta_shop', 'app', 'catalog',
+  'none',
+];
 
 export function isProductKind(value: unknown): value is ProductKind {
   return typeof value === 'string' && (PRODUCT_KINDS as string[]).includes(value);

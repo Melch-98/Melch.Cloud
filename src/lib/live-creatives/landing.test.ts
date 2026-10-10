@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   hostAllowed,
   hostsFromBrandConfig,
+  isProductKind,
   mapLandingUrl,
   normalizeLanding,
 } from '@/lib/live-creatives/landing';
@@ -108,6 +109,18 @@ describe('mapLandingUrl', () => {
       product_label: 'Collection: Summer Edit',
       product_kind: 'collection',
     });
+  });
+
+  it('accepts destination kinds and rejects unknown ones', () => {
+    expect(isProductKind('lead_form')).toBe(true);
+    expect(isProductKind('messages')).toBe(true);
+    expect(isProductKind('call')).toBe(true);
+    expect(isProductKind('ig_profile')).toBe(true);
+    expect(isProductKind('meta_shop')).toBe(true);
+    expect(isProductKind('app')).toBe(true);
+    expect(isProductKind('catalog')).toBe(true);
+    expect(isProductKind('none')).toBe(true);
+    expect(isProductKind('nope')).toBe(false);
   });
 
   it('treats a catalog template token as no landing page', () => {

@@ -48,7 +48,11 @@ export interface ProductFilterOption {
   count: number;
 }
 
-const KIND_ORDER = ['product', 'homepage', 'shop_all', 'collection', 'other', 'none'];
+const KIND_ORDER = [
+  'product', 'homepage', 'shop_all', 'collection', 'other',
+  'catalog', 'lead_form', 'messages', 'call', 'ig_profile', 'meta_shop', 'app',
+  'none',
+];
 
 function moneySplit(total: number, parts: number, index: number): number {
   if (parts <= 1) return total;

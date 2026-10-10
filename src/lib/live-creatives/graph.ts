@@ -18,11 +18,14 @@ export function stripAccessToken(url: string): string {
   }
 }
 
-export function scrubSecret(message: string): string {
-  return message
+export function scrubSecret(message: string, secret?: string): string {
+  let next = message
     .replace(/bearer\s+\S+/gi, 'Bearer (redacted)')
-    .replace(/access_token=[^\s&]+/gi, 'access_token=(redacted)')
-    .slice(0, 400);
+    .replace(/access_token=[^\s&]+/gi, 'access_token=(redacted)');
+  if (secret && secret.length >= 8 && next.includes(secret)) {
+    next = next.split(secret).join('(redacted)');
+  }
+  return next.slice(0, 400);
 }
 
 export type GraphFetch = (url: string, init?: RequestInit) => Promise<Response>;
@@ -40,7 +43,7 @@ export async function metaGraphGet(
   const json = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
   if (!res.ok || json?.error) {
     const message = json?.error?.message || `Meta HTTP ${res.status}`;
-    throw new Error(scrubSecret(message));
+    throw new Error(scrubSecret(message, token));
   }
   return json;
 }
