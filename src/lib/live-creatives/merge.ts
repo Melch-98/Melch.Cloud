@@ -1,41 +1,49 @@
-// Cron merge. manual_product_* is copied forward and never replaced by the URL mapping.
+// Cron upsert omits manual_product_* and product_source. PostgREST then
+// leaves those columns alone, including an override saved after this read.
+// New rows stay NULL. The read path uses effectiveProduct().
 
-import type { ProductKind } from '@/lib/live-creatives/landing';
 import type { LiveCreativeDraft } from '@/lib/live-creatives/assets';
+
+export const CRON_OMITTED_COLUMNS = [
+  'manual_product_key',
+  'manual_product_label',
+  'manual_product_kind',
+  'product_source',
+] as const;
+
+const OMITTED = new Set<string>(CRON_OMITTED_COLUMNS);
 
 export interface ExistingLiveCreative {
   first_seen: string | null;
-  manual_product_key: string | null;
-  manual_product_label: string | null;
-  manual_product_kind: string | null;
 }
 
-export interface MergedLiveCreative extends Omit<LiveCreativeDraft, 'product_source'> {
-  manual_product_key: string | null;
-  manual_product_label: string | null;
-  manual_product_kind: ProductKind | string | null;
-  product_source: 'url' | 'manual';
+export type CronUpsertRow = Omit<LiveCreativeDraft, 'product_source'> & {
   first_seen: string;
   last_active: string;
   updated_at: string;
+};
+
+/** Drop override columns so an upsert cannot clobber them. */
+export function omitCronProtected(row: Record<string, unknown>): Record<string, unknown> {
+  const next: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(row)) {
+    if (OMITTED.has(key)) continue;
+    next[key] = value;
+  }
+  return next;
 }
 
 export function mergeCronRow(
   existing: ExistingLiveCreative | null,
   incoming: LiveCreativeDraft,
   nowIso: string,
-): MergedLiveCreative {
-  const manualKey = existing?.manual_product_key?.trim() || null;
+): CronUpsertRow {
   return {
-    ...incoming,
-    manual_product_key: manualKey,
-    manual_product_label: manualKey ? existing?.manual_product_label ?? null : null,
-    manual_product_kind: manualKey ? existing?.manual_product_kind ?? null : null,
-    product_source: manualKey ? 'manual' : 'url',
+    ...omitCronProtected(incoming as unknown as Record<string, unknown>),
     first_seen: existing?.first_seen || nowIso,
     last_active: nowIso,
     updated_at: nowIso,
-  };
+  } as CronUpsertRow;
 }
 
 export interface EffectiveProduct {

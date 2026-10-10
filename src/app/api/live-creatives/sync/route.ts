@@ -3,6 +3,8 @@ import { actorDenied, liveCreativeActor } from '@/lib/live-creatives/actor';
 import { readMetaToken, syncLiveCreatives } from '@/lib/live-creatives/sync';
 
 export const dynamic = 'force-dynamic';
+export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 export const maxDuration = 300;
 
 /** Admin-only manual run of the live creative product sync. */

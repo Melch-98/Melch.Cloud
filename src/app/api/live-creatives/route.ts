@@ -5,6 +5,8 @@ import { effectiveProduct } from '@/lib/live-creatives/merge';
 import { overrideChoices } from '@/lib/live-creatives/present';
 
 export const dynamic = 'force-dynamic';
+export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 
 const ROW_COLUMNS = [
   'ad_id', 'asset_key', 'creative_id', 'format', 'landing_url', 'landing_url_normalized',

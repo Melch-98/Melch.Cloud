@@ -1,17 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-server';
 
 export type LiveCreativeActor =
   | { error: NextResponse }
   | { supabase: any; userId: string; role: string; brandId: string | null };
 
 export async function liveCreativeActor(request: NextRequest): Promise<LiveCreativeActor> {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!supabaseUrl || !serviceKey) {
+  const supabase = createServiceClient();
+  if (!supabase) {
     return { error: NextResponse.json({ error: 'Server config error' }, { status: 500 }) };
   }
-  const supabase = createClient(supabaseUrl, serviceKey);
   const header = request.headers.get('authorization');
   const token = header?.replace('Bearer ', '') || '';
   if (!token || token === header) {

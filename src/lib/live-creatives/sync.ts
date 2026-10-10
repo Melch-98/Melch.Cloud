@@ -4,7 +4,7 @@
 import { draftsFromAd } from '@/lib/live-creatives/assets';
 import { brandBudgetOpen, graphBase, metaGraphGet, scrubSecret, tokenDead } from '@/lib/live-creatives/graph';
 import { hostsFromBrandConfig } from '@/lib/live-creatives/landing';
-import { mergeCronRow, type ExistingLiveCreative } from '@/lib/live-creatives/merge';
+import { mergeCronRow, omitCronProtected, type ExistingLiveCreative } from '@/lib/live-creatives/merge';
 
 export interface SyncBrandResult {
   brandId: string;
@@ -125,7 +125,7 @@ async function existingByKey(
     const chunk = adIds.slice(i, i + 100);
     const { data, error } = await supabase
       .from('live_creatives')
-      .select('ad_id, asset_key, first_seen, manual_product_key, manual_product_label, manual_product_kind')
+      .select('ad_id, asset_key, first_seen')
       .eq('brand_id', brandId)
       .eq('platform', 'meta')
       .in('ad_id', chunk);
@@ -133,9 +133,6 @@ async function existingByKey(
     for (const row of data || []) {
       map.set(`${row.ad_id}::${row.asset_key}`, {
         first_seen: row.first_seen ?? null,
-        manual_product_key: row.manual_product_key ?? null,
-        manual_product_label: row.manual_product_label ?? null,
-        manual_product_kind: row.manual_product_kind ?? null,
       });
     }
   }
@@ -273,7 +270,9 @@ async function syncBrand(input: {
   });
 
   const existing = await existingByKey(input.supabase, input.brand.id, drafts.map((row) => row.ad_id));
-  const merged = drafts.map((row) => mergeCronRow(existing.get(`${row.ad_id}::${row.asset_key}`) || null, row, nowIso));
+  const merged = drafts.map((row) => omitCronProtected(
+    mergeCronRow(existing.get(`${row.ad_id}::${row.asset_key}`) || null, row, nowIso) as unknown as Record<string, unknown>,
+  ));
 
   for (let i = 0; i < merged.length; i += 200) {
     const chunk = merged.slice(i, i + 200);

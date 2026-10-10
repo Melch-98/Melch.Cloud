@@ -4,7 +4,7 @@
 -- Catalog / DPA ads: asset_key = catalog:{ad_id}.
 --
 -- product_* is the URL mapping. manual_product_* is the override.
--- The cron refreshes the URL mapping and never writes manual_product_*.
+-- The cron refreshes the URL mapping and never writes manual_product_* or product_source.
 -- When manual_product_key is set, that override is the product.
 --
 -- Apply this in the Supabase SQL editor. The app reads and writes through
@@ -12,7 +12,7 @@
 --
 -- Admins can read and write every brand.
 -- Founders and strategists can read their own brand.
--- Founders can write their own brand. Strategists cannot write.
+-- Founders can update their own brand (FOR UPDATE). Strategists cannot write.
 
 CREATE TABLE IF NOT EXISTS public.live_creatives (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -113,7 +113,7 @@ CREATE POLICY "admins write live creatives"
 DROP POLICY IF EXISTS "founders write own live creatives" ON public.live_creatives;
 CREATE POLICY "founders write own live creatives"
   ON public.live_creatives
-  FOR ALL
+  FOR UPDATE
   TO authenticated
   USING (
     EXISTS (

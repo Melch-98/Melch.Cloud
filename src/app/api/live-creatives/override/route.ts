@@ -4,6 +4,8 @@ import { actorDenied, liveCreativeActor } from '@/lib/live-creatives/actor';
 import { isProductKind } from '@/lib/live-creatives/landing';
 
 export const dynamic = 'force-dynamic';
+export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 
 export async function PUT(request: NextRequest) {
   const auth = await liveCreativeActor(request);
