@@ -60,17 +60,29 @@ function timeZoneOffsetMs(instant: Date, timeZone: string): number {
   return asUtc - instant.getTime();
 }
 
-/** UTC instant of YYYY-MM-DD 00:00:00.000 in an IANA zone. */
-export function zonedMidnight(ymd: string, timeZone: string): Date {
+/** UTC instant of a wall-clock time in an IANA zone. */
+export function zonedDateTime(ymd: string, hour: number, minute: number, timeZone: string): Date {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
   if (!match) throw new Error(`Invalid shop date: ${ymd}`);
   const zone = usableTimeZone(timeZone);
-  const utcGuess = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 0, 0, 0);
+  const utcGuess = Date.UTC(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    hour,
+    minute,
+    0
+  );
   const offset = timeZoneOffsetMs(new Date(utcGuess), zone);
   let utc = utcGuess - offset;
   const offsetAtInstant = timeZoneOffsetMs(new Date(utc), zone);
   if (offsetAtInstant !== offset) utc = utcGuess - offsetAtInstant;
   return new Date(utc);
+}
+
+/** UTC instant of YYYY-MM-DD 00:00:00.000 in an IANA zone. */
+export function zonedMidnight(ymd: string, timeZone: string): Date {
+  return zonedDateTime(ymd, 0, 0, timeZone);
 }
 
 /** Shop-local calendar date for an order or refund timestamp. */

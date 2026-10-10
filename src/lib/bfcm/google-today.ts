@@ -31,3 +31,44 @@ export function googleTodayQuery(day: string): string {
     `WHERE segments.date = '${day}'`,
   ].join(' ');
 }
+
+/** Hourly cost for the account dates that overlap the store day. segments.hour is the account clock. */
+export function googleStoreDayQuery(since: string, until: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(since) || !/^\d{4}-\d{2}-\d{2}$/.test(until)) {
+    throw new Error('Invalid Google date');
+  }
+  return [
+    'SELECT segments.date, segments.hour, metrics.cost_micros, metrics.conversions_value, metrics.conversions',
+    'FROM campaign',
+    `WHERE segments.date BETWEEN '${since}' AND '${until}'`,
+  ].join(' ');
+}
+
+export function googleAccountHourRows(rows: unknown[]): {
+  date: string;
+  hour: number;
+  spend: number;
+  conversionValue: number;
+  conversions: number;
+}[] {
+  const hours = [];
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const segments = (row as { segments?: Record<string, unknown> }).segments || {};
+    const date = typeof segments.date === 'string' ? segments.date.slice(0, 10) : '';
+    const hour = Number(segments.hour);
+    if (!date || !Number.isInteger(hour)) continue;
+    const metrics = (row as { metrics?: Record<string, unknown> }).metrics || {};
+    const micros = Number(metrics.costMicros ?? metrics.cost_micros ?? 0);
+    const value = Number(metrics.conversionsValue ?? metrics.conversions_value ?? 0);
+    const count = Number(metrics.conversions ?? 0);
+    hours.push({
+      date,
+      hour,
+      spend: (Number.isFinite(micros) ? micros : 0) / 1_000_000,
+      conversionValue: Number.isFinite(value) ? value : 0,
+      conversions: Number.isFinite(count) ? count : 0,
+    });
+  }
+  return hours;
+}
