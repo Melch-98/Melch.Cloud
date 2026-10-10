@@ -5,9 +5,13 @@ import {
   clampMetaRange,
   insightUrl,
   l7HourlyInsightQuery,
+  META_ACCOUNT_TTL_MS,
   metaHistoryRanges,
   parseHourlySpendRows,
+  readMetaAccountCache,
+  rememberMetaAccount,
   stripAccessToken,
+  type MetaAccountCache,
 } from '@/lib/bfcm/meta-insights';
 
 describe('Meta L7 hourly request', () => {
@@ -99,5 +103,20 @@ describe('Meta time_range against the ad account clock', () => {
     expect(ranges.map((range) => range.name)).toEqual(['l7', 'lastYearWindow', 'sameDay']);
     expect(ranges.find((range) => range.name === 'thisYearWindow')).toBeUndefined();
     expect(ranges.every((range) => range.since <= account.today && range.until <= account.today)).toBe(true);
+  });
+});
+
+describe('Meta account details cache', () => {
+  it('reuses timezone and currency for an hour, then asks again', () => {
+    const cache: MetaAccountCache = new Map();
+    const now = Date.parse('2026-10-10T00:43:00Z');
+    expect(readMetaAccountCache(cache, '123', now)).toBeNull();
+    rememberMetaAccount(cache, 'act_123', { currency: 'USD', timezone: 'America/Chicago' }, now);
+    expect(readMetaAccountCache(cache, '123', now + 30 * 60 * 1000)).toEqual({
+      currency: 'USD',
+      timezone: 'America/Chicago',
+    });
+    expect(readMetaAccountCache(cache, '123', now + META_ACCOUNT_TTL_MS)).toBeNull();
+    expect(readMetaAccountCache(cache, 'act_999', now)).toBeNull();
   });
 });

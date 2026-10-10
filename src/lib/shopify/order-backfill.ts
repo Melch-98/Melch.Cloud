@@ -12,6 +12,11 @@ const PAGE_CAP = 80;
 const UPSERT_CHUNK = 200;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 export const BACKFILL_MAX_DAYS = 90;
+/** Custom apps without read_all_orders only see orders from the last 60 days. */
+export const SHOPIFY_ORDER_READ_WINDOW_DAYS = 60;
+
+const READ_ALL_ORDERS_WARNING =
+  'Shopify returned 0 orders. start_date is older than 60 days, and a custom app without the read_all_orders scope only returns the last 60 days. This empty result is not a completed backfill.';
 
 export type OrderBackfillInput = {
   brandId: string;
@@ -52,6 +57,38 @@ export function assertBackfillRange(startDate: string, endDate: string): void {
   if (days > BACKFILL_MAX_DAYS) {
     throw new Error(`Date range is ${days} days. Backfill at most ${BACKFILL_MAX_DAYS} days per call.`);
   }
+}
+
+/**
+ * Shopify answers an older created_at_min with an empty page when the app
+ * lacks read_all_orders. That is not an empty store.
+ */
+export function readAllOrdersWarning(startDate: string, fetched: number, now = new Date()): string | null {
+  if (fetched !== 0 || !DATE.test(startDate)) return null;
+  const start = Date.parse(`${startDate}T00:00:00Z`);
+  const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const cutoff = todayUtc - SHOPIFY_ORDER_READ_WINDOW_DAYS * 86_400_000;
+  if (!(start < cutoff)) return null;
+  return READ_ALL_ORDERS_WARNING;
+}
+
+export function backfillResponseStatus(result: Pick<
+  OrderBackfillResult,
+  'error' | 'warning' | 'fetched' | 'upserted' | 'truncated'
+>): { ok: boolean; status: number } {
+  if (result.error && result.upserted === 0 && !result.truncated) {
+    const status = result.error.includes('YYYY-MM-DD') || result.error.includes('No Shopify') ? 400 : 502;
+    return { ok: false, status };
+  }
+  if (
+    result.fetched === 0 &&
+    result.upserted === 0 &&
+    !result.truncated &&
+    (result.warning?.includes('read_all_orders') ?? false)
+  ) {
+    return { ok: false, status: 422 };
+  }
+  return { ok: !result.error, status: 200 };
 }
 
 /** Only follow a Shopify orders paging URL for this shop, and never keep an access token. */
@@ -250,6 +287,12 @@ async function backfillAdmin(
       return base;
     }
     await writeCursor(supabase, key, null);
+    const gap = readAllOrdersWarning(base.start_date, base.fetched);
+    if (gap) {
+      base.done = false;
+      base.warning = base.warning ? `${base.warning} ${gap}` : gap;
+      return base;
+    }
     base.done = true;
     return base;
   } catch (err) {

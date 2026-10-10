@@ -3,7 +3,9 @@ import { aggregateOrdersByDay, type PnlShopifyOrder } from '@/lib/shopify/pnl-da
 import {
   alignLastYear,
   bfcmWindow,
+  lastYearFigure,
   lastYearSalesStatus,
+  lastYearTotal,
   orderFeed,
   shopDayRangeIso,
   shopTodayAndL7,
@@ -131,6 +133,28 @@ describe('BFCM event alignment', () => {
     expect(lastYearSalesStatus('2025-11-28', null)).toBe('no_last_year_data');
     expect(lastYearSalesStatus('2025-11-28', '2025-11-01')).toBe('ok');
     expect(lastYearSalesStatus('2025-11-28', '2025-11-28')).toBe('ok');
+  });
+
+  it('shows no data for a zero day before the first stored order and keeps a real zero', () => {
+    expect(lastYearFigure(0, '2025-11-28', '2026-06-28')).toBe('no data');
+    expect(lastYearFigure(0, '2025-11-28', '2026-03-11')).toBe('no data');
+    expect(lastYearFigure(0, '2025-11-28', null)).toBe('no data');
+    expect(lastYearFigure(120, '2025-11-28', '2026-06-28')).toBe(120);
+    expect(lastYearFigure(0, '2025-11-28', '2025-11-01')).toBe(0);
+    expect(lastYearTotal(
+      [
+        { date: '2025-11-24', amount: 0 },
+        { date: '2025-11-28', amount: 0 },
+      ],
+      '2026-06-28'
+    )).toBe('no data');
+    expect(lastYearTotal(
+      [
+        { date: '2025-11-27', amount: 0 },
+        { date: '2025-11-28', amount: 40 },
+      ],
+      '2025-11-01'
+    )).toBe(40);
   });
 });
 

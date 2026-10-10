@@ -125,6 +125,40 @@ export function averageHourlySpend(days: HourlySpend[][]): HourlySpend[] {
   }));
 }
 
+export const META_ACCOUNT_TTL_MS = 60 * 60 * 1000;
+
+export interface MetaAccountDetails {
+  currency: string;
+  timezone: string;
+}
+
+export type MetaAccountCache = Map<string, { details: MetaAccountDetails; ts: number }>;
+
+export function metaAccountCacheKey(adAccountId: string): string {
+  return adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
+}
+
+/** Fresh account timezone/currency, or null when missing or older than the TTL. */
+export function readMetaAccountCache(
+  cache: MetaAccountCache,
+  adAccountId: string,
+  now = Date.now(),
+  ttl = META_ACCOUNT_TTL_MS
+): MetaAccountDetails | null {
+  const hit = cache.get(metaAccountCacheKey(adAccountId));
+  if (!hit || now - hit.ts >= ttl) return null;
+  return hit.details;
+}
+
+export function rememberMetaAccount(
+  cache: MetaAccountCache,
+  adAccountId: string,
+  details: MetaAccountDetails,
+  now = Date.now()
+): void {
+  cache.set(metaAccountCacheKey(adAccountId), { details, ts: now });
+}
+
 export async function metaGet(url: string, token: string): Promise<any> {
   const clean = stripAccessToken(url);
   const res = await fetch(clean, { headers: { Authorization: `Bearer ${token}` } });

@@ -117,6 +117,7 @@ export function alignLastYear(date: string): LastYearAlignment {
 }
 
 export type LastYearSalesStatus = 'ok' | 'no_last_year_data';
+export type LastYearFigure = number | 'no data';
 
 /** A comparison day before the first stored order is missing history, not a zero. */
 export function lastYearSalesStatus(
@@ -126,6 +127,30 @@ export function lastYearSalesStatus(
   if (!earliestOrderDay) return 'no_last_year_data';
   if (comparisonDate < earliestOrderDay) return 'no_last_year_data';
   return 'ok';
+}
+
+/**
+ * A zero on a day before the first stored order is missing history.
+ * A non-zero amount is left as-is. A zero inside stored history stays zero.
+ */
+export function lastYearFigure(
+  amount: number,
+  day: string,
+  earliestOrderDay: string | null | undefined
+): LastYearFigure {
+  if (amount === 0 && lastYearSalesStatus(day, earliestOrderDay) !== 'ok') return 'no data';
+  return amount;
+}
+
+/** Window total. All-missing history is "no data", not $0. Known days still sum, including real zeros. */
+export function lastYearTotal(
+  days: { date: string; amount: number }[],
+  earliestOrderDay: string | null | undefined
+): LastYearFigure {
+  if (days.length === 0) return 'no data';
+  const figures = days.map((day) => lastYearFigure(day.amount, day.date, earliestOrderDay));
+  if (figures.every((figure) => figure === 'no data')) return 'no data';
+  return figures.reduce<number>((sum, figure) => sum + (figure === 'no data' ? 0 : figure), 0);
 }
 
 export interface ZonedClock {
