@@ -21,7 +21,6 @@ export async function POST(request: Request) {
           (s: number, b: CreativeUploadBatch) => s + (b.fileCount || 0),
           0
         ) || 0),
-      namesPlanned: Boolean(raw.namesPlanned),
       batches: Array.isArray(raw.batches) ? raw.batches : [],
     };
 

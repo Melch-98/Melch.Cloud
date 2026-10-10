@@ -12,31 +12,21 @@ import {
   ChevronDown,
   ChevronUp,
   Package,
-  Image,
-  Video,
   FileText,
-  Music,
   ExternalLink,
   ArrowRight,
   Play,
 } from 'lucide-react';
 import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
-import { getCreativeTypeLabel, CREATIVE_TYPE_GROUPS } from '@/lib/creative-types';
 
 interface BatchFile {
   id: string;
   file_name: string;
-  original_file_name?: string | null;
   file_url: string;
   file_type: string | null;
   media_format: string | null;
   aspect_ratio: string | null;
-  product_id: string | null;
-  product_name: string | null;
-  creative_type: string | null;
-  fidelity: string | null;
-  hook_angle: string | null;
 }
 
 interface BatchSubmission {
@@ -201,19 +191,9 @@ function FileThumbnail({ file }: { file: BatchFile }) {
 
       {/* File info */}
       <div className="p-2">
-        <p
-          className="text-[10px] text-gray-400 truncate"
-          title={
-            file.original_file_name && file.original_file_name !== file.file_name
-              ? `Uploaded as ${file.original_file_name}`
-              : file.file_name
-          }
-        >
+        <p className="text-[10px] text-gray-400 truncate" title={file.file_name}>
           {file.file_name}
         </p>
-        {file.original_file_name && file.original_file_name !== file.file_name && (
-          <p className="text-[9px] text-gray-600 truncate">was {file.original_file_name}</p>
-        )}
         <div className="flex gap-1 mt-0.5 flex-wrap">
           {file.media_format && (
             <span className="text-[9px] text-gray-500 uppercase">{file.media_format}</span>
@@ -222,28 +202,6 @@ function FileThumbnail({ file }: { file: BatchFile }) {
             <span className="text-[9px] text-amber-600">{file.aspect_ratio}</span>
           )}
         </div>
-        {/* Tag chips */}
-        <div className="flex flex-wrap gap-1 mt-1">
-          {file.product_name && (
-            <span
-              className="text-[9px] font-medium px-1.5 py-0.5 rounded-full truncate max-w-full"
-              style={{ backgroundColor: 'rgba(234,170,80,0.15)', color: '#EAA850' }}
-            >
-              {file.product_name}
-            </span>
-          )}
-          {file.creative_type && (
-            <span
-              className="text-[9px] font-medium px-1.5 py-0.5 rounded-full truncate max-w-full"
-              style={{ backgroundColor: 'rgba(100,160,230,0.15)', color: '#64A0E6' }}
-            >
-              {getCreativeTypeLabel(file.creative_type)}
-            </span>
-          )}
-        </div>
-        {file.hook_angle && (
-          <p className="text-[9px] text-gray-500 italic mt-0.5 truncate">{file.hook_angle}</p>
-        )}
       </div>
     </div>
   );
@@ -459,8 +417,6 @@ export default function SubmissionsPage() {
   const [noPermission, setNoPermission] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [batches, setBatches] = useState<BatchSubmission[]>([]);
-  const [filterProduct, setFilterProduct] = useState('');
-  const [filterCreativeType, setFilterCreativeType] = useState('');
   const [filterSearch, setFilterSearch] = useState('');
 
   const fetchData = useCallback(async () => {
@@ -507,8 +463,7 @@ export default function SubmissionsPage() {
           copy_title, is_carousel, is_flexible, is_whitelist,
           batch_status, launched_at, created_at, file_count,
           submission_files (
-            id, file_name, original_file_name, file_url, file_type, media_format, aspect_ratio,
-            product_id, product_name, creative_type, fidelity, hook_angle
+            id, file_name, file_url, file_type, media_format, aspect_ratio
           )
         `)
         .order('created_at', { ascending: false });
@@ -557,35 +512,12 @@ export default function SubmissionsPage() {
     return <NoPermissionState />;
   }
 
-  const hasFilters = filterProduct || filterCreativeType || filterSearch;
-
-  // Collect unique product names for filter dropdown
-  const allProductNames = Array.from(
-    new Set(
-      batches
-        .flatMap((b) => b.files)
-        .map((f) => f.product_name)
-        .filter(Boolean) as string[]
-    )
-  ).sort();
-
-  // Apply filters
-  const filteredBatches = hasFilters
+  const filteredBatches = filterSearch
     ? batches.filter((b) => {
         const searchLower = filterSearch.toLowerCase();
-        return b.files.some((f) => {
-          if (filterProduct && f.product_name !== filterProduct) return false;
-          if (filterCreativeType && f.creative_type !== filterCreativeType) return false;
-          if (
-            filterSearch &&
-            !f.file_name.toLowerCase().includes(searchLower) &&
-            !(f.original_file_name && f.original_file_name.toLowerCase().includes(searchLower)) &&
-            !(f.hook_angle && f.hook_angle.toLowerCase().includes(searchLower)) &&
-            !(f.product_name && f.product_name.toLowerCase().includes(searchLower))
-          )
-            return false;
-          return true;
-        });
+        if (b.batch_name.toLowerCase().includes(searchLower)) return true;
+        if ((b.creator_name || '').toLowerCase().includes(searchLower)) return true;
+        return b.files.some((f) => f.file_name.toLowerCase().includes(searchLower));
       })
     : batches;
 
@@ -654,44 +586,6 @@ export default function SubmissionsPage() {
         <div className="flex flex-wrap items-center gap-3 mb-6 p-3 rounded-xl bg-white/[0.02] border border-white/5">
           <span className="text-xs text-gray-500 font-medium">Filter:</span>
 
-          <select
-            value={filterProduct}
-            onChange={(e) => setFilterProduct(e.target.value)}
-            className="px-3 py-1.5 rounded-lg text-xs text-[#F5F5F8] focus:outline-none transition-all"
-            style={{
-              backgroundColor: 'rgba(255,255,255,0.04)',
-              border: '1px solid rgba(255,255,255,0.08)',
-            }}
-          >
-            <option value="">All Products</option>
-            {allProductNames.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-
-          <select
-            value={filterCreativeType}
-            onChange={(e) => setFilterCreativeType(e.target.value)}
-            className="px-3 py-1.5 rounded-lg text-xs text-[#F5F5F8] focus:outline-none transition-all"
-            style={{
-              backgroundColor: 'rgba(255,255,255,0.04)',
-              border: '1px solid rgba(255,255,255,0.08)',
-            }}
-          >
-            <option value="">All Types</option>
-            {CREATIVE_TYPE_GROUPS.map((group) => (
-              <optgroup key={group.label} label={group.label}>
-                {group.types.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-
           <input
             type="text"
             placeholder="Search..."
@@ -704,16 +598,12 @@ export default function SubmissionsPage() {
             }}
           />
 
-          {hasFilters && (
+          {filterSearch && (
             <button
-              onClick={() => {
-                setFilterProduct('');
-                setFilterCreativeType('');
-                setFilterSearch('');
-              }}
+              onClick={() => setFilterSearch('')}
               className="text-xs text-[#C8B89A] hover:text-[#F5F5F8] transition-colors"
             >
-              Clear filters
+              Clear
             </button>
           )}
         </div>

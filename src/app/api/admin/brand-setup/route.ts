@@ -82,18 +82,13 @@ export async function POST(request: NextRequest) {
       'ltv_3m_mult', 'ltv_6m_mult', 'ltv_12m_mult',
       'payment_processing_pct', 'returns_rate_pct', 'shipping_cost_per_order',
       'creative_cost_static', 'creative_cost_video',
-      'file_naming_pattern',
     ];
     if (!allowedFields.includes(field)) {
       return NextResponse.json({ error: `Field ${field} not allowed` }, { status: 400 });
     }
-    const storedValue =
-      field === 'file_naming_pattern' && typeof value === 'string' && !value.trim()
-        ? null
-        : value;
     const { data, error } = await supabase
       .from('brands')
-      .update({ [field]: storedValue })
+      .update({ [field]: value })
       .eq('id', brandId)
       .select();
 
@@ -111,7 +106,6 @@ export async function POST(request: NextRequest) {
       'ltv_3m_mult', 'ltv_6m_mult', 'ltv_12m_mult',
       'payment_processing_pct', 'returns_rate_pct', 'shipping_cost_per_order',
       'creative_cost_static', 'creative_cost_video',
-      'file_naming_pattern',
     ];
     const update: Record<string, any> = {};
     for (const [k, v] of Object.entries(fields)) {

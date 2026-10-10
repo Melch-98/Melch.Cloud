@@ -25,10 +25,7 @@ export async function deliverCreativeUploadNotice(
   };
 }
 
-/**
- * Notice after server-side naming. Reads the names Dropbox will use.
- * Pending rows are labeled planned because tagging did not finish.
- */
+/** Email + Slack after a batch is saved. Dropbox keeps the uploaded file names. */
 export async function notifySubmissionNamed(
   supabase: ServiceClient,
   submissionId: string
@@ -45,15 +42,10 @@ export async function notifySubmissionNamed(
 
   const { data: files } = await supabase
     .from('submission_files')
-    .select('file_name, original_file_name, tag_source')
+    .select('file_name')
     .eq('submission_id', submissionId);
 
-  const list = (files || []) as Array<{
-    file_name: string;
-    original_file_name: string | null;
-    tag_source: string | null;
-  }>;
-  const namesPlanned = list.some((file) => file.tag_source === 'pending' || file.tag_source === 'tagging');
+  const list = (files || []) as Array<{ file_name: string }>;
   const brand = submission.brands as { name?: string } | { name?: string }[] | null;
   const brandName = (Array.isArray(brand) ? brand[0]?.name : brand?.name) || 'Unknown brand';
 
@@ -61,7 +53,6 @@ export async function notifySubmissionNamed(
     brandName,
     batchCount: 1,
     totalFiles: list.length,
-    namesPlanned,
     batches: [
       {
         batchName: submission.batch_name || 'Batch',
@@ -71,7 +62,6 @@ export async function notifySubmissionNamed(
         landingPageUrl: submission.landing_page_url || null,
         fileCount: list.length,
         fileNames: list.map((file) => file.file_name),
-        originalFileNames: list.map((file) => file.original_file_name || file.file_name),
       },
     ],
   });
@@ -85,8 +75,7 @@ async function sendSlackNotification(body: CreativeUploadData) {
   }
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://melch.cloud';
-  const { brandName, batchCount, totalFiles, batches, namesPlanned } = body;
-  const plannedLine = namesPlanned ? '\n_File names are planned and can still change after tagging._' : '';
+  const { brandName, batchCount, totalFiles, batches } = body;
 
   const headerText =
     batchCount === 1
@@ -108,11 +97,7 @@ async function sendSlackNotification(body: CreativeUploadData) {
       b.fileNames.length > 0
         ? b.fileNames
             .slice(0, 8)
-            .map((n, i) => {
-              const original = b.originalFileNames?.[i];
-              const was = original && original !== n ? ` (uploaded as ${original})` : '';
-              return `• ${n}${was}`;
-            })
+            .map((n) => `• ${n}`)
             .join('\n') +
           (b.fileNames.length > 8 ? `\n…and ${b.fileNames.length - 8} more` : '')
         : '_no files_';
@@ -136,9 +121,6 @@ async function sendSlackNotification(body: CreativeUploadData) {
     blocks: [
       { type: 'header', text: { type: 'plain_text', text: headerText, emoji: true } },
       { type: 'section', fields: summaryFields },
-      ...(plannedLine
-        ? [{ type: 'section', text: { type: 'mrkdwn', text: plannedLine.trim() } }]
-        : []),
       ...batchBlocks,
       {
         type: 'actions',

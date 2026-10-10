@@ -68,9 +68,6 @@ export interface SubmissionFile {
   id: string;
   submission_id: string;
   file_name: string;
-  original_file_name?: string | null;
-  auto_tags?: Record<string, unknown> | null;
-  tag_source?: string | null;
   file_type: string;
   file_size: number;
   file_url: string;
@@ -88,11 +85,6 @@ export interface SubmissionFile {
   launch_time: string | null;
   ad_name: string | null;
   notes: string | null;
-  product_id: string | null;
-  product_name: string | null;
-  creative_type: string | null;
-  fidelity: 'high_def' | 'lofi' | 'other' | null;
-  hook_angle: string | null;
   creative_concept: string | null;
   tags: string[];
   created_at: string;
@@ -136,31 +128,10 @@ export interface TrackedFile {
 
 // ─── File Context (per-file carousel/flexible context) ──────────
 
+/** Per-card copy on a carousel. Tag and rename fields are no longer collected. */
 export interface FileContext {
-  landingPageUrl: string;
   copyHeadline: string;
   copyBody: string;
-  copyCta: string;
-  productId: string;
-  productName: string;
-  creativeType: string;
-  hookAngle: string;
-  copyTemplate: string;
-  creatorName: string;
-  creatorHandle: string;
-  /** Hand-edited Dropbox name. Empty means the formula still owns the name. */
-  customFileName?: string;
-  lockedFields?: {
-    creativeType?: boolean;
-    productId?: boolean;
-    hookAngle?: boolean;
-    landingPageUrl?: boolean;
-    fileName?: boolean;
-  };
-  /** Fields last filled by the model. A later user edit removes the field. */
-  autoFilled?: Array<'creativeType' | 'productId' | 'hookAngle' | 'landingPageUrl'>;
-  tagStatus?: 'running' | 'done' | 'error' | 'skipped';
-  autoTags?: Record<string, unknown> | null;
 }
 
 // ─── Batch Form Data (upload form) ──────────────────────────────
@@ -175,13 +146,10 @@ export interface FileMediaInfo {
 
 export interface BatchFormData {
   batchName: string;
-  creativeType: string;
   creatorName: string;
   landingPageUrl: string;
   copyTitle: string;
-  copyHeadline: string;
   copyBody: string;
-  copyCta: string;
   notes: string;
   files: File[];
   isCarousel: boolean;

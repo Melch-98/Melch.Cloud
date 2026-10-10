@@ -14,6 +14,8 @@ const nextConfig = {
       { source: '/analytics/efficiency', destination: '/dashboard', permanent: true },
       { source: '/analytics/ltv-cohorts', destination: '/dashboard', permanent: true },
       { source: '/analytics/forecast', destination: '/dashboard', permanent: true },
+      { source: '/analytics/creative-matrix', destination: '/dashboard', permanent: true },
+      { source: '/analytics/ad-perspective', destination: '/dashboard', permanent: true },
       { source: '/calendar', destination: '/dashboard', permanent: true },
     ];
   },

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import {
   AlertCircle,
   CheckCircle,
@@ -9,52 +9,35 @@ import {
   Trash2,
   Upload,
   Package,
-  Layers,
   Shuffle,
   Users,
   Copy,
   Check,
-  RefreshCw,
   FileText,
-  X,
 } from 'lucide-react';
 import FileUploader, { FileMediaInfo } from './FileUploader';
 import AssetThumbnail from './AssetThumbnail';
-import AssetDetailPanel from './AssetDetailPanel';
-import CreativeMatrixSummary from './CreativeMatrixSummary';
 import { createClient } from '@/lib/supabase';
-import { FileContext } from '@/lib/types';
-import { mergeAutoTagIntoContext, applyUserContextPatch } from '@/lib/creative-tag-merge';
-import { captureCreativeStills } from '@/lib/creative-stills';
-import { storefrontOrigin } from '@/lib/creative-auto-tag';
-import {
-  buildSubmissionFileRow,
-  isMissingColumnError,
-  legacySubmissionFileRow,
-  planCreativeFileNames,
-} from '@/lib/creative-upload-plan';
-import type { AcceptedAutoTag } from '@/lib/creative-auto-tag';
+import { deriveBatchCreativeType } from '@/lib/batch-creative-type';
 
 export interface BatchFormData {
   batchName: string;
-  creativeType: string;
   creatorName: string;
   landingPageUrl: string;
   copyTemplate: string;
   primaryText: string;
+  notes: string;
   files: File[];
   isCarousel: boolean;
   isFlexible: boolean;
   isWhitelist: boolean;
   creatorSocialHandle: string;
-  fileContexts: Record<number, FileContext>;
+  fileCards: Record<number, { headline: string; body: string }>;
   fileMediaInfo: Record<number, FileMediaInfo>;
 }
 
 interface BatchFormState extends BatchFormData {
   id: string;
-  /** UI-only: primary text variation cards. Joined into primaryText on change. */
-  primaryVariations: string[];
   errors: Record<string, string>;
 }
 
@@ -62,9 +45,6 @@ interface Brand {
   id: string;
   name: string;
   slug: string;
-  website_url?: string | null;
-  shopify_store_domain?: string | null;
-  file_naming_pattern?: string | null;
 }
 
 interface SubmissionFormProps {
@@ -74,24 +54,60 @@ interface SubmissionFormProps {
   isLoading?: boolean;
 }
 
+interface CopyTemplateOption {
+  id: string;
+  title: string;
+}
+
 const createEmptyBatch = (batchName: string): BatchFormState => ({
   id: `batch-${Date.now()}-${Math.random()}`,
   batchName,
-  creativeType: '',
   creatorName: '',
   landingPageUrl: '',
   copyTemplate: '',
   primaryText: '',
-  primaryVariations: [''],
+  notes: '',
   files: [],
   isCarousel: false,
   isFlexible: false,
   isWhitelist: false,
   creatorSocialHandle: '',
-  fileContexts: {},
+  fileCards: {},
   fileMediaInfo: {},
   errors: {},
 });
+
+function formatSize(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
+}
+
+function remapRecord<T>(rec: Record<number, T>, mapping: number[]): Record<number, T> {
+  const out: Record<number, T> = {};
+  mapping.forEach((oldIdx, newIdx) => {
+    if (rec[oldIdx] !== undefined) out[newIdx] = rec[oldIdx];
+  });
+  return out;
+}
+
+const inputClass =
+  'w-full px-3.5 py-2.5 rounded-lg text-sm text-[#F5F5F8] placeholder-gray-600 focus:outline-none transition-all focus:border-[#C8B89A]/40';
+
+const inputStyle: React.CSSProperties = {
+  backgroundColor: 'rgba(255,255,255,0.04)',
+  border: '1px solid rgba(255,255,255,0.08)',
+};
+
+const cardStyle: React.CSSProperties = {
+  backgroundColor: '#111111',
+  border: '1px solid rgba(255,255,255,0.06)',
+};
+
+const sectionLabelClass =
+  'text-xs font-medium text-gray-500 uppercase tracking-wider mb-2 block';
 
 const CopyButton: React.FC<{ text: string }> = ({ text }) => {
   const [copied, setCopied] = useState(false);
@@ -118,56 +134,15 @@ const CopyButton: React.FC<{ text: string }> = ({ text }) => {
   );
 };
 
-const inputClass =
-  'w-full px-3.5 py-2.5 rounded-lg text-sm text-[#F5F5F8] placeholder-gray-600 focus:outline-none transition-all focus:border-[#C8B89A]/40';
-
-const inputStyle: React.CSSProperties = {
-  backgroundColor: 'rgba(255,255,255,0.04)',
-  border: '1px solid rgba(255,255,255,0.08)',
-};
-
-const sectionLabelClass =
-  'text-xs font-medium text-gray-500 uppercase tracking-wider mb-2 block';
-
-const cardStyle: React.CSSProperties = {
-  backgroundColor: '#111111',
-  border: '1px solid rgba(255,255,255,0.06)',
-};
-
-interface CopyTemplateOption {
-  id: string;
-  title: string;
-}
-
-function formatSize(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
-}
-
-/** Remap an index-keyed record after files are reordered.
- *  mapping[newIndex] = oldIndex */
-function remapRecord<T>(rec: Record<number, T>, mapping: number[]): Record<number, T> {
-  const out: Record<number, T> = {};
-  mapping.forEach((oldIdx, newIdx) => {
-    if (rec[oldIdx] !== undefined) out[newIdx] = rec[oldIdx];
-  });
-  return out;
-}
-
 const SubmissionForm: React.FC<SubmissionFormProps> = ({
   brands,
   selectedBrandId,
   onSubmit,
   isLoading = false,
 }) => {
+  const [brandId, setBrandId] = useState<string | undefined>(selectedBrandId);
   const [batches, setBatches] = useState<BatchFormState[]>([]);
   const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
-  // Track batch IDs that successfully committed during this form session,
-  // so that if a later batch fails, retrying the submit skips already-saved
-  // batches instead of re-uploading and creating duplicates.
   const [savedBatchIds, setSavedBatchIds] = useState<Set<string>>(new Set());
   const [submitMessage, setSubmitMessage] = useState<{
     type: 'success' | 'error';
@@ -177,205 +152,28 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const [uploadPct, setUploadPct] = useState<number | null>(null);
   const [copyTemplateOptions, setCopyTemplateOptions] = useState<CopyTemplateOption[]>([]);
-  const [brandProducts, setBrandProducts] = useState<
-    { shopify_product_id: string; title: string; product_type: string; handle: string }[]
-  >([]);
-  const [syncingProducts, setSyncingProducts] = useState(false);
-  const [syncSuccess, setSyncSuccess] = useState(false);
   const [existingFiles, setExistingFiles] = useState<Map<string, string>>(new Map());
-  // Map<file_name, batch_name>
-
-  // Asset selection within the active batch
-  const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
+  const brandLocked = Boolean(selectedBrandId) || brands.length <= 1;
+  const activeBrand = brands.find((b) => b.id === brandId) || null;
+
+  useEffect(() => {
+    if (selectedBrandId) {
+      setBrandId(selectedBrandId);
+      return;
+    }
+    if (brands.length === 1) setBrandId(brands[0].id);
+  }, [selectedBrandId, brands]);
 
   const activeBatch = useMemo(
     () => batches.find((b) => b.id === activeBatchId) || batches[0] || null,
     [batches, activeBatchId]
   );
 
-  // Reset selection when the active batch changes
-  useEffect(() => {
-    setSelectedIndices([]);
-  }, [activeBatchId]);
-
-  // Clamp selection when files change
-  useEffect(() => {
-    if (!activeBatch) return;
-    setSelectedIndices((prev) => prev.filter((i) => i < activeBatch.files.length));
-  }, [activeBatch]);
-
-  const handleSyncProducts = useCallback(async () => {
-    if (!selectedBrandId || syncingProducts) return;
-    setSyncingProducts(true);
-    setSyncSuccess(false);
-    try {
-      const supabase = createClient();
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
-
-      await fetch('/api/sync-products', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({ brand_id: selectedBrandId }),
-      });
-
-      // Refresh the product list directly from Supabase
-      const refreshSupabase = createClient();
-      await refreshSupabase.auth.getSession(); // ensure auth loaded
-
-      const { data: refreshedProducts } = await refreshSupabase
-        .from('shopify_products')
-        .select('shopify_product_id, title, product_type, handle')
-        .eq('brand_id', selectedBrandId)
-        .eq('status', 'active')
-        .order('product_type')
-        .order('title');
-
-      const refreshedResult = [
-        { shopify_product_id: '__brand_general__', title: 'Brand / General', product_type: '', handle: '' },
-        ...(refreshedProducts || []).map((p: any) => ({
-          shopify_product_id: String(p.shopify_product_id),
-          title: p.title,
-          product_type: p.product_type || '',
-          handle: p.handle || '',
-        })),
-      ];
-      setBrandProducts(refreshedResult);
-
-      setSyncSuccess(true);
-      setTimeout(() => setSyncSuccess(false), 2000);
-    } catch (err) {
-      console.error('Product sync failed:', err);
-    } finally {
-      setSyncingProducts(false);
-    }
-  }, [selectedBrandId, syncingProducts]);
-
-  // Fetch brand products for tagging dropdowns
-  useEffect(() => {
-    const fetchProducts = async () => {
-      if (!selectedBrandId) {
-        setBrandProducts([]);
-        return;
-      }
-      try {
-        const supabase = createClient();
-        // Must load session from cookies before making authenticated queries
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
-
-        const { data: products, error } = await supabase
-          .from('shopify_products')
-          .select('shopify_product_id, title, product_type, handle')
-          .eq('brand_id', selectedBrandId)
-          .eq('status', 'active')
-          .order('product_type')
-          .order('title');
-
-        if (error) {
-          console.error('Product fetch error:', error);
-          return;
-        }
-
-        const result = [
-          { shopify_product_id: '__brand_general__', title: 'Brand / General', product_type: '', handle: '' },
-          ...(products || []).map((p: any) => ({
-            shopify_product_id: String(p.shopify_product_id),
-            title: p.title,
-            product_type: p.product_type || '',
-            handle: p.handle || '',
-          })),
-        ];
-        setBrandProducts(result);
-      } catch (err) {
-        console.error('Product fetch failed:', err);
-      }
-    };
-    fetchProducts();
-  }, [selectedBrandId]);
-
-  // Fetch existing filenames for duplicate detection
-  useEffect(() => {
-    const fetchExistingFiles = async () => {
-      if (!selectedBrandId) {
-        setExistingFiles(new Map());
-        return;
-      }
-      try {
-        const supabase = createClient();
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
-
-        const full = await supabase
-          .from('submission_files')
-          .select('file_name, original_file_name, submissions!inner(batch_name, brand_id)')
-          .eq('submissions.brand_id', selectedBrandId);
-        const files = full.error
-          ? (
-              await supabase
-                .from('submission_files')
-                .select('file_name, submissions!inner(batch_name, brand_id)')
-                .eq('submissions.brand_id', selectedBrandId)
-            ).data
-          : full.data;
-
-        const map = new Map<string, string>();
-        if (files) {
-          for (const f of files) {
-            const batchName = (f as any).submissions?.batch_name || 'unknown batch';
-            const names = [f.file_name, (f as { original_file_name?: string | null }).original_file_name];
-            for (const name of names) {
-              if (name && !map.has(name)) map.set(name, batchName);
-            }
-          }
-        }
-        setExistingFiles(map);
-      } catch (err) {
-        console.error('Failed to fetch existing files:', err);
-      }
-    };
-    fetchExistingFiles();
-  }, [selectedBrandId]);
-
-  // Fetch copy template options for the brand
-  useEffect(() => {
-    const fetchCopyTemplates = async () => {
-      if (!selectedBrandId) {
-        setCopyTemplateOptions([]);
-        return;
-      }
-      try {
-        const supabase = createClient();
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
-        const res = await fetch(`/api/copy-templates?brand_id=${selectedBrandId}`, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
-        if (res.ok) {
-          const json = await res.json();
-          setCopyTemplateOptions(
-            (json.templates || []).map((t: { id: string; title: string }) => ({
-              id: t.id,
-              title: t.title,
-            }))
-          );
-        }
-      } catch {
-        // silently fail — templates are optional
-      }
-    };
-    fetchCopyTemplates();
-  }, [selectedBrandId]);
-
-  // Fetch a batch name from the server. `reserved` holds names already claimed
-  // in this form session so the API skips those sequence numbers.
   const fetchBatchName = useCallback(async (reserved: string[] = []): Promise<string> => {
-    if (!selectedBrandId) return 'XXX_000000_0001';
+    if (!brandId) return 'XXX_000000_0001';
     const supabase = createClient();
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return 'XXX_000000_0001';
@@ -385,30 +183,34 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
         'Content-Type': 'application/json',
         Authorization: `Bearer ${session.access_token}`,
       },
-      body: JSON.stringify({ brand_id: selectedBrandId, reserved }),
+      body: JSON.stringify({ brand_id: brandId, reserved }),
     });
     if (!res.ok) return 'XXX_000000_0001';
     const json = await res.json();
     return json.batch_name;
-  }, [selectedBrandId]);
+  }, [brandId]);
 
-  // Initialize first batch on mount / brand change
   useEffect(() => {
     let cancelled = false;
-    const init = async () => {
-      if (!selectedBrandId) return;
+    if (!brandId) {
+      setBatches([]);
+      setActiveBatchId(null);
+      return;
+    }
+    const batch = createEmptyBatch('…');
+    setBatches([batch]);
+    setActiveBatchId(batch.id);
+    setSavedBatchIds(new Set());
+    void (async () => {
       const name = await fetchBatchName();
-      if (!cancelled) {
-        const batch = createEmptyBatch(name);
-        setBatches([batch]);
-        setActiveBatchId(batch.id);
-      }
+      if (cancelled) return;
+      setBatches((prev) => prev.map((b) => (b.id === batch.id ? { ...b, batchName: name } : b)));
+    })();
+    return () => {
+      cancelled = true;
     };
-    init();
-    return () => { cancelled = true; };
-  }, [selectedBrandId, fetchBatchName]);
+  }, [brandId, fetchBatchName]);
 
-  // Auto-dismiss success messages
   useEffect(() => {
     if (submitMessage?.type === 'success') {
       const timer = setTimeout(() => setSubmitMessage(null), 4000);
@@ -416,195 +218,64 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
     }
   }, [submitMessage]);
 
-  const updateBatch = useCallback(
-    (id: string, updates: Partial<BatchFormState>) => {
-      setBatches((prev) =>
-        prev.map((batch) =>
-          batch.id === id ? { ...batch, ...updates, errors: {} } : batch
-        )
-      );
-    },
-    []
-  );
-
-  /** Apply a partial FileContext update to a set of file indices in a batch. User edits lock those fields. */
-  const updateFileContexts = useCallback(
-    (
-      batchId: string,
-      indices: number[],
-      updates: Partial<FileContext>,
-      options?: {
-        lockFields?: Array<'creativeType' | 'productId' | 'hookAngle' | 'landingPageUrl' | 'fileName'>;
-      }
-    ) => {
-      setBatches((prev) =>
-        prev.map((b) => {
-          if (b.id !== batchId) return b;
-          const contexts = { ...b.fileContexts };
-          for (const i of indices) {
-            contexts[i] = applyUserContextPatch(contexts[i], updates, options?.lockFields);
-          }
-          return { ...b, fileContexts: contexts, errors: {} };
-        })
-      );
-    },
-    []
-  );
-
-  const batchesRef = useRef(batches);
-  batchesRef.current = batches;
-  const stillPromises = useRef(new WeakMap<File, Promise<string[]>>());
-  const settledStills = useRef(new WeakMap<File, string[]>());
-  const liveControllers = useRef(new Set<AbortController>());
-  const tagQueue = useRef<Array<() => Promise<void>>>([]);
-  const activeTags = useRef(0);
-  const queuedFiles = useRef(new WeakSet<File>());
-  const visionOff = useRef(false);
-  /** True after the tag endpoint answers as a configured provider. */
-  const visionReady = useRef(false);
-
-  const stillsFor = useCallback((file: File) => {
-    const existing = stillPromises.current.get(file);
-    if (existing) return existing;
-    const promise = captureCreativeStills(file)
-      .catch(() => [] as string[])
-      .then((frames) => {
-        settledStills.current.set(file, frames);
-        return frames;
-      });
-    stillPromises.current.set(file, promise);
-    return promise;
-  }, []);
-
-  const patchFileContext = useCallback((batchId: string, file: File, updates: Partial<FileContext>) => {
-    setBatches((prev) =>
-      prev.map((b) => {
-        if (b.id !== batchId) return b;
-        const index = b.files.indexOf(file);
-        if (index < 0) return b;
-        const contexts = { ...b.fileContexts };
-        contexts[index] = { ...(contexts[index] || {}), ...updates } as FileContext;
-        return { ...b, fileContexts: contexts };
-      })
-    );
-  }, []);
-
-  const runAutoTag = useCallback(
-    async (batchId: string, file: File) => {
-      if (!selectedBrandId || visionOff.current) {
-        patchFileContext(batchId, file, { tagStatus: 'skipped' });
+  useEffect(() => {
+    const fetchExistingFiles = async () => {
+      if (!brandId) {
+        setExistingFiles(new Map());
         return;
       }
-      const controller = new AbortController();
-      liveControllers.current.add(controller);
-      patchFileContext(batchId, file, { tagStatus: 'running' });
       try {
-        const frames = await stillsFor(file);
-        if (controller.signal.aborted || visionOff.current) return;
-        if (!frames.length) {
-          patchFileContext(batchId, file, { tagStatus: 'error' });
-          return;
+        const supabase = createClient();
+        const { data: files } = await supabase
+          .from('submission_files')
+          .select('file_name, submissions!inner(batch_name, brand_id)')
+          .eq('submissions.brand_id', brandId);
+        const map = new Map<string, string>();
+        for (const f of files || []) {
+          const batchName = (f as { submissions?: { batch_name?: string } }).submissions?.batch_name || 'unknown batch';
+          if (f.file_name && !map.has(f.file_name)) map.set(f.file_name, batchName);
         }
+        setExistingFiles(map);
+      } catch (err) {
+        console.error('Failed to fetch existing files:', err);
+      }
+    };
+    fetchExistingFiles();
+  }, [brandId]);
+
+  useEffect(() => {
+    const fetchCopyTemplates = async () => {
+      if (!brandId) {
+        setCopyTemplateOptions([]);
+        return;
+      }
+      try {
         const supabase = createClient();
         const { data: { session } } = await supabase.auth.getSession();
-        if (!session || controller.signal.aborted) {
-          patchFileContext(batchId, file, { tagStatus: 'skipped' });
-          return;
-        }
-        const batch = batchesRef.current.find((b) => b.id === batchId);
-        const index = batch?.files.indexOf(file) ?? -1;
-        const media = index >= 0 ? batch?.fileMediaInfo[index] : undefined;
-        const res = await fetch('/api/creative-auto-tag', {
-          method: 'POST',
-          signal: controller.signal,
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify({
-            brand_id: selectedBrandId,
-            files: [
-              {
-                file_name: file.name,
-                media_format: media?.format || null,
-                aspect_ratio: media?.aspectRatio || null,
-                file_type: file.type,
-                images: frames,
-              },
-            ],
-          }),
+        if (!session) return;
+        const res = await fetch(`/api/copy-templates?brand_id=${brandId}`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
         });
-        if (controller.signal.aborted) return;
-        if (!res.ok) {
-          patchFileContext(batchId, file, { tagStatus: 'error' });
-          return;
-        }
+        if (!res.ok) return;
         const json = await res.json();
-        const result = json.results?.[0];
-        if (result?.skipped === 'unconfigured') {
-          visionOff.current = true;
-          visionReady.current = false;
-          tagQueue.current = [];
-          patchFileContext(batchId, file, { tagStatus: 'skipped', autoTags: null });
-          return;
-        }
-        visionReady.current = true;
-        if (!result?.tags) {
-          patchFileContext(batchId, file, { tagStatus: 'error' });
-          return;
-        }
-        setBatches((prev) =>
-          prev.map((b) => {
-            if (b.id !== batchId) return b;
-            const fileIndex = b.files.indexOf(file);
-            if (fileIndex < 0) return b;
-            const contexts = { ...b.fileContexts };
-            contexts[fileIndex] = mergeAutoTagIntoContext(
-              contexts[fileIndex],
-              result.tags as AcceptedAutoTag,
-              result.auto_tags || null
-            );
-            return { ...b, fileContexts: contexts };
-          })
+        setCopyTemplateOptions(
+          (json.templates || []).map((t: { id: string; title: string }) => ({
+            id: t.id,
+            title: t.title,
+          }))
         );
       } catch {
-        if (controller.signal.aborted) return;
-        patchFileContext(batchId, file, { tagStatus: 'error' });
-      } finally {
-        liveControllers.current.delete(controller);
+        // templates are optional
       }
-    },
-    [patchFileContext, selectedBrandId, stillsFor]
-  );
+    };
+    fetchCopyTemplates();
+  }, [brandId]);
 
-  const pumpTags = useCallback(() => {
-    while (activeTags.current < 2 && tagQueue.current.length) {
-      const job = tagQueue.current.shift();
-      if (!job) break;
-      activeTags.current += 1;
-      job().finally(() => {
-        activeTags.current -= 1;
-        pumpTags();
-      });
-    }
+  const updateBatch = useCallback((id: string, updates: Partial<BatchFormState>) => {
+    setBatches((prev) =>
+      prev.map((batch) => (batch.id === id ? { ...batch, ...updates, errors: {} } : batch))
+    );
   }, []);
-
-  const queueAutoTag = useCallback(
-    (batchId: string, files: File[]) => {
-      for (const file of files) {
-        if (queuedFiles.current.has(file)) continue;
-        queuedFiles.current.add(file);
-        if (visionOff.current) {
-          patchFileContext(batchId, file, { tagStatus: 'skipped' });
-          continue;
-        }
-        void stillsFor(file);
-        tagQueue.current.push(() => runAutoTag(batchId, file));
-      }
-      pumpTags();
-    },
-    [patchFileContext, pumpTags, runAutoTag, stillsFor]
-  );
 
   const removeBatch = useCallback((id: string) => {
     setBatches((prev) => {
@@ -616,7 +287,6 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
   }, []);
 
   const addBatch = useCallback(async () => {
-    // Pass current form batch names as reserved so the API skips them
     const reserved = batches.map((b) => b.batchName);
     const name = await fetchBatchName(reserved);
     const batch = createEmptyBatch(name);
@@ -624,7 +294,6 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
     setActiveBatchId(batch.id);
   }, [batches, fetchBatchName]);
 
-  /** Reorder files inside a batch (drag-and-drop in the asset grid) */
   const moveFile = useCallback((batchId: string, from: number, to: number) => {
     if (from === to) return;
     setBatches((prev) =>
@@ -636,15 +305,13 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
         return {
           ...b,
           files: order.map((i) => b.files[i]),
-          fileContexts: remapRecord(b.fileContexts, order),
+          fileCards: remapRecord(b.fileCards, order),
           fileMediaInfo: remapRecord(b.fileMediaInfo, order),
         };
       })
     );
-    setSelectedIndices([]);
   }, []);
 
-  /** Remove a file and re-index contexts/media info */
   const removeFile = useCallback((batchId: string, index: number) => {
     setBatches((prev) =>
       prev.map((b) => {
@@ -653,101 +320,40 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
         return {
           ...b,
           files: order.map((i) => b.files[i]),
-          fileContexts: remapRecord(b.fileContexts, order),
+          fileCards: remapRecord(b.fileCards, order),
           fileMediaInfo: remapRecord(b.fileMediaInfo, order),
         };
       })
     );
-    setSelectedIndices((prev) =>
-      prev.filter((i) => i !== index).map((i) => (i > index ? i - 1 : i))
-    );
-  }, []);
-
-  const handleAssetClick = useCallback((index: number, shiftKey: boolean) => {
-    setSelectedIndices((prev) => {
-      if (shiftKey) {
-        // Multi-select toggle
-        return prev.includes(index)
-          ? prev.filter((i) => i !== index)
-          : [...prev, index];
-      }
-      // Single select — clicking the only selected asset deselects
-      if (prev.length === 1 && prev[0] === index) return [];
-      return [index];
-    });
   }, []);
 
   const validateBatch = (batch: BatchFormState): boolean => {
     const errors: Record<string, string> = {};
-
-    if (batch.files.length === 0) {
-      errors.files = 'At least one file is required';
-    }
-
-    // Whitelist requires creator name + social handle per file
-    if (batch.isWhitelist) {
-      for (let i = 0; i < batch.files.length; i++) {
-        const ctx = batch.fileContexts[i] as any;
-        if (!ctx?.creatorName?.trim()) {
-          errors[`file_${i}_creator`] = 'Creator name required for whitelist';
-          if (!errors.files) errors.files = 'All files need a creator name for whitelist submissions';
-        }
-        if (!ctx?.creatorHandle?.trim()) {
-          errors[`file_${i}_handle`] = 'Handle required for whitelist';
-          if (!errors.files) errors.files = 'All files need a @handle for whitelist submissions';
-        }
-      }
-    }
-
-    // Carousel per-card validation
-    if (batch.isCarousel) {
-      for (let i = 0; i < batch.files.length; i++) {
-        const context = batch.fileContexts[i];
-        if (!context?.copyHeadline) {
-          errors[`file_${i}_headline`] = `Card ${i + 1}: headline required`;
-        }
-      }
-    }
-
-    setBatches((prev) =>
-      prev.map((b) => (b.id === batch.id ? { ...b, errors } : b))
-    );
+    if (batch.files.length === 0) errors.files = 'Add at least one file';
+    setBatches((prev) => prev.map((b) => (b.id === batch.id ? { ...b, errors } : b)));
     return Object.keys(errors).length === 0;
   };
 
   const handleSubmit = async () => {
-    if (!selectedBrandId) {
-      setSubmitMessage({ type: 'error', text: 'Please select a brand' });
+    if (!brandId) {
+      setSubmitMessage({ type: 'error', text: 'Choose a brand' });
       return;
     }
 
-    // Validate all batches
     let allValid = true;
     for (const batch of batches) {
       if (!validateBatch(batch)) allValid = false;
     }
     if (!allValid) {
-      setSubmitMessage({
-        type: 'error',
-        text: 'Please fix the highlighted errors before submitting',
-      });
+      setSubmitMessage({ type: 'error', text: 'Add at least one file to each batch' });
       return;
     }
 
     setIsSubmitting(true);
     setUploadProgress(null);
     setUploadPct(0);
-    Array.from(liveControllers.current).forEach((controller) => controller.abort());
-    tagQueue.current = [];
 
     try {
-      const filesToFrame = batches.flatMap((b) => b.files);
-      if (visionOff.current === false) {
-        await Promise.race([
-          Promise.all(filesToFrame.map((file) => stillsFor(file))),
-          new Promise((resolve) => setTimeout(resolve, 5000)),
-        ]);
-      }
       const supabase = createClient();
       const totalBatches = batches.length;
       const pendingBatches = batches.filter((b) => !savedBatchIds.has(b.id));
@@ -756,95 +362,53 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
 
       for (let bIdx = 0; bIdx < batches.length; bIdx++) {
         const batch = batches[bIdx];
-
-        // Skip batches already committed in a prior submit attempt this session.
         if (savedBatchIds.has(batch.id)) {
           setUploadProgress(`Batch ${bIdx + 1} of ${totalBatches} already saved — skipping`);
           continue;
         }
 
         setUploadProgress(`Uploading batch ${bIdx + 1} of ${totalBatches}...`);
-
-        // Upload files to Supabase Storage
-        const uploadedFiles = [];
+        const uploadedFiles: { path: string; name: string }[] = [];
         for (let fIdx = 0; fIdx < batch.files.length; fIdx++) {
           const file = batch.files[fIdx];
           setUploadProgress(
             `Batch ${bIdx + 1}/${totalBatches} — file ${fIdx + 1}/${batch.files.length} (${file.name})`
           );
-          const storagePath = `${selectedBrandId}/${batch.batchName}/${file.name}`;
+          const storagePath = `${brandId}/${batch.batchName}/${file.name}`;
           const { data: uploadData, error: uploadError } = await supabase.storage
             .from('creatives')
             .upload(storagePath, file, { upsert: true });
-
           if (uploadError) {
-            throw new Error(`Batch ${bIdx + 1} (${batch.batchName}) — file upload failed for "${file.name}": ${uploadError.message}`);
+            throw new Error(
+              `Batch ${bIdx + 1} (${batch.batchName}) — file upload failed for "${file.name}": ${uploadError.message}`
+            );
           }
-
-          uploadedFiles.push({
-            path: uploadData.path,
-            name: file.name,
-          });
-
+          uploadedFiles.push({ path: uploadData.path, name: file.name });
           doneWork += 1;
           setUploadPct(Math.round((doneWork / totalWork) * 90));
         }
 
         setUploadProgress(`Saving batch ${bIdx + 1} of ${totalBatches}...`);
-
-        // Create submission record
         const { data: { user } } = await supabase.auth.getUser();
         const { data: submission, error: submissionError } = await supabase
           .from('submissions')
           .insert({
-            brand_id: selectedBrandId,
+            brand_id: brandId,
             user_id: user?.id,
             drive_sync_status: 'pending',
             batch_name: batch.batchName,
-            creative_type: (() => {
-              // Derive from file-level creative types — use the most common, or 'mixed'
-              const types = Object.values(batch.fileContexts)
-                .map((c: any) => c?.creativeType)
-                .filter(Boolean);
-              if (types.length === 0) return 'mixed';
-              const counts: Record<string, number> = {};
-              for (const t of types) counts[t] = (counts[t] || 0) + 1;
-              return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
-            })(),
-            creator_name: (() => {
-              // Derive from per-file creators — use the most common, or empty
-              const names = Object.values(batch.fileContexts)
-                .map((c: any) => c?.creatorName)
-                .filter(Boolean);
-              if (names.length === 0) return '';
-              const counts: Record<string, number> = {};
-              for (const n of names) counts[n] = (counts[n] || 0) + 1;
-              return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
-            })(),
-            creator_social_handle: (() => {
-              const handles = Object.values(batch.fileContexts)
-                .map((c: any) => c?.creatorHandle)
-                .filter(Boolean);
-              if (handles.length === 0) return null;
-              const counts: Record<string, number> = {};
-              for (const h of handles) counts[h] = (counts[h] || 0) + 1;
-              return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
-            })(),
-            landing_page_url: batch.landingPageUrl || null,
-            copy_title: (() => {
-              // Derive from per-file copy templates — use the most common, or null
-              const templates = Object.values(batch.fileContexts)
-                .map((c: any) => c?.copyTemplate)
-                .filter(Boolean);
-              if (templates.length === 0) return null;
-              const counts: Record<string, number> = {};
-              for (const t of templates) counts[t] = (counts[t] || 0) + 1;
-              return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
-            })(),
+            creative_type: deriveBatchCreativeType(batch.files, {
+              isCarousel: batch.isCarousel,
+              isFlexible: batch.isFlexible,
+            }),
+            creator_name: batch.creatorName.trim(),
+            creator_social_handle: batch.creatorSocialHandle.trim() || null,
+            landing_page_url: batch.landingPageUrl.trim() || '',
+            copy_title: batch.copyTemplate.trim() || '',
             copy_headline: null,
-            copy_body: batch.isCarousel ? batch.primaryText || null : null,
+            copy_body: batch.isCarousel ? batch.primaryText.trim() || '' : '',
             copy_cta: null,
-            notes: null,
+            notes: batch.notes.trim() || '',
             is_carousel: batch.isCarousel,
             is_flexible: batch.isFlexible,
             is_whitelist: batch.isWhitelist,
@@ -853,59 +417,42 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
           .select()
           .single();
 
-        if (submissionError) {
-          throw new Error(`Batch ${bIdx + 1} (${batch.batchName}) — submission insert failed: ${submissionError.message}`);
+        if (submissionError || !submission) {
+          throw new Error(
+            `Batch ${bIdx + 1} (${batch.batchName}) — submission insert failed: ${submissionError?.message || 'unknown error'}`
+          );
         }
 
-        const brandForNames = brands.find((b) => b.id === selectedBrandId);
-        const dropboxNames = planCreativeFileNames({
-          brandName: brandForNames?.name,
-          brandSlug: brandForNames?.slug,
-          pattern: brandForNames?.file_naming_pattern,
-          files: batch.files.map((file, i) => ({
-            name: file.name,
-            context: batch.fileContexts[i],
-            media: batch.fileMediaInfo[i],
-          })),
-        });
-
-        // Create file records. Storage keeps the uploaded name; Dropbox gets the planned name.
         for (let i = 0; i < batch.files.length; i++) {
           const file = batch.files[i];
-          const row = buildSubmissionFileRow({
-            submissionId: submission.id,
-            storagePath: uploadedFiles[i].path,
-            proposedFileName: dropboxNames[i],
-            originalFileName: file.name,
-            fileType: file.type || 'application/octet-stream',
-            fileSize: file.size || 0,
-            context: batch.fileContexts[i],
-            media: batch.fileMediaInfo[i],
-            frames: settledStills.current.get(file) || null,
-            visionConfigured: visionReady.current && !visionOff.current,
+          const media = batch.fileMediaInfo[i];
+          const card = batch.fileCards[i];
+          const { error: fileError } = await supabase.from('submission_files').insert({
+            submission_id: submission.id,
+            file_name: file.name,
+            file_type: file.type || 'application/octet-stream',
+            file_size: file.size || 0,
+            file_url: uploadedFiles[i].path,
+            media_format: media?.format || null,
+            aspect_ratio: media?.aspectRatio || null,
+            width: media?.width || null,
+            height: media?.height || null,
+            copy_headline: batch.isCarousel ? card?.headline?.trim() || null : null,
+            copy_body: batch.isCarousel ? card?.body?.trim() || null : null,
           });
-          let { error: fileError } = await supabase.from('submission_files').insert(row);
-          if (fileError && isMissingColumnError(fileError)) {
-            const retry = await supabase.from('submission_files').insert(legacySubmissionFileRow(row));
-            fileError = retry.error;
-          }
           if (fileError) {
-            console.error(`File insert error for ${file.name}:`, fileError);
-            throw new Error(`Batch ${bIdx + 1} (${batch.batchName}) — file record insert failed for "${file.name}": ${fileError.message}`);
+            throw new Error(
+              `Batch ${bIdx + 1} (${batch.batchName}) — file record insert failed for "${file.name}": ${fileError.message}`
+            );
           }
         }
 
-        // Mark batch as fully saved so a retry skips it.
         setSavedBatchIds((prev) => {
           const next = new Set(prev);
           next.add(batch.id);
           return next;
         });
 
-        // Start Dropbox sync without waiting on server-side tagging.
-        // The request keeps running after this form returns. The cron resumes
-        // anything this call does not finish. Notice email goes out from the
-        // server after names are final.
         const { data: { session } } = await supabase.auth.getSession();
         const syncHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
         if (session?.access_token) syncHeaders.Authorization = `Bearer ${session.access_token}`;
@@ -928,10 +475,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
 
       setUploadPct(100);
       setUploadProgress(null);
-
-      // Get a fresh batch name from the server for the reset form
       const freshName = await fetchBatchName();
-
       setSubmitMessage({
         type: 'success',
         text: `${batches.length} batch${batches.length > 1 ? 'es' : ''} submitted — ${batches.reduce((s, b) => s + b.files.length, 0)} files uploaded`,
@@ -940,11 +484,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
       setBatches([fresh]);
       setActiveBatchId(fresh.id);
       setSavedBatchIds(new Set());
-      setSelectedIndices([]);
-
-      if (onSubmit) {
-        onSubmit(batches);
-      }
+      if (onSubmit) onSubmit(batches);
     } catch (error) {
       setUploadProgress(null);
       setSubmitMessage({
@@ -957,113 +497,39 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
     }
   };
 
-  const selectedBrand = brands.find((b) => b.id === selectedBrandId);
-  const proposedByBatch = useMemo(() => {
-    const out: Record<string, string[]> = {};
-    for (const batch of batches) {
-      out[batch.id] = planCreativeFileNames({
-        brandName: selectedBrand?.name,
-        brandSlug: selectedBrand?.slug,
-        pattern: selectedBrand?.file_naming_pattern,
-        files: batch.files.map((file, i) => ({
-          name: file.name,
-          context: batch.fileContexts[i],
-          media: batch.fileMediaInfo[i],
-        })),
-      });
-    }
-    return out;
-  }, [batches, selectedBrand]);
-
-  // Duplicate warnings compare the uploaded filename only. Proposed Dropbox
-  // names repeat across batches on purpose — each batch has its own folder.
   const fileDupeWarnings = useMemo(() => {
     const warnings: Record<string, Record<number, string>> = {};
-
     for (const batch of batches) {
       const batchWarnings: Record<number, string> = {};
       const seenInBatch = new Map<string, number>();
-
       for (let i = 0; i < batch.files.length; i++) {
         const name = batch.files[i].name;
-
         if (seenInBatch.has(name)) {
-          batchWarnings[i] = `Duplicate in this batch`;
+          batchWarnings[i] = 'Duplicate in this batch';
           const firstIdx = seenInBatch.get(name)!;
-          if (!batchWarnings[firstIdx]) {
-            batchWarnings[firstIdx] = `Duplicate in this batch`;
-          }
+          if (!batchWarnings[firstIdx]) batchWarnings[firstIdx] = 'Duplicate in this batch';
         } else {
           seenInBatch.set(name, i);
         }
-
         if (!batchWarnings[i] && existingFiles.has(name)) {
           batchWarnings[i] = `Already uploaded in ${existingFiles.get(name)}`;
         }
       }
-
       warnings[batch.id] = batchWarnings;
     }
     return warnings;
   }, [batches, existingFiles]);
 
-  const stats = useMemo(() => {
-    return {
+  const namesReady = batches.every((b) => b.batchName && b.batchName !== '…');
+
+  const stats = useMemo(
+    () => ({
       batchCount: batches.length,
       totalFiles: batches.reduce((sum, b) => sum + b.files.length, 0),
-      totalSize: batches.reduce(
-        (sum, b) => sum + b.files.reduce((s, f) => s + f.size, 0),
-        0
-      ),
-    };
-  }, [batches]);
-
-  // Pending tags for the creative matrix (+N indicators)
-  const pendingTags = useMemo(() => {
-    const tags: { creativeType: string; productName: string }[] = [];
-    for (const batch of batches) {
-      for (const ctx of Object.values(batch.fileContexts)) {
-        const c = ctx as any;
-        if (c?.creativeType) {
-          tags.push({
-            creativeType: c.creativeType,
-            productName: c.productName || '',
-          });
-        }
-      }
-    }
-    return tags;
-  }, [batches]);
-
-  if (!activeBatch) {
-    return (
-      <div className="flex items-center justify-center py-24">
-        <Loader className="w-6 h-6 text-[#C8B89A] animate-spin" />
-      </div>
-    );
-  }
-
-  const batch = activeBatch;
-  const allIndices = batch.files.map((_, i) => i);
-  const dupes = fileDupeWarnings[batch.id] || {};
-
-  /** Batch-level bulk field: update batch state AND bulk-apply to all file contexts */
-  const applyBatchField = (
-    batchField: Partial<BatchFormState>,
-    contextUpdates: Partial<FileContext>
-  ) => {
-    updateBatch(batch.id, batchField);
-    if (allIndices.length > 0) {
-      updateFileContexts(batch.id, allIndices, contextUpdates);
-    }
-  };
-
-  const setPrimaryVariations = (variations: string[]) => {
-    updateBatch(batch.id, {
-      primaryVariations: variations,
-      primaryText: variations.map((v) => v.trim()).filter(Boolean).join('\n\n'),
-    });
-  };
+      totalSize: batches.reduce((sum, b) => sum + b.files.reduce((s, f) => s + f.size, 0), 0),
+    }),
+    [batches]
+  );
 
   const toggles: {
     key: 'isCarousel' | 'isFlexible' | 'isWhitelist';
@@ -1076,12 +542,28 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
     { key: 'isWhitelist', icon: Users, label: 'Whitelist', exclusive: null },
   ];
 
+  if (!brandId || !activeBatch) {
+    if (!brandLocked && brands.length > 1 && !brandId) {
+      return <BrandPicker brands={brands} value={brandId} onChange={setBrandId} />;
+    }
+    if (brands.length === 0 && !selectedBrandId) {
+      return <p className="text-sm text-gray-500">No brand is available for this account.</p>;
+    }
+    return (
+      <div className="flex items-center justify-center py-24">
+        <Loader className="w-6 h-6 text-[#C8B89A] animate-spin" />
+      </div>
+    );
+  }
+
+  const batch = activeBatch;
+  const dupes = fileDupeWarnings[batch.id] || {};
+
   return (
     <div className="pb-24">
-      {/* Message Toast */}
       {submitMessage && (
         <div
-          className={`fixed top-4 right-4 z-50 p-4 rounded-lg flex items-center gap-3 backdrop-blur-sm border shadow-lg animate-in slide-in-from-top-2 ${
+          className={`fixed top-4 right-4 z-50 p-4 rounded-lg flex items-center gap-3 backdrop-blur-sm border shadow-lg ${
             submitMessage.type === 'success'
               ? 'bg-green-500/20 border-green-400/30 text-green-100'
               : 'bg-red-500/20 border-red-400/30 text-red-100'
@@ -1094,6 +576,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
           )}
           <span className="text-sm">{submitMessage.text}</span>
           <button
+            type="button"
             onClick={() => setSubmitMessage(null)}
             className="ml-2 text-white/50 hover:text-white/80"
           >
@@ -1102,486 +585,135 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
         </div>
       )}
 
-      {/* ═══ Two-column layout ═══ */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* ─── LEFT COLUMN — batch tabs, copy, creator info ─── */}
-        <div className="order-2 lg:order-1 lg:col-span-7 lg:overflow-y-auto lg:max-h-[calc(100vh-160px)] space-y-4 lg:pr-1">
-          {/* Batch tab bar */}
-          <div
-            className="rounded-xl px-2 pt-1"
-            style={{ backgroundColor: '#0D0D0D', border: '1px solid rgba(255,255,255,0.06)' }}
-          >
-            <div className="flex items-center gap-1 overflow-x-auto">
-              {batches.map((b, i) => {
-                const isActive = b.id === batch.id;
-                const errCount = Object.keys(b.errors).length;
-                return (
-                  <button
-                    key={b.id}
-                    type="button"
-                    onClick={() => setActiveBatchId(b.id)}
-                    className="relative flex items-center gap-2 px-3 py-2.5 text-sm whitespace-nowrap transition-colors duration-150"
+      <div className="max-w-3xl space-y-4">
+        {brandLocked ? (
+          <p className="text-sm text-[#ABABAB]">
+            Brand <span className="text-[#F5F5F8]">{activeBrand?.name || 'your brand'}</span>
+          </p>
+        ) : (
+          <BrandPicker brands={brands} value={brandId} onChange={setBrandId} />
+        )}
+
+        <div
+          className="rounded-xl px-2 pt-1"
+          style={{ backgroundColor: '#0D0D0D', border: '1px solid rgba(255,255,255,0.06)' }}
+        >
+          <div className="flex items-center gap-1 overflow-x-auto">
+            {batches.map((b, i) => {
+              const isActive = b.id === batch.id;
+              const errCount = Object.keys(b.errors).length;
+              return (
+                <button
+                  key={b.id}
+                  type="button"
+                  onClick={() => setActiveBatchId(b.id)}
+                  className="relative flex items-center gap-2 px-3 py-2.5 text-sm whitespace-nowrap transition-colors duration-150"
+                  style={{ color: isActive ? '#F5F5F8' : '#ABABAB', fontWeight: isActive ? 600 : 400 }}
+                >
+                  <span>Batch {i + 1}</span>
+                  <span
+                    className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
                     style={{
-                      color: isActive ? '#F5F5F8' : '#ABABAB',
-                      fontWeight: isActive ? 600 : 400,
+                      backgroundColor: isActive ? 'rgba(200,184,154,0.15)' : 'rgba(255,255,255,0.06)',
+                      color: isActive ? '#C8B89A' : '#888',
                     }}
                   >
-                    <span>Batch {i + 1}</span>
+                    {b.files.length}
+                  </span>
+                  {errCount > 0 && (
                     <span
                       className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
-                      style={{
-                        backgroundColor: isActive
-                          ? 'rgba(200,184,154,0.15)'
-                          : 'rgba(255,255,255,0.06)',
-                        color: isActive ? '#C8B89A' : '#888',
-                      }}
+                      style={{ backgroundColor: 'rgba(255,50,50,0.12)', color: '#ef4444' }}
                     >
-                      {b.files.length}
+                      {errCount}
                     </span>
-                    {errCount > 0 && (
-                      <span
-                        className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
-                        style={{ backgroundColor: 'rgba(255,50,50,0.12)', color: '#ef4444' }}
-                      >
-                        {errCount}
-                      </span>
-                    )}
-                    {batches.length > 1 && isActive && (
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          removeBatch(b.id);
-                        }}
-                        className="p-0.5 rounded hover:bg-red-500/20"
-                        title="Remove batch"
-                      >
-                        <Trash2 className="w-3 h-3 text-gray-500" />
-                      </span>
-                    )}
-                    {/* Gold underline for active tab */}
-                    {isActive && (
-                      <span
-                        className="absolute bottom-0 left-2 right-2 h-0.5 rounded-full"
-                        style={{ backgroundColor: '#C8B89A' }}
-                      />
-                    )}
-                  </button>
-                );
-              })}
-              <button
-                type="button"
-                onClick={addBatch}
-                className="p-2 rounded-lg text-[#C8B89A] hover:bg-[rgba(200,184,154,0.1)] transition-colors"
-                title="Add another batch"
-              >
-                <Plus className="w-4 h-4" />
-              </button>
-
-              {/* Mode toggles — right side of tab bar */}
-              <div className="ml-auto flex items-center gap-1 pr-1">
-                {toggles.map(({ key, icon: Icon, label, exclusive }) => {
-                  const checked = batch[key];
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      title={label}
-                      onClick={() => {
-                        const updates: Partial<BatchFormState> = { [key]: !checked };
-                        if (!checked && exclusive) (updates as any)[exclusive] = false;
-                        updateBatch(batch.id, updates);
+                  )}
+                  {batches.length > 1 && isActive && (
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeBatch(b.id);
                       }}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-colors duration-150"
-                      style={{
-                        backgroundColor: checked ? 'rgba(200,184,154,0.15)' : 'transparent',
-                        border: checked
-                          ? '1px solid rgba(200,184,154,0.35)'
-                          : '1px solid rgba(255,255,255,0.06)',
-                        color: checked ? '#C8B89A' : '#888',
-                      }}
+                      className="p-0.5 rounded hover:bg-red-500/20"
+                      title="Remove batch"
                     >
-                      <Icon className="w-3 h-3" />
-                      <span className="hidden xl:inline">{label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-
-          {/* Batch name */}
-          <div className="rounded-xl p-4 flex items-center justify-between gap-3" style={cardStyle}>
-            <div className="min-w-0">
-              <span className={sectionLabelClass} style={{ marginBottom: 4 }}>
-                Batch Name
-              </span>
-              <p
-                className="text-sm font-semibold truncate"
-                style={{ color: '#C8B89A', letterSpacing: '0.03em' }}
-              >
-                {batch.batchName}
-              </p>
-            </div>
-            <CopyButton text={batch.batchName} />
-          </div>
-
-          {/* Copy template selector — applies to all assets in the batch */}
-          <div className="rounded-xl p-4" style={cardStyle}>
-            <span className={sectionLabelClass}>Copy Template</span>
-            <select
-              value={batch.copyTemplate}
-              onChange={(e) =>
-                applyBatchField(
-                  { copyTemplate: e.target.value },
-                  { copyTemplate: e.target.value }
-                )
-              }
-              className={inputClass}
-              style={inputStyle}
-            >
-              <option value="">No template — tag per asset</option>
-              {copyTemplateOptions.map((tpl) => (
-                <option key={tpl.id} value={tpl.title}>
-                  {tpl.title}
-                </option>
-              ))}
-            </select>
-            <p className="text-[10px] text-gray-500 mt-1.5">
-              Selecting a template applies it to every asset in this batch. You can
-              override per asset in the detail panel.
-            </p>
-          </div>
-
-          {/* Primary text variations — batch-level (carousel) */}
-          {batch.isCarousel && (
-            <div className="rounded-xl p-4" style={cardStyle}>
-              <span className={sectionLabelClass}>Primary Text</span>
-              <div className="space-y-2">
-                {batch.primaryVariations.map((text, vIdx) => (
-                  <div
-                    key={vIdx}
-                    className="rounded-lg p-3"
-                    style={{
-                      backgroundColor: 'rgba(255,255,255,0.03)',
-                      border: '1px solid rgba(255,255,255,0.08)',
-                    }}
-                  >
-                    <div className="flex items-start gap-2">
-                      <textarea
-                        value={text}
-                        rows={2}
-                        placeholder={`Primary text variation ${vIdx + 1}`}
-                        onChange={(e) => {
-                          const next = [...batch.primaryVariations];
-                          next[vIdx] = e.target.value;
-                          setPrimaryVariations(next);
-                        }}
-                        className="flex-1 bg-transparent text-sm text-[#F5F5F8] placeholder-gray-600 focus:outline-none resize-y"
-                      />
-                      {batch.primaryVariations.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setPrimaryVariations(
-                              batch.primaryVariations.filter((_, i) => i !== vIdx)
-                            )
-                          }
-                          className="p-1 rounded-md hover:bg-red-500/10 flex-shrink-0"
-                          title="Delete variation"
-                        >
-                          <Trash2 className="w-3.5 h-3.5 text-gray-500" />
-                        </button>
-                      )}
-                    </div>
-                    <div className="flex justify-end">
-                      <span
-                        className="text-[10px]"
-                        style={{ color: text.length > 125 ? '#EAB308' : '#666' }}
-                      >
-                        {text.length}/125
-                      </span>
-                    </div>
-                  </div>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => setPrimaryVariations([...batch.primaryVariations, ''])}
-                  className="w-full px-3 py-2.5 rounded-lg flex items-center justify-center gap-2 text-xs font-medium transition-colors"
-                  style={{
-                    border: '1px dashed rgba(200,184,154,0.3)',
-                    color: '#C8B89A',
-                    backgroundColor: 'rgba(200,184,154,0.03)',
-                  }}
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  Add variation
+                      <Trash2 className="w-3 h-3 text-gray-500" />
+                    </span>
+                  )}
+                  {isActive && (
+                    <span
+                      className="absolute bottom-0 left-2 right-2 h-0.5 rounded-full"
+                      style={{ backgroundColor: '#C8B89A' }}
+                    />
+                  )}
                 </button>
-              </div>
-            </div>
-          )}
-
-          {/* Carousel per-card headlines & descriptions */}
-          {batch.isCarousel && batch.files.length > 0 && (
-            <div className="rounded-xl p-4" style={cardStyle}>
-              <span className={`${sectionLabelClass} flex items-center gap-1.5`}>
-                <Layers className="w-3.5 h-3.5 text-[#C8B89A]" />
-                Card Headlines &amp; Descriptions
-              </span>
-              <div className="space-y-2">
-                {batch.files.map((file, fileIndex) => {
-                  const ctx = batch.fileContexts[fileIndex] || ({} as any);
-                  const headline = ctx.copyHeadline || '';
-                  const body = ctx.copyBody || '';
-                  return (
-                    <div
-                      key={fileIndex}
-                      className="rounded-lg p-3"
-                      style={{
-                        backgroundColor: 'rgba(255,255,255,0.03)',
-                        border: batch.errors[`file_${fileIndex}_headline`]
-                          ? '1px solid rgba(239,68,68,0.4)'
-                          : '1px solid rgba(255,255,255,0.08)',
-                      }}
-                    >
-                      <p className="text-[10px] text-gray-500 mb-2 truncate">
-                        Card {fileIndex + 1} — {file.name}
-                      </p>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <input
-                            type="text"
-                            placeholder="Headline *"
-                            value={headline}
-                            onChange={(e) =>
-                              updateFileContexts(batch.id, [fileIndex], {
-                                copyHeadline: e.target.value,
-                              })
-                            }
-                            className={inputClass}
-                            style={inputStyle}
-                          />
-                          <div className="flex justify-between mt-1">
-                            {batch.errors[`file_${fileIndex}_headline`] ? (
-                              <p className="text-xs text-red-400">
-                                {batch.errors[`file_${fileIndex}_headline`]}
-                              </p>
-                            ) : (
-                              <span />
-                            )}
-                            <span
-                              className="text-[10px]"
-                              style={{ color: headline.length > 40 ? '#EAB308' : '#666' }}
-                            >
-                              {headline.length}/40
-                            </span>
-                          </div>
-                        </div>
-                        <div>
-                          <input
-                            type="text"
-                            placeholder="Description"
-                            value={body}
-                            onChange={(e) =>
-                              updateFileContexts(batch.id, [fileIndex], {
-                                copyBody: e.target.value,
-                              })
-                            }
-                            className={inputClass}
-                            style={inputStyle}
-                          />
-                          <div className="flex justify-end mt-1">
-                            <span
-                              className="text-[10px]"
-                              style={{ color: body.length > 30 ? '#EAB308' : '#666' }}
-                            >
-                              {body.length}/30
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Creator info — batch-level, applies to all assets */}
-          <div className="rounded-xl p-4" style={cardStyle}>
-            <span className={sectionLabelClass}>Creator Info</span>
-            <div className="grid grid-cols-2 gap-3">
-              <input
-                type="text"
-                placeholder="Creator name (applies to all assets)"
-                value={batch.creatorName}
-                onChange={(e) =>
-                  applyBatchField(
-                    { creatorName: e.target.value },
-                    { creatorName: e.target.value }
-                  )
-                }
-                className={inputClass}
-                style={inputStyle}
-              />
-              {batch.isWhitelist ? (
-                <input
-                  type="text"
-                  placeholder="@handle (required for whitelist)"
-                  value={batch.creatorSocialHandle}
-                  onChange={(e) =>
-                    applyBatchField(
-                      { creatorSocialHandle: e.target.value },
-                      { creatorHandle: e.target.value }
-                    )
-                  }
-                  className={inputClass}
-                  style={inputStyle}
-                />
-              ) : (
-                <div className="flex items-center text-[11px] text-gray-600 px-1">
-                  Enable Whitelist to capture @handles
-                </div>
-              )}
-            </div>
-            <p className="text-[10px] text-gray-500 mt-1.5">
-              Applies to every asset in this batch — override per asset in the detail panel.
-            </p>
-          </div>
-
-          {batch.errors.files && (
-            <div
-              className="rounded-lg px-3 py-2 flex items-center gap-2 text-xs"
-              style={{
-                backgroundColor: 'rgba(255,50,50,0.06)',
-                border: '1px solid rgba(255,50,50,0.2)',
-                color: '#f87171',
-              }}
+              );
+            })}
+            <button
+              type="button"
+              onClick={addBatch}
+              className="p-2 rounded-lg text-[#C8B89A] hover:bg-[rgba(200,184,154,0.1)] transition-colors"
+              title="Add another batch"
             >
-              <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
-              {batch.errors.files}
-            </div>
-          )}
+              <Plus className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
-        {/* ─── RIGHT COLUMN — uploader, asset grid, detail panel, matrix ─── */}
-        <div className="order-1 lg:order-2 lg:col-span-5 lg:overflow-y-auto lg:max-h-[calc(100vh-160px)] space-y-4 lg:pl-1">
-          {/* Uploader header — sticky */}
-          <div
-            className="lg:sticky lg:top-0 z-10 rounded-xl"
-            style={{ backgroundColor: '#0A0A0A' }}
-          >
-            <div className="flex items-center gap-2 mb-2">
-              <FileText className="w-4 h-4 text-[#C8B89A]" />
-              <span className="text-sm font-medium text-gray-200">
-                Assets — Batch {batches.findIndex((b) => b.id === batch.id) + 1}
-              </span>
-              {batch.files.length > 0 && (
-                <span className="text-xs text-gray-500">
-                  {batch.files.length} file{batch.files.length !== 1 ? 's' : ''}
-                </span>
-              )}
-              <button
-                type="button"
-                onClick={handleSyncProducts}
-                disabled={syncingProducts}
-                title="Sync products from Shopify"
-                className="ml-auto p-1 rounded-md transition-all hover:bg-[rgba(200,184,154,0.12)]"
-                style={{ color: syncSuccess ? '#7FD48F' : '#C8B89A' }}
-              >
-                {syncSuccess ? (
-                  <Check className="w-3 h-3" />
-                ) : (
-                  <RefreshCw className={`w-3 h-3 ${syncingProducts ? 'animate-spin' : ''}`} />
-                )}
-              </button>
-            </div>
-            {brandProducts.length <= 1 && (
-              <p className="text-[11px] text-gray-500 italic mb-1">
-                No products yet —{' '}
-                <button
-                  type="button"
-                  onClick={handleSyncProducts}
-                  disabled={syncingProducts}
-                  className="text-[#C8B89A] hover:underline"
-                >
-                  {syncingProducts ? 'syncing...' : 'sync from Shopify'}
-                </button>
-              </p>
-            )}
-            <FileUploader
-              files={batch.files}
-              compact={batch.files.length > 0}
-              onFilesChange={(files: File[]) => {
-                // Seed new files' contexts with batch-level defaults
-                const startIdx = batch.files.length;
-                const added = files.length - batch.files.length;
-                const addedFiles = added > 0 ? files.slice(startIdx) : [];
-                updateBatch(batch.id, { files });
-                if (added > 0) {
-                  const defaults: Partial<FileContext> = {};
-                  if (batch.copyTemplate) defaults.copyTemplate = batch.copyTemplate;
-                  if (batch.creatorName) defaults.creatorName = batch.creatorName;
-                  if (batch.creatorSocialHandle)
-                    defaults.creatorHandle = batch.creatorSocialHandle;
-                  if (Object.keys(defaults).length > 0) {
-                    const newIndices = Array.from({ length: added }, (_, i) => startIdx + i);
-                    updateFileContexts(batch.id, newIndices, defaults, { lockFields: [] });
-                  }
-                  queueAutoTag(batch.id, addedFiles);
-                }
-              }}
-              onMediaInfoChange={(index: number, info: FileMediaInfo) => {
-                setBatches((prev) =>
-                  prev.map((b) =>
-                    b.id === batch.id
-                      ? {
-                          ...b,
-                          fileMediaInfo: {
-                            ...b.fileMediaInfo,
-                            [index]: info,
-                          },
-                        }
-                      : b
-                  )
-                );
-              }}
-              mediaInfo={batch.fileMediaInfo}
-              maxFileSize={2 * 1024 * 1024 * 1024}
-            />
+        <div className="rounded-xl p-4 flex items-center justify-between gap-3" style={cardStyle}>
+          <div className="min-w-0">
+            <span className={sectionLabelClass} style={{ marginBottom: 4 }}>
+              Batch name
+            </span>
+            <p className="text-sm font-semibold truncate" style={{ color: '#C8B89A' }}>
+              {batch.batchName}
+            </p>
           </div>
+          <CopyButton text={batch.batchName} />
+        </div>
 
-          {/* Asset thumbnail grid */}
+        <div className="rounded-xl p-4" style={cardStyle}>
+          <div className="flex items-center gap-2 mb-3">
+            <FileText className="w-4 h-4 text-[#C8B89A]" />
+            <span className="text-sm font-medium text-gray-200">Files</span>
+            {batch.files.length > 0 && (
+              <span className="text-xs text-gray-500">
+                {batch.files.length} file{batch.files.length !== 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
+          <FileUploader
+            files={batch.files}
+            compact={batch.files.length > 0}
+            onFilesChange={(files: File[]) => updateBatch(batch.id, { files })}
+            onMediaInfoChange={(index: number, info: FileMediaInfo) => {
+              setBatches((prev) =>
+                prev.map((b) =>
+                  b.id === batch.id
+                    ? { ...b, fileMediaInfo: { ...b.fileMediaInfo, [index]: info } }
+                    : b
+                )
+              );
+            }}
+            mediaInfo={batch.fileMediaInfo}
+            maxFileSize={2 * 1024 * 1024 * 1024}
+          />
           {batch.files.length > 0 && (
             <>
-              <div className="flex items-center justify-between">
-                <p className="text-[10px] text-gray-600">
-                  Click to select • Shift+click for multi-select • Drag to reorder
-                </p>
-                {selectedIndices.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setSelectedIndices([])}
-                    className="text-[10px] text-[#C8B89A] hover:underline flex items-center gap-1"
-                  >
-                    <X className="w-3 h-3" />
-                    Clear selection ({selectedIndices.length})
-                  </button>
-                )}
-              </div>
-              <div className="grid grid-cols-3 gap-2">
+              <p className="text-[10px] text-gray-600 mt-3 mb-2">Drag to reorder. Files keep these names in Dropbox.</p>
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
                 {batch.files.map((file, fileIndex) => (
                   <AssetThumbnail
                     key={`${file.name}-${fileIndex}`}
                     file={file}
                     index={fileIndex}
                     mediaInfo={batch.fileMediaInfo[fileIndex]}
-                    isSelected={selectedIndices.includes(fileIndex)}
-                    isTagged={Boolean((batch.fileContexts[fileIndex] as any)?.creativeType)}
-                    displayName={proposedByBatch[batch.id]?.[fileIndex]}
+                    isSelected={false}
+                    isTagged={false}
                     dupeWarning={dupes[fileIndex] || ''}
-                    onClick={handleAssetClick}
+                    onClick={() => {}}
                     onRemove={(idx) => removeFile(batch.id, idx)}
                     onDragStart={(idx) => setDragIndex(idx)}
                     onDragOver={(e, idx) => {
@@ -1599,40 +731,167 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
               </div>
             </>
           )}
-
-          {/* Asset detail panel */}
-          {selectedIndices.length > 0 && (
-            <AssetDetailPanel
-              files={batch.files}
-              selectedIndices={selectedIndices}
-              mediaInfo={batch.fileMediaInfo}
-              fileContexts={batch.fileContexts}
-              products={brandProducts}
-              copyTemplateOptions={copyTemplateOptions}
-              isCarousel={batch.isCarousel}
-              isWhitelist={batch.isWhitelist}
-              errors={batch.errors}
-              proposedName={
-                selectedIndices.length === 1
-                  ? proposedByBatch[batch.id]?.[selectedIndices[0]] || ''
-                  : ''
-              }
-              storefrontOrigin={storefrontOrigin(
-                selectedBrand?.website_url,
-                selectedBrand?.shopify_store_domain
-              )}
-              onContextChange={(indices, updates, options) =>
-                updateFileContexts(batch.id, indices, updates, options)
-              }
-            />
+          {batch.errors.files && (
+            <div
+              className="mt-3 rounded-lg px-3 py-2 flex items-center gap-2 text-xs"
+              style={{
+                backgroundColor: 'rgba(255,50,50,0.06)',
+                border: '1px solid rgba(255,50,50,0.2)',
+                color: '#f87171',
+              }}
+            >
+              <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+              {batch.errors.files}
+            </div>
           )}
-
-          {/* Creative matrix mini-summary */}
-          <CreativeMatrixSummary brandId={selectedBrandId} pendingTags={pendingTags} />
         </div>
+
+        <div className="rounded-xl p-4 space-y-4" style={cardStyle}>
+          <span className={sectionLabelClass}>Optional</span>
+          <textarea
+            value={batch.notes}
+            rows={2}
+            placeholder="Note for the media buyer"
+            onChange={(e) => updateBatch(batch.id, { notes: e.target.value })}
+            className={inputClass}
+            style={inputStyle}
+          />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <input
+              type="text"
+              placeholder="Creator name"
+              value={batch.creatorName}
+              onChange={(e) => updateBatch(batch.id, { creatorName: e.target.value })}
+              className={inputClass}
+              style={inputStyle}
+            />
+            <input
+              type="text"
+              placeholder="Creator @handle"
+              value={batch.creatorSocialHandle}
+              onChange={(e) => updateBatch(batch.id, { creatorSocialHandle: e.target.value })}
+              className={inputClass}
+              style={inputStyle}
+            />
+          </div>
+          <input
+            type="url"
+            placeholder="Landing page URL"
+            value={batch.landingPageUrl}
+            onChange={(e) => updateBatch(batch.id, { landingPageUrl: e.target.value })}
+            className={inputClass}
+            style={inputStyle}
+          />
+          <select
+            value={batch.copyTemplate}
+            onChange={(e) => updateBatch(batch.id, { copyTemplate: e.target.value })}
+            className={inputClass}
+            style={inputStyle}
+          >
+            <option value="">No copy template</option>
+            {copyTemplateOptions.map((tpl) => (
+              <option key={tpl.id} value={tpl.title}>
+                {tpl.title}
+              </option>
+            ))}
+          </select>
+          <div className="flex flex-wrap gap-2">
+            {toggles.map(({ key, icon: Icon, label, exclusive }) => {
+              const checked = batch[key];
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => {
+                    const updates: Partial<BatchFormState> = { [key]: !checked };
+                    if (!checked && exclusive) updates[exclusive] = false;
+                    updateBatch(batch.id, updates);
+                  }}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-colors duration-150"
+                  style={{
+                    backgroundColor: checked ? 'rgba(200,184,154,0.15)' : 'transparent',
+                    border: checked
+                      ? '1px solid rgba(200,184,154,0.35)'
+                      : '1px solid rgba(255,255,255,0.06)',
+                    color: checked ? '#C8B89A' : '#888',
+                  }}
+                >
+                  <Icon className="w-3 h-3" />
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {batch.isCarousel && (
+          <div className="rounded-xl p-4 space-y-3" style={cardStyle}>
+            <span className={sectionLabelClass}>Carousel copy</span>
+            <textarea
+              value={batch.primaryText}
+              rows={3}
+              placeholder="Primary text (optional)"
+              onChange={(e) => updateBatch(batch.id, { primaryText: e.target.value })}
+              className={inputClass}
+              style={inputStyle}
+            />
+            {batch.files.length > 0 && (
+              <div className="space-y-2">
+                {batch.files.map((file, fileIndex) => {
+                  const card = batch.fileCards[fileIndex] || { headline: '', body: '' };
+                  return (
+                    <div
+                      key={fileIndex}
+                      className="rounded-lg p-3"
+                      style={{
+                        backgroundColor: 'rgba(255,255,255,0.03)',
+                        border: '1px solid rgba(255,255,255,0.08)',
+                      }}
+                    >
+                      <p className="text-[10px] text-gray-500 mb-2 truncate">
+                        Card {fileIndex + 1} — {file.name}
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <input
+                          type="text"
+                          placeholder="Headline"
+                          value={card.headline}
+                          onChange={(e) =>
+                            updateBatch(batch.id, {
+                              fileCards: {
+                                ...batch.fileCards,
+                                [fileIndex]: { ...card, headline: e.target.value },
+                              },
+                            })
+                          }
+                          className={inputClass}
+                          style={inputStyle}
+                        />
+                        <input
+                          type="text"
+                          placeholder="Description"
+                          value={card.body}
+                          onChange={(e) =>
+                            updateBatch(batch.id, {
+                              fileCards: {
+                                ...batch.fileCards,
+                                [fileIndex]: { ...card, body: e.target.value },
+                              },
+                            })
+                          }
+                          className={inputClass}
+                          style={inputStyle}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* ═══ Sticky Footer ═══ */}
       <div
         className="fixed bottom-0 left-0 right-0 z-40"
         style={{
@@ -1641,7 +900,6 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
           borderTop: '1px solid rgba(255,255,255,0.06)',
         }}
       >
-        {/* Upload progress bar */}
         {uploadPct !== null && (
           <div className="h-1 w-full" style={{ backgroundColor: 'rgba(255,255,255,0.06)' }}>
             <div
@@ -1665,9 +923,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
             </div>
             <div className="hidden sm:flex gap-1.5">
               <span className="text-gray-500">Size:</span>
-              <span className="text-[#F5F5F8] font-semibold">
-                {formatSize(stats.totalSize)}
-              </span>
+              <span className="text-[#F5F5F8] font-semibold">{formatSize(stats.totalSize)}</span>
             </div>
             {uploadProgress && (
               <span className="text-[#C8B89A] text-xs animate-pulse ml-2 hidden md:inline">
@@ -1675,14 +931,12 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
               </span>
             )}
           </div>
-
           <button
+            type="button"
             onClick={handleSubmit}
-            disabled={isSubmitting || isLoading}
+            disabled={isSubmitting || isLoading || !namesReady}
             className="px-8 py-2.5 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-[#0A0A0A] font-semibold text-sm flex items-center gap-2 transition-all"
-            style={{
-              background: 'linear-gradient(135deg, #C8B89A 0%, #A89474 100%)',
-            }}
+            style={{ background: 'linear-gradient(135deg, #C8B89A 0%, #A89474 100%)' }}
           >
             {isSubmitting || isLoading ? (
               <>
@@ -1692,7 +946,7 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
             ) : (
               <>
                 <Upload className="w-4 h-4" />
-                Submit All Batches
+                Submit
               </>
             )}
           </button>
@@ -1701,5 +955,36 @@ const SubmissionForm: React.FC<SubmissionFormProps> = ({
     </div>
   );
 };
+
+function BrandPicker({
+  brands,
+  value,
+  onChange,
+}: {
+  brands: Brand[];
+  value?: string;
+  onChange: (id: string) => void;
+}) {
+  return (
+    <label className="block">
+      <span className={sectionLabelClass}>Brand</span>
+      <select
+        value={value || ''}
+        onChange={(e) => onChange(e.target.value)}
+        className={inputClass}
+        style={inputStyle}
+      >
+        <option value="" disabled>
+          Choose a brand
+        </option>
+        {brands.map((brand) => (
+          <option key={brand.id} value={brand.id}>
+            {brand.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
 
 export default SubmissionForm;

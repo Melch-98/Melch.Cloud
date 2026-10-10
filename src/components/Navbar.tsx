@@ -22,12 +22,10 @@ import {
   FlaskConical,
   Sparkles,
   Type,
-  TableProperties,
   DollarSign,
   Activity,
   Video,
   Home,
-  Grid3X3,
   Zap,
   Globe,
   Trophy,
@@ -163,9 +161,7 @@ export default function Navbar({ children }: { children?: React.ReactNode }) {
       { label: 'Creative Analytics', href: '/analytics', icon: Sparkles, roles: ['admin', 'strategist', 'founder'], badge: 'Beta', children: [
         { label: 'Top Creatives', href: '/analytics', icon: Sparkles },
         { label: 'Copy Analysis', href: '/analytics/copy-analysis', icon: Type },
-        { label: 'Ad Perspective', href: '/analytics/ad-perspective', icon: TableProperties },
         { label: 'Funnel Viewer', href: '/analytics/funnel-viewer', icon: Orbit, roles: ['admin', 'strategist', 'founder'] },
-        { label: 'Creative Matrix', href: '/analytics/creative-matrix', icon: Grid3X3, roles: ['admin', 'strategist'] },
         { label: 'Trybe Program', href: '/analytics/trybe-program', icon: Trophy, roles: ['admin', 'strategist', 'founder'] },
       ]},
     {

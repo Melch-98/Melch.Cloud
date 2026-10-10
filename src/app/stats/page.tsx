@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
+import { creativeTypeMix } from '@/lib/creative-type-mix';
 
 interface Submission {
   id: string;
@@ -209,12 +210,9 @@ export default function StatsPage() {
       launched: launchedCount,
     };
 
-    // Creative type breakdown
-    const typeCounts: Record<string, number> = {};
-    filtered.forEach((s) => {
-      const t = (s.creative_type || 'other').toLowerCase();
-      typeCounts[t] = (typeCounts[t] || 0) + 1;
-    });
+    // Creative type mix. Same grouping as creativeTypeMix: stored
+    // submissions.creative_type, lowercased, blank counted as other.
+    const typeMix = creativeTypeMix(filtered);
 
     // Per-brand counts
     const brandCounts: Record<string, number> = {};
@@ -254,7 +252,7 @@ export default function StatsPage() {
       avgLaunchTime,
       launchTrend,
       statusCounts,
-      typeCounts,
+      typeMix,
       brandCounts,
       monthlyData,
       volumeTrend,
@@ -263,7 +261,7 @@ export default function StatsPage() {
   }, [filtered]);
 
   const maxMonthly = Math.max(...stats.monthlyData.map((m) => m.count), 1);
-  const maxType = Math.max(...Object.values(stats.typeCounts), 1);
+  const maxType = Math.max(...stats.typeMix.map((bar) => bar.count), 1);
   const maxBrand = Math.max(...Object.values(stats.brandCounts), 1);
 
   if (loading) {
@@ -431,25 +429,15 @@ export default function StatsPage() {
           >
             <h2 className="text-sm font-semibold text-[#F5F5F8] mb-5">Creative Type Mix</h2>
             <div className="space-y-3">
-              {Object.entries(stats.typeCounts)
-                .sort((a, b) => b[1] - a[1])
-                .map(([type, count]) => {
-                  const typeColors: Record<string, string> = {
-                    ugc: '#C8B89A',
-                    static: '#9AADCC',
-                    video: '#9AC8A7',
-                    other: '#6B6560',
-                  };
-                  return (
-                    <MiniBar
-                      key={type}
-                      label={type.charAt(0).toUpperCase() + type.slice(1)}
-                      value={count}
-                      max={maxType}
-                      color={typeColors[type] || '#C8B89A'}
-                    />
-                  );
-                })}
+              {stats.typeMix.map((bar) => (
+                <MiniBar
+                  key={bar.type}
+                  label={bar.label}
+                  value={bar.count}
+                  max={maxType}
+                  color={bar.color}
+                />
+              ))}
             </div>
           </div>
 
