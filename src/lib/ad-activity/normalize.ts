@@ -540,11 +540,11 @@ export function googleChangeOccurredMs(row: unknown, timeZone: string): number |
 
 /**
  * Where to leave last_success_at after a pull.
- * A page cap must not claim the window is finished. Meta is newest-first, so
- * the bookmark is the oldest row reached — the earliest unsaved point — and
- * the next since stays there. Google is ascending, so the bookmark is the
- * last row's timestamp and the next query starts at that same second.
- * Zero parsed rows do not move it.
+ * Meta pages newest-first, so unsaved events are older than the oldest row
+ * fetched. A truncated Meta pull leaves the bookmark where it is
+ * (lastSuccessAt null) and keeps the page-cap error. Google is ascending, so
+ * a truncated pull bookmarks the last row's timestamp and the next query
+ * starts at that same second. Zero parsed rows do not move it.
  */
 export function platformSyncBookmark(opts: {
   platform: 'meta' | 'google';
@@ -563,12 +563,16 @@ export function platformSyncBookmark(opts: {
     };
   }
   if (opts.truncated) {
+    if (opts.platform === 'meta') {
+      return {
+        lastSuccessAt: null,
+        error: 'Meta activity page cap reached; some older events in this window were not saved',
+      };
+    }
     const earliest = opts.oldestFetchedMs;
     return {
       lastSuccessAt: earliest != null ? new Date(earliest).toISOString() : null,
-      error: opts.platform === 'meta'
-        ? 'Meta activity page cap reached; some older events in this window were not saved'
-        : 'Google change_event page stopped before the window ended',
+      error: 'Google change_event page stopped before the window ended',
     };
   }
   return { lastSuccessAt: new Date(opts.windowUntilMs).toISOString(), error: null };
