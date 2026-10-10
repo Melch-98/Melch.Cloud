@@ -3,7 +3,11 @@ import { authenticateRequest } from '@/lib/auth';
 import { createServiceClient } from '@/lib/supabase-server';
 import { loadUsageSubmission, runUsageTaskSync, saveUsageEndDate, UsageDateError } from '@/lib/usage-task-sync';
 
+// Next.js 14 caches GET fetch in the data cache. force-dynamic alone does
+// not stop that, so a later read can replay the first Supabase response.
 export const dynamic = 'force-dynamic';
+export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 
 /**
  * Create or update the Agency Tasks page for a batch usage end date.

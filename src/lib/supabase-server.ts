@@ -9,7 +9,14 @@ export function createServiceClient() {
     return null as any;
   }
 
-  return createSupabaseClient(url, key);
+  // Next.js 14 stores fetch() GET responses in the data cache. The Supabase
+  // client uses that fetch for PostgREST, so a later cron would replay the
+  // first submissions read and never reach Supabase again.
+  return createSupabaseClient(url, key, {
+    global: {
+      fetch: (input, init) => fetch(input, { ...init, cache: 'no-store' }),
+    },
+  });
 }
 
 /**
