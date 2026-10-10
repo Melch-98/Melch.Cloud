@@ -2,7 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-server';
 import { retryMissingUsageTasks } from '@/lib/usage-task-sync';
 
+// Next.js 14 caches GET fetch in the data cache. force-dynamic alone does
+// not stop that, so a later cron can replay the first Supabase read.
 export const dynamic = 'force-dynamic';
+export const fetchCache = 'force-no-store';
+export const revalidate = 0;
 export const maxDuration = 60;
 
 /**

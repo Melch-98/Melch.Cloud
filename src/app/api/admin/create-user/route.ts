@@ -213,6 +213,7 @@ function serviceClient(): SupabaseClient | null {
   if (!supabaseUrl || !serviceKey) return null;
   return createClient(supabaseUrl, serviceKey, {
     auth: { autoRefreshToken: false, persistSession: false },
+    global: { fetch: (input, init) => fetch(input, { ...init, cache: 'no-store' }) },
   });
 }
 
