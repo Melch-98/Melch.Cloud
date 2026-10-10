@@ -42,9 +42,96 @@ export interface UsageTaskCreateBody {
   properties: Record<string, unknown>;
 }
 
+export type UsageTaskStep = 'client_lookup' | 'page_create' | 'submissions_update' | 'due_update';
+
+export interface UsageTaskFailure {
+  submissionId: string;
+  step: UsageTaskStep;
+  status: number | null;
+  code: string | null;
+  message: string;
+}
+
+export class NotionRequestError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+  constructor(status: number, code: string | null, message: string) {
+    super(message);
+    this.name = 'NotionRequestError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
+export class SubmissionUpdateError extends Error {
+  readonly status: number | null;
+  readonly code: string | null;
+  constructor(status: number | null, code: string | null, message: string) {
+    super(message);
+    this.name = 'SubmissionUpdateError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
+const SECRET_VALUE =
+  /\b(?:ntn|secret|sk|rk|pk)_[A-Za-z0-9_-]{8,}\b|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b|\bBearer\s+\S+/gi;
+
+const SECRET_PARAM = /([?&#](?:access_token|token|api_key|apikey|secret)=)[^&\s#]+/gi;
+
+/** Drop token-like substrings. The words "token" and "secret" stay when they are not a value. */
+export function sanitizeSecretText(value: string): string {
+  let text = value.replace(/\s+/g, ' ').trim();
+  const secrets = [
+    process.env.NOTION_API_KEY,
+    process.env.CRON_SECRET,
+    process.env.SUPABASE_SERVICE_ROLE_KEY,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  ];
+  for (const secret of secrets) {
+    if (secret && secret.length >= 8) text = text.split(secret).join('[redacted]');
+  }
+  text = text.replace(SECRET_PARAM, '$1[redacted]').replace(SECRET_VALUE, '[redacted]');
+  return text.slice(0, 500);
+}
+
+export function usageTaskFailureFromError(
+  submissionId: string,
+  step: UsageTaskStep,
+  error: unknown
+): UsageTaskFailure {
+  if (error instanceof NotionRequestError || error instanceof SubmissionUpdateError) {
+    const code = error.code ? sanitizeSecretText(error.code).slice(0, 80) : null;
+    return {
+      submissionId,
+      step,
+      status: error.status,
+      code: code || null,
+      message: sanitizeSecretText(error.message) || 'request failed',
+    };
+  }
+  const raw = error instanceof Error ? error.message : 'request failed';
+  const match = /^Notion (\d{3})\b:?\s*(.*)$/.exec(raw);
+  const status = match ? Number(match[1]) : null;
+  const detail = match && match[2] ? match[2] : raw;
+  const message = sanitizeSecretText(detail) || (status ? `Notion ${status}` : 'request failed');
+  return { submissionId, step, status, code: null, message };
+}
+
 export type UsageTaskResult =
-  | { ok: true; action: 'skipped' | 'missing_key' | 'created' | 'updated'; page?: NotionPageRef }
-  | { ok: false; action: 'failed'; error: string };
+  | {
+      ok: true;
+      action: 'skipped' | 'missing_key' | 'created' | 'updated';
+      page?: NotionPageRef;
+      warnings?: UsageTaskFailure[];
+    }
+  | {
+      ok: false;
+      action: 'failed';
+      error: string;
+      failure: UsageTaskFailure;
+      warnings?: UsageTaskFailure[];
+    };
 
 export function tasksDataSourceId(): string {
   return process.env.NOTION_TASKS_DATA_SOURCE_ID || DEFAULT_TASKS_DATA_SOURCE_ID;
@@ -118,13 +205,13 @@ export function buildUsageTaskCreate(input: {
     appUrl: input.appUrl,
   });
   const properties: Record<string, unknown> = {
-    Name: { title: [{ text: { content: usageTaskName(input.row) } }] },
+    Name: { title: [{ type: 'text', text: { content: usageTaskName(input.row) } }] },
     Type: { select: { name: 'TURN OFF ON DUE DATE' } },
     Priority: { select: { name: 'P0' } },
     Status: { select: { name: 'To Do' } },
     'Waiting On': { select: { name: 'Internal' } },
     Due: { date: { start: input.row.usageEndDate } },
-    Notes: { rich_text: [{ text: { content: notes } }] },
+    Notes: { rich_text: [{ type: 'text', text: { content: notes } }] },
   };
   if (input.client) {
     properties.Client = { relation: [{ id: input.client.id }] };
@@ -163,11 +250,14 @@ export async function syncUsageTask(input: {
       await input.notion.updateDue(existingId, date);
       return { ok: true, action: 'updated' };
     } catch (error) {
+      const failure = usageTaskFailureFromError(input.row.id, 'due_update', error);
       console.warn('Usage task due date was not updated', {
         submissionId: input.row.id,
-        error: error instanceof Error ? error.message : 'notion',
+        status: failure.status,
+        code: failure.code,
+        message: failure.message,
       });
-      return { ok: false, action: 'failed', error: 'notion' };
+      return { ok: false, action: 'failed', error: 'notion', failure };
     }
   }
 
@@ -176,18 +266,37 @@ export async function syncUsageTask(input: {
     return { ok: true, action: 'missing_key' };
   }
 
+  const warnings: UsageTaskFailure[] = [];
+  let client: UsageClient | null = null;
   try {
     const clients = await input.notion.listClients();
-    const client = matchClient(clients, input.row.brandName);
+    client = matchClient(clients, input.row.brandName);
+  } catch (error) {
+    const failure = usageTaskFailureFromError(input.row.id, 'client_lookup', error);
+    warnings.push(failure);
+    console.warn('Usage task client lookup failed; creating the task without Client', {
+      submissionId: input.row.id,
+      status: failure.status,
+      code: failure.code,
+      message: failure.message,
+    });
+  }
+
+  try {
     const page = await input.notion.createTask(
       buildUsageTaskCreate({ row: { ...input.row, usageEndDate: date }, client, appUrl: input.appUrl })
     );
-    return { ok: true, action: 'created', page };
+    return warnings.length ? { ok: true, action: 'created', page, warnings } : { ok: true, action: 'created', page };
   } catch (error) {
+    const failure = usageTaskFailureFromError(input.row.id, 'page_create', error);
     console.warn('Usage task was not created', {
       submissionId: input.row.id,
-      error: error instanceof Error ? error.message : 'notion',
+      status: failure.status,
+      code: failure.code,
+      message: failure.message,
     });
-    return { ok: false, action: 'failed', error: 'notion' };
+    return warnings.length
+      ? { ok: false, action: 'failed', error: 'notion', failure, warnings }
+      : { ok: false, action: 'failed', error: 'notion', failure };
   }
 }

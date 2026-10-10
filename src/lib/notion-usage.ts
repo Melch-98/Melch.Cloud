@@ -1,7 +1,9 @@
 import {
   NOTION_VERSION,
+  NotionRequestError,
   buildDueUpdate,
   clientsDataSourceId,
+  sanitizeSecretText,
   type NotionPageRef,
   type NotionUsageClient,
   type UsageClient,
@@ -27,17 +29,17 @@ function titleOf(page: { properties?: { Name?: { title?: Array<{ plain_text?: st
   return parts.map((part) => part.plain_text || '').join('').trim();
 }
 
-async function readError(res: Response): Promise<string> {
-  const status = `Notion ${res.status}`;
+async function notionRequestError(res: Response): Promise<NotionRequestError> {
+  let code: string | null = null;
+  let message = '';
   try {
-    const body = (await res.json()) as { message?: string };
-    if (body.message && !body.message.includes('secret') && !body.message.toLowerCase().includes('token')) {
-      return `${status}: ${body.message}`;
-    }
+    const body = (await res.json()) as { message?: unknown; code?: unknown };
+    if (typeof body.code === 'string') code = sanitizeSecretText(body.code).slice(0, 80) || null;
+    if (typeof body.message === 'string') message = sanitizeSecretText(body.message);
   } catch {
-    // Status is enough. Do not log the raw body.
+    // Status is enough. Do not read the raw body as text; it can echo a token.
   }
-  return status;
+  return new NotionRequestError(res.status, code, message || `Notion ${res.status}`);
 }
 
 export function createNotionUsageClient(
@@ -56,9 +58,10 @@ export function createNotionUsageClient(
         const res = await fetchImpl(`${NOTION_API}/data_sources/${dataSourceId}/query`, {
           method: 'POST',
           headers,
+          cache: 'no-store',
           body: JSON.stringify({ page_size: 100, start_cursor: cursor }),
         });
-        if (!res.ok) throw new Error(await readError(res));
+        if (!res.ok) throw await notionRequestError(res);
         const body = (await res.json()) as {
           results?: Array<{ id: string; properties?: { Name?: { title?: Array<{ plain_text?: string }> } } }>;
           has_more?: boolean;
@@ -77,9 +80,10 @@ export function createNotionUsageClient(
       const res = await fetchImpl(`${NOTION_API}/pages`, {
         method: 'POST',
         headers,
+        cache: 'no-store',
         body: JSON.stringify(task),
       });
-      if (!res.ok) throw new Error(await readError(res));
+      if (!res.ok) throw await notionRequestError(res);
       const page = (await res.json()) as { id?: string; url?: string };
       if (!page.id) throw new Error('Notion did not return a page id');
       return {
@@ -92,9 +96,10 @@ export function createNotionUsageClient(
       const res = await fetchImpl(`${NOTION_API}/pages/${pageId}`, {
         method: 'PATCH',
         headers,
+        cache: 'no-store',
         body: JSON.stringify(buildDueUpdate(usageEndDate)),
       });
-      if (!res.ok) throw new Error(await readError(res));
+      if (!res.ok) throw await notionRequestError(res);
     },
   };
 }
