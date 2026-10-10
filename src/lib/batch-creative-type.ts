@@ -1,7 +1,7 @@
 const VIDEO_EXT = /\.(mp4|mov|webm|m4v|avi)$/i;
 const IMAGE_EXT = /\.(jpe?g|png|gif|webp|heic|avif)$/i;
 
-export type BatchCreativeType = 'image' | 'video' | 'mixed' | 'carousel' | 'flexible' | 'other';
+export type BatchCreativeType = 'static' | 'video' | 'mixed' | 'carousel' | 'flexible' | 'other';
 
 export interface BatchCreativeFlags {
   isCarousel?: boolean;
@@ -19,8 +19,9 @@ export function fileMediaKind(file: { type?: string; name?: string }): 'image' |
 
 /**
  * Batch label stored on submissions.creative_type.
- * Stats Creative Type Mix reads that column. Carousel and flexible win over
- * the file mix because those toggles describe the batch, not one file.
+ * Stats Creative Type Mix reads that column. Image-only batches use the
+ * historical slug `static` so they share the existing Static bar. Carousel
+ * and flexible win over the file mix because those toggles describe the batch.
  */
 export function deriveBatchCreativeType(
   files: Array<{ type?: string; name?: string }>,
@@ -35,5 +36,5 @@ export function deriveBatchCreativeType(
   }
   if (kinds.size === 0) return 'other';
   if (kinds.size === 2) return 'mixed';
-  return kinds.has('video') ? 'video' : 'image';
+  return kinds.has('video') ? 'video' : 'static';
 }

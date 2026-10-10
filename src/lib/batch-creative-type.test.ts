@@ -14,7 +14,13 @@ describe('deriveBatchCreativeType', () => {
   });
 
   it('labels a batch from the files in it', () => {
-    expect(deriveBatchCreativeType([{ type: 'image/jpeg', name: 'a.jpg' }])).toBe('image');
+    expect(deriveBatchCreativeType([{ type: 'image/jpeg', name: 'a.jpg' }])).toBe('static');
+    expect(
+      deriveBatchCreativeType([
+        { type: 'image/jpeg', name: 'a.jpg' },
+        { type: 'image/png', name: 'b.png' },
+      ])
+    ).toBe('static');
     expect(deriveBatchCreativeType([{ type: 'video/mp4', name: 'a.mp4' }])).toBe('video');
     expect(
       deriveBatchCreativeType([

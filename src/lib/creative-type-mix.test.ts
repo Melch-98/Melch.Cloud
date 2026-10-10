@@ -38,13 +38,13 @@ describe('Stats creative type mix', () => {
     const bars = creativeTypeMix([...historical, ...fresh]);
     const counts = Object.fromEntries(bars.map((bar) => [bar.type, bar.count]));
 
-    expect(counts.static).toBe(2);
+    expect(counts.static).toBe(3);
     expect(counts.video).toBe(2);
     expect(counts.ugc).toBe(1);
     expect(counts.mixed).toBe(2);
     expect(counts.product_love_testimonial).toBe(1);
     expect(counts.other).toBe(2);
-    expect(counts.image).toBe(1);
+    expect(counts.image).toBeUndefined();
     expect(counts.carousel).toBe(1);
     expect(counts.flexible).toBe(1);
 
@@ -63,7 +63,6 @@ describe('Stats creative type mix', () => {
     expect(bars.find((bar) => bar.type === 'product_love_testimonial')?.label).toBe(
       'Product_love_testimonial'
     );
-    expect(bars.find((bar) => bar.type === 'image')?.label).toBe('Image');
     expect(bars.find((bar) => bar.type === 'carousel')?.label).toBe('Carousel');
     expect(bars.find((bar) => bar.type === 'flexible')?.label).toBe('Flexible');
     expect(bars.every((bar) => bar.label.length > 0 && bar.count > 0)).toBe(true);
