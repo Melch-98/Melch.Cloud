@@ -346,7 +346,7 @@ describe('sync bookmarks and strict GAQL rows', () => {
     expect(google.error).toBe('Google: 4 change events returned, 0 parsed');
   });
 
-  it('stops a capped Meta pull at the oldest saved row instead of the window end', () => {
+  it('leaves the Meta bookmark in place when the page cap is hit', () => {
     const oldest = Date.parse('2026-10-08T12:00:00.000Z');
     const bookmark = platformSyncBookmark({
       platform: 'meta',
@@ -356,8 +356,7 @@ describe('sync bookmarks and strict GAQL rows', () => {
       truncated: true,
       oldestFetchedMs: oldest,
     });
-    expect(bookmark.lastSuccessAt).toBe(new Date(oldest).toISOString());
-    expect(bookmark.lastSuccessAt).not.toBe(new Date(NOW).toISOString());
+    expect(bookmark.lastSuccessAt).toBeNull();
     expect(bookmark.error).toBe(
       'Meta activity page cap reached; some older events in this window were not saved'
     );
