@@ -47,7 +47,7 @@ Design: dark `#0a0a0a`, text `#f5f5f8`, gold `#c8b89a` (`brand.*` in Tailwind).
 | `/auth/set-password` | public (one-time link) | Set a password from an invite or recovery link, then enter the app |
 | `/admin/onboard` | admin / founder | Onboarding wizard (create brand, integrations, invite users, archive) |
 | `/admin/dropbox` | (no in-page role check) | Dropbox connect page. Start-route comment says admin; the handler does not enforce a role. |
-| `/analytics/bfcm-pacing` | admin / strategist / founder | BFCM command center. Founders see the Performance nav. |
+| `/analytics/bfcm-pacing` | admin / strategist / founder | BFCM command center. Founders see the Performance nav. Shopify gross sales come from `shopify_orders` (same gross / new-customer helper as Daily P&L). Today, L7, and hours use the shop IANA zone, falling back to the ad account zone. Last year inside Nov 23–30 aligns by event day (Black Friday and Cyber Monday), otherwise the same weekday (minus 364 days). Shared goals live in `bfcm_goals` (`supabase/migrations/add_bfcm_goals.sql`). |
 | `/analytics/daily-pnl` | admin / founder | Daily P&L in the brand’s reporting currency |
 | `/analytics/campaigns`, `/analytics/geo-performance` | admin / founder / strategist | Campaigns; geo aMER |
 | `/analytics/efficiency`, `/analytics/ltv-cohorts`, `/analytics/forecast` | — | Retired. Permanent redirects to `/dashboard` (`next.config.mjs`). |
@@ -126,6 +126,21 @@ Webhook HMAC accepts `SHOPIFY_API_SECRET` or the brand's `shopify_client_secret`
 `refunds/create` is not registered. That handler only logs. `orders/updated` upserts the order, including refunds on `raw`.
 
 Do not invent `shopify_stores` rows. Do not register Shopify webhooks for a brand with no Admin token. A `gadget-managed` install token is not an Admin API token; custom-app credentials are used instead.
+
+## BFCM command center
+
+`GET /api/bfcm-pacing` is shop-local. Shopify revenue is `shopify_orders` gross (subtotal + discounts) through the same new-customer classification as Daily P&L. MER is that gross divided by Meta + Google spend; aMER uses new-customer gross. A last-year day before the brand's earliest stored order is `no_last_year_data`, not zero. Today is cached 60 seconds; L7, last year, and the BFCM window are cached 15 minutes. Meta insights use an `Authorization` header, not `access_token` in the URL. One ranged hourly call covers L7.
+
+Goals: `PUT /api/bfcm-goals` with `{ brandId, date, revenueGoal, spendBudget, amerTarget }`. Admins write any brand. Founders write their own. Strategists read their own. Apply `supabase/migrations/add_bfcm_goals.sql` before saving goals.
+
+Order backfill is admin-only or `Authorization: Bearer CRON_SECRET`. It does not run in this app's cron and does not rebuild `daily_pnl`. Call the same body again while `truncated` is true:
+
+```
+POST /api/admin/shopify-order-backfill
+{ "brand_name": "Mintier", "start_date": "2025-11-15", "end_date": "2025-12-05" }
+```
+
+Use `"brand_name": "Tallow Twins"` for that brand. The cursor is stored server-side.
 
 ## Ship / ops footguns
 

@@ -147,7 +147,7 @@ async function fetchOrdersUpdatedSince(
   return { orders, truncated: false };
 }
 
-async function upsertOrders(
+export async function upsertShopifyOrders(
   supabase: SupabaseLike,
   domain: string,
   brandId: string,
@@ -208,7 +208,7 @@ async function syncBrand(
     const { orders, truncated } = await fetchOrdersUpdatedSince(domain, token, plan);
     base.fetched = orders.length;
     base.truncated = truncated;
-    base.upserted = await upsertOrders(supabase, domain, brand.id, orders);
+    base.upserted = await upsertShopifyOrders(supabase, domain, brand.id, orders);
     await rememberOrderCursor(supabase, brand.id, plan, orders, truncated);
     if (truncated) {
       base.warning = plan.chunked

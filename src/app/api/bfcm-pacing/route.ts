@@ -1,18 +1,50 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { fetchAccountCurrency, fetchAccountTimezone } from '@/lib/meta-api';
-import { getCampaignMetrics, normalizeCustomerId, resolvePipeboardToken } from '@/lib/pipeboard-google';
-import { getFxRates, currencyFromShopInfo, resolveReportingCurrency } from '@/lib/currency';
+import { currencyFromShopInfo, getFxRates, resolveReportingCurrency, toReportingCurrency } from '@/lib/currency';
+import {
+  alignLastYear,
+  bfcmWindow,
+  lastYearSalesStatus,
+  orderFeed,
+  shopDayRangeIso,
+  shopTodayAndL7,
+  type BfcmDay,
+} from '@/lib/bfcm/calendar';
+import { googleTodayQuery, sumGoogleToday } from '@/lib/bfcm/google-today';
+import { enrichOrders, loadOrderFreshness, loadOrdersBetween } from '@/lib/bfcm/load-orders';
+import {
+  averageHourlySpend,
+  emptyHourlySpend,
+  insightUrl,
+  l7HourlyInsightQuery,
+  metaCollect,
+  metaGet,
+  parseHourlySpendRows,
+  type HourlySpend,
+} from '@/lib/bfcm/meta-insights';
+import { merRatio } from '@/lib/bfcm/pacing';
+import {
+  averageSalesByHour,
+  daySalesOrEmpty,
+  emptyDaySales,
+  salesByDay,
+  type DaySales,
+  type HourSales,
+} from '@/lib/bfcm/shopify-sales';
+import { fetchGoogleAdsCurrency, gaqlQueryStrict, resolvePipeboardToken } from '@/lib/pipeboard-google';
+import { shopLocalDay } from '@/lib/shopify/shop-time';
+import { resolveShopIanaTimeZone } from '@/lib/shopify/shop-timezone';
+import { resolveOrderConnection } from '@/lib/shopify/order-connection';
+import { webhookStatusKey, type StoredWebhookStatus } from '@/lib/shopify/webhook-status';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-// ─── Types ──────────────────────────────────────────────────────
-
-interface HourlyPoint {
-  hour: number;
-  spend: number;
-}
+const TODAY_TTL = 60 * 1000;
+const HISTORY_TTL = 15 * 60 * 1000;
+const META_BASE = 'https://graph.facebook.com/v21.0';
+const ATTRIBUTION = 'action_attribution_windows=["7d_click","1d_view"]';
+const PURCHASE_TYPES = ['purchase', 'omni_purchase', 'offsite_conversion.fb_pixel_purchase'];
 
 interface DailyPoint {
   date: string;
@@ -44,128 +76,144 @@ interface CampaignToday {
   roasDeltaVsL7: number;
 }
 
-interface BfcmPacingResponse {
-  currency: string;                 // native Meta account currency (CAD/USD/…)
-  timezone: string;
-  grossMarginPct: number | null;
-  baseCurrency: string;             // requested base currency for display
-  fxRates: Record<string, number>;  // rates relative to USD pivot (1 USD = fxRates[cur] cur)
-  currencies: {
-    meta: string;
-    google: string | null;
-  };
-  bfcmWindow: { start: string; end: string };
-  today: {
-    date: string;
+interface HistorySlice {
+  l7HourlyAvg: HourlySpend[];
+  l7DailyAvg: number;
+  l7DailyHourly: { date: string; hourlySpend: HourlySpend[]; dayTotal: number }[];
+  l7TotalSpend: number;
+  l7TotalPurchaseValue: number;
+  l7Roas: number;
+  lyWindow: DailyPoint[];
+  tyWindow: DailyPoint[];
+  lySameDay: {
     dayLabel: string;
-    hourlySpend: HourlyPoint[];
-    totalSpendSoFar: number;        // Meta spend, native
-    googleSpend: number;            // native
-    acquisitionSpend: number;       // Meta + Google, native
+    date: string;
+    totalSpend: number;
+    hourlySpend: HourlySpend[];
     purchases: number;
     purchaseValue: number;
     roas: number;
   };
-  l7Baseline: {
-    hourlyAvg: HourlyPoint[];
-    dailyAvg: number;
-    dailyHourly: { date: string; hourlySpend: HourlyPoint[]; dayTotal: number }[];
-    roas: number;
-    totalSpend: number;
-    totalPurchaseValue: number;
-  };
-  aMer: {
-    available: boolean;
-    l7NcRevenue: number;            // native
-    l7MetaSpend: number;
-    l7GoogleSpend: number;
-    l7OtherSpend: number;
-    l7TotalSpend: number;           // meta + google + other
-    l7: number | null;              // aMER = ncRevenue / totalSpend
-  };
-  lastYearBfcm: {
-    sameDay: { dayLabel: string; date: string; totalSpend: number; hourlySpend: HourlyPoint[]; purchases: number; purchaseValue: number; roas: number };
-    fullWindow: DailyPoint[];
-  };
-  thisYearBfcm: {
-    fullWindow: DailyPoint[];
-  };
+  campaignL7: Record<string, { spend: number; purchaseValue: number }>;
+  shopifyL7Hourly: HourSales[];
+  shopifyL7DailyAvg: number;
+  shopifyLastYear: DaySales | null;
+  earliestOrderDay: string | null;
+  pnl: { ncRev: number; meta: number; google: number; other: number; hasData: boolean };
+  warnings: string[];
+}
+
+interface LiveSlice {
+  hourlySpend: HourlySpend[];
+  totalSpendSoFar: number;
+  purchases: number;
+  purchaseValue: number;
   campaigns: CampaignToday[];
+  shopifyToday: DaySales;
+  newestOrderAt: string | null;
+  google: {
+    configured: boolean;
+    spend: number | null;
+    conversionValue: number | null;
+    conversions: number | null;
+    roas: number | null;
+    currency: string | null;
+    valueLabel: 'conversion value' | 'unavailable';
+    error: string | null;
+  };
+  metaOk: boolean;
+  metaCurrency: string | null;
+  feed: { feed: string; label: string };
+  warnings: string[];
 }
 
-// ─── BFCM Date Calculation ──────────────────────────────────────
+const historyCache = new Map<string, { data: HistorySlice; ts: number }>();
+const liveCache = new Map<string, { data: LiveSlice; ts: number }>();
 
-function getBfcmWindow(year: number) {
-  let thursdayCount = 0;
-  let thanksgiving: Date | null = null;
-  for (let d = 1; d <= 30; d++) {
-    const date = new Date(year, 10, d);
-    if (date.getDay() === 4) {
-      thursdayCount++;
-      if (thursdayCount === 4) {
-        thanksgiving = date;
-        break;
-      }
-    }
-  }
-  const mondayBefore = new Date(thanksgiving!);
-  mondayBefore.setDate(mondayBefore.getDate() - 3);
-  const cyberMonday = new Date(thanksgiving!);
-  cyberMonday.setDate(cyberMonday.getDate() + 4);
-
-  return { start: mondayBefore, end: cyberMonday, thanksgiving: thanksgiving! };
+function r2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
-function fmtDate(d: Date): string {
-  return d.toISOString().split('T')[0];
+function roundHours(hours: HourSales[]): HourSales[] {
+  return hours.map((hour) => ({
+    ...hour,
+    revenue: r2(hour.revenue),
+    ncRevenue: r2(hour.ncRevenue),
+    rcRevenue: r2(hour.rcRevenue),
+  }));
 }
 
-function getDayLabel(date: Date, thanksgiving: Date): string {
-  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const d = new Date(date);
-  if (d.toDateString() === thanksgiving.toDateString()) return 'Thanksgiving';
-  const bf = new Date(thanksgiving);
-  bf.setDate(bf.getDate() + 1);
-  if (d.toDateString() === bf.toDateString()) return 'Black Friday';
-  const cm = new Date(thanksgiving);
-  cm.setDate(cm.getDate() + 4);
-  if (d.toDateString() === cm.toDateString()) return 'Cyber Monday';
-  return days[d.getDay()];
+function roundDay(day: DaySales): DaySales {
+  return {
+    ...day,
+    revenue: r2(day.revenue),
+    aov: r2(day.aov),
+    ncRevenue: r2(day.ncRevenue),
+    rcRevenue: r2(day.rcRevenue),
+    hourly: roundHours(day.hourly),
+  };
 }
 
-// ─── Meta action extraction (never sum aliases) ────────────────
+function readCache<T>(map: Map<string, { data: T; ts: number }>, key: string, ttl: number, bypass: boolean): T | null {
+  if (bypass) return null;
+  const hit = map.get(key);
+  if (!hit || Date.now() - hit.ts > ttl) return null;
+  return hit.data;
+}
 
-const PURCHASE_TYPES = ['purchase', 'omni_purchase', 'offsite_conversion.fb_pixel_purchase'];
-
-function firstAction(actions: any[] | undefined, types: string[]): number {
-  if (!actions) return 0;
-  for (const t of types) {
-    const found = actions.find((a: any) => a.action_type === t);
+function firstAction(actions: any[] | undefined): number {
+  if (!Array.isArray(actions)) return 0;
+  for (const type of PURCHASE_TYPES) {
+    const found = actions.find((action) => action?.action_type === type);
     if (found) return parseFloat(found.value) || 0;
   }
   return 0;
 }
 
-function purchases(actions: any[] | undefined): number {
-  return firstAction(actions, PURCHASE_TYPES);
-}
-
-function purchaseValue(actionValues: any[] | undefined): number {
-  return firstAction(actionValues, PURCHASE_TYPES);
-}
-
-function roas(spend: number, value: number): number {
+function ratio(spend: number, value: number): number {
   return spend > 0 ? value / spend : 0;
 }
 
-// FX: shared via @/lib/currency (open.er-api.com USD pivot)
+function dailyFromRows(rows: any[], days: BfcmDay[]): DailyPoint[] {
+  return rows.map((row) => {
+    const spend = parseFloat(row.spend || '0');
+    const purchaseValue = firstAction(row.action_values);
+    const known = days.find((day) => day.date === row.date_start);
+    return {
+      date: row.date_start,
+      dayLabel: known?.dayLabel || row.date_start,
+      spend,
+      purchases: firstAction(row.actions),
+      purchaseValue,
+      roas: ratio(spend, purchaseValue),
+    };
+  });
+}
 
-// ─── In-memory response cache ───────────────────────────────────
+function fillWindow(days: BfcmDay[], rows: DailyPoint[]): DailyPoint[] {
+  return days.map((day) => {
+    const found = rows.find((row) => row.date === day.date);
+    return (
+      found || {
+        date: day.date,
+        dayLabel: day.dayLabel,
+        spend: 0,
+        purchases: 0,
+        purchaseValue: 0,
+        roas: 0,
+      }
+    );
+  });
+}
 
-const cache = new Map<string, { data: BfcmPacingResponse; ts: number }>();
-const CACHE_TTL = 5 * 60 * 1000; // 5 min
-
-// ─── API Route ──────────────────────────────────────────────────
+async function metaAccount(token: string, adAccountId: string): Promise<{ currency: string; timezone: string }> {
+  const account = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
+  const json = await metaGet(`${META_BASE}/${account}?fields=currency,timezone_name`, token);
+  return {
+    currency: typeof json?.currency === 'string' ? json.currency : 'USD',
+    timezone: typeof json?.timezone_name === 'string' ? json.timezone_name : 'UTC',
+  };
+}
 
 export async function GET(request: NextRequest) {
   const supabase = createClient(
@@ -175,9 +223,11 @@ export async function GET(request: NextRequest) {
 
   const authHeader = request.headers.get('authorization');
   if (!authHeader) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
   const token = authHeader.replace('Bearer ', '');
-  const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser(token);
   if (authError || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const { data: profile } = await supabase
@@ -185,34 +235,23 @@ export async function GET(request: NextRequest) {
     .select('role, brand_id')
     .eq('id', user.id)
     .single();
-
   if (!profile || !['admin', 'strategist', 'founder'].includes(profile.role)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
   const { searchParams } = new URL(request.url);
   const brandId = searchParams.get('brandId');
-  const yearParam = searchParams.get('year');
-  const year = yearParam ? parseInt(yearParam, 10) : new Date().getFullYear();
+  const year = searchParams.get('year') ? parseInt(searchParams.get('year') as string, 10) : new Date().getFullYear();
   const baseCurrencyParam = (searchParams.get('baseCurrency') || 'AUTO').toUpperCase();
-
+  const bypassCache = searchParams.get('refresh') === '1';
   if (!brandId) return NextResponse.json({ error: 'brandId required' }, { status: 400 });
-
   if (profile.role !== 'admin' && profile.brand_id !== brandId) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
-  const { data: brand, error: brandError } = await supabase
-    .from('brands')
-    .select('*')
-    .eq('id', brandId)
-    .single();
+  const { data: brand, error: brandError } = await supabase.from('brands').select('*').eq('id', brandId).single();
+  if (brandError || !brand) return NextResponse.json({ error: 'Brand not found' }, { status: 404 });
 
-  if (brandError || !brand) {
-    return NextResponse.json({ error: 'Brand not found' }, { status: 404 });
-  }
-
-  // Reporting currency = Shopify settlement when AUTO (default). Do not invent.
   let shopCurrency: string | null = null;
   if (brand.shopify_store_domain) {
     const { data: storeRow } = await supabase
@@ -222,463 +261,578 @@ export async function GET(request: NextRequest) {
       .maybeSingle();
     shopCurrency = currencyFromShopInfo(storeRow?.shop_info);
   }
-  const resolvedReporting = resolveReportingCurrency({
-    override: baseCurrencyParam,
-    shopCurrency,
-  });
-  const baseCurrency = resolvedReporting.code;
+  const reporting = resolveReportingCurrency({ shopCurrency });
+  const display = resolveReportingCurrency({ override: baseCurrencyParam, shopCurrency });
+  const reportingCurrency = reporting.code;
+  const baseCurrency = display.code;
 
-  const cacheKey = `bfcm:${brandId}:${year}:${baseCurrency}`;
-  const cached = cache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < CACHE_TTL) {
-    return NextResponse.json(cached.data);
-  }
-
-  if (!brand.meta_ad_account_id || !brand.meta_ad_account_id.trim()) {
-    return NextResponse.json({ error: 'No Meta ad account configured for this brand' }, { status: 400 });
-  }
-
+  const warnings: string[] = [];
   let metaToken = process.env.META_ACCESS_TOKEN || '';
   if (!metaToken) {
-    const { data: settings } = await supabase
-      .from('app_settings')
-      .select('value')
-      .eq('key', 'meta_access_token')
-      .single();
+    const { data: settings } = await supabase.from('app_settings').select('value').eq('key', 'meta_access_token').maybeSingle();
     metaToken = settings?.value || '';
   }
+  const metaConfigured = !!(brand.meta_ad_account_id && String(brand.meta_ad_account_id).trim());
+  const metaReady = metaConfigured && !!metaToken;
+  if (metaConfigured && !metaToken) warnings.push('Meta account is set, but no access token is configured.');
+  if (!metaConfigured) warnings.push('No Meta ad account. Showing Shopify and Google only.');
 
-  if (!metaToken) {
-    return NextResponse.json({ error: 'No Meta access token configured' }, { status: 400 });
+  const shopZone = await resolveShopIanaTimeZone(supabase, {
+    id: brand.id,
+    name: brand.name,
+    shopify_store_domain: brand.shopify_store_domain,
+    shopify_client_id: brand.shopify_client_id,
+    shopify_client_secret: brand.shopify_client_secret,
+  });
+  let timezone = shopZone.timeZone;
+  let timezoneSource: 'shop' | 'ad_account' | 'utc' = shopZone.source === 'utc_fallback' ? 'utc' : 'shop';
+  let metaCurrency = 'USD';
+  if (shopZone.source === 'utc_fallback' && metaReady) {
+    try {
+      const account = await metaAccount(metaToken, brand.meta_ad_account_id);
+      metaCurrency = account.currency;
+      if (account.timezone && account.timezone !== 'UTC') {
+        timezone = account.timezone;
+        timezoneSource = 'ad_account';
+      }
+    } catch (err) {
+      warnings.push(`Meta account lookup failed: ${err instanceof Error ? err.message : 'request failed'}`);
+    }
+  } else if (timezoneSource === 'utc') {
+    warnings.push('Shop timezone is not cached. Today is using UTC until the shop zone is known.');
   }
 
-  const adAccountId = brand.meta_ad_account_id;
-  const META_BASE = 'https://graph.facebook.com/v21.0';
-  const ATTRIBUTION = '&action_attribution_windows=["7d_click","1d_view"]';
+  const now = new Date();
+  const clock = shopTodayAndL7(now, timezone);
+  const window = bfcmWindow(year);
+  const alignment = alignLastYear(clock.today);
+  const historyKey = `bfcm:hist:${brandId}:${year}:${clock.today}:${baseCurrency}:${timezone}`;
+  const liveKey = `bfcm:live:${brandId}:${clock.today}:${baseCurrency}:${timezone}`;
+  let history = readCache(historyCache, historyKey, HISTORY_TTL, bypassCache);
+  let live = readCache(liveCache, liveKey, TODAY_TTL, bypassCache);
 
-  try {
-    const currency = await fetchAccountCurrency(metaToken, adAccountId);
-    const timezone = await fetchAccountTimezone(metaToken, adAccountId);
-    const fxRates = await getFxRates();
+  const fxRates = await getFxRates();
 
-    const bfcmWindow = getBfcmWindow(year);
-    const lastYearBfcmWindow = getBfcmWindow(year - 1);
-
-    const today = new Date();
-    const todayStr = fmtDate(today);
-
-    // L7 = the 7 days BEFORE today
-    const l7Start = new Date(today);
-    l7Start.setDate(l7Start.getDate() - 7);
-    const l7End = new Date(today);
-    l7End.setDate(l7End.getDate() - 1);
-    const l7StartStr = fmtDate(l7Start);
-    const l7EndStr = fmtDate(l7End);
-
-    const l7Days: string[] = [];
-    for (let i = 1; i <= 7; i++) {
-      const d = new Date(today);
-      d.setDate(d.getDate() - i);
-      l7Days.push(fmtDate(d));
-    }
-
-    const getInsights = async (path: string): Promise<any> => {
-      const res: Response = await fetch(`${META_BASE}/${adAccountId}/insights?${path}&access_token=${metaToken}`);
-      if (!res.ok) return {};
-      return (await res.json()) as any;
-    };
-
-    // ── Meta: today hourly + totals + L7 + BFCM windows ──
-    const todayHourlyPromise = getInsights(
-      `level=account&time_range=${encodeURIComponent(JSON.stringify({ since: todayStr, until: todayStr }))}&breakdowns=hourly_stats_aggregated_by_advertiser_time_zone&fields=spend&limit=500`
-    );
-
-    const todayTotalsPromise = getInsights(
-      `level=account&time_range=${encodeURIComponent(JSON.stringify({ since: todayStr, until: todayStr }))}&fields=spend,impressions,clicks,actions,action_values&limit=10${ATTRIBUTION}`
-    );
-
-    const l7HourlyPromises = l7Days.map(async (day): Promise<{ date: string; hourlySpend: HourlyPoint[]; dayTotal: number }> => {
+  if (!history || !live) {
+    const connection = await resolveOrderConnection(supabase, brand);
+    let webhooksOk = false;
+    const { data: webhookRow } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', webhookStatusKey(brand.id))
+      .maybeSingle();
+    if (webhookRow?.value) {
       try {
-        const json = await getInsights(
-          `level=account&time_range=${encodeURIComponent(JSON.stringify({ since: day, until: day }))}&breakdowns=hourly_stats_aggregated_by_advertiser_time_zone&fields=spend&limit=500`
-        );
-        const hourlySpend: HourlyPoint[] = Array.from({ length: 24 }, (_, h) => ({ hour: h, spend: 0 }));
-        let dayTotal = 0;
-        if (json?.data) {
-          for (const row of json.data) {
-            const hourlyStr = row.hourly_stats_aggregated_by_advertiser_time_zone || '';
-            const hourMatch = hourlyStr.match(/^(\d{1,2}):/);
-            if (hourMatch) {
-              const hour = parseInt(hourMatch[1], 10);
-              const spend = parseFloat(row.spend || '0');
-              if (hour >= 0 && hour < 24) {
-                hourlySpend[hour].spend += spend;
-                dayTotal += spend;
-              }
-            }
-          }
-        }
-        return { date: day, hourlySpend, dayTotal };
+        webhooksOk = (JSON.parse(webhookRow.value) as StoredWebhookStatus).ok === true;
       } catch {
-        return { date: day, hourlySpend: Array.from({ length: 24 }, (_, h) => ({ hour: h, spend: 0 })), dayTotal: 0 };
+        webhooksOk = false;
       }
-    });
+    }
+    const feed = orderFeed({ connection: connection.connection, webhooksOk });
 
-    const l7AggPromise = getInsights(
-      `level=account&time_range=${encodeURIComponent(JSON.stringify({ since: l7StartStr, until: l7EndStr }))}&fields=spend,actions,action_values&limit=10${ATTRIBUTION}`
-    );
-
-    const lyStart = fmtDate(lastYearBfcmWindow.start);
-    const lyEnd = fmtDate(lastYearBfcmWindow.end);
-    const lyDailyPromise = getInsights(
-      `level=account&time_range=${encodeURIComponent(JSON.stringify({ since: lyStart, until: lyEnd }))}&time_increment=1&fields=spend,actions,action_values&limit=500${ATTRIBUTION}`
-    );
-
-    const tyStart = fmtDate(bfcmWindow.start);
-    const tyEnd = fmtDate(bfcmWindow.end);
-    const tyDailyPromise = getInsights(
-      `level=account&time_range=${encodeURIComponent(JSON.stringify({ since: tyStart, until: tyEnd }))}&time_increment=1&fields=spend,actions,action_values&limit=500${ATTRIBUTION}`
-    );
-
-    const campaignTodayPromise = (async (): Promise<any[]> => {
-      const rows: any[] = [];
-      let nextUrl: string | null =
-        `${META_BASE}/${adAccountId}/insights?level=campaign&time_range=${encodeURIComponent(JSON.stringify({ since: todayStr, until: todayStr }))}&fields=spend,impressions,clicks,ctr,cpm,cpc,actions,action_values&limit=500${ATTRIBUTION}&access_token=${metaToken}`;
-      while (nextUrl) {
-        const res: Response = await fetch(nextUrl);
-        if (!res.ok) break;
-        const page = (await res.json()) as any;
-        if (page?.data) rows.push(...page.data);
-        nextUrl = page?.paging?.next || null;
-      }
-      return rows;
-    })();
-
-    const campaignL7Promise = (async (): Promise<any[]> => {
-      const rows: any[] = [];
-      let nextUrl: string | null =
-        `${META_BASE}/${adAccountId}/insights?level=campaign&time_range=${encodeURIComponent(JSON.stringify({ since: l7StartStr, until: l7EndStr }))}&fields=spend,actions,action_values&limit=500${ATTRIBUTION}&access_token=${metaToken}`;
-      while (nextUrl) {
-        const res: Response = await fetch(nextUrl);
-        if (!res.ok) break;
-        const page = (await res.json()) as any;
-        if (page?.data) rows.push(...page.data);
-        nextUrl = page?.paging?.next || null;
-      }
-      return rows;
-    })();
-
-    // ── Google: today spend + currency (Pipeboard) ──
-    const googlePromise = (async (): Promise<{ spend: number; currency: string | null }> => {
-      if (!brand.google_ads_customer_id || !brand.google_ads_customer_id.trim()) return { spend: 0, currency: null };
-      const pipeboardToken = await resolvePipeboardToken(process.env.PIPEBOARD_API_TOKEN, async (key) => {
-        const { data: s } = await supabase.from('app_settings').select('value').eq('key', key).single();
-        return s?.value || null;
+    if (!history) {
+      history = await loadHistory({
+        supabase,
+        brand,
+        brandId,
+        metaToken,
+        metaReady,
+        adAccountId: brand.meta_ad_account_id,
+        clock,
+        window,
+        alignment,
+        timezone,
+        connection,
       });
-      if (!pipeboardToken) return { spend: 0, currency: null };
-      const custId = normalizeCustomerId(brand.google_ads_customer_id);
-
-      let gCurrency: string | null = null;
-      try {
-        const infoRes: Response = await fetch(
-          `https://google-ads.mcp.pipeboard.co/?token=${encodeURIComponent(pipeboardToken)}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-            body: JSON.stringify({
-              jsonrpc: '2.0', id: 1, method: 'tools/call',
-              params: { name: 'get_google_ads_account_info', arguments: { customer_id: custId } },
-            }),
-          }
-        );
-        if (infoRes.ok) {
-          const j = (await infoRes.json()) as any;
-          const text = j?.result?.content?.[0]?.text;
-          if (text) {
-            const parsed = JSON.parse(text);
-            gCurrency = parsed?.account?.currency_code || null;
-          }
-        }
-      } catch { /* currency optional */ }
-
-      let spend = 0;
-      try {
-        const m = await getCampaignMetrics(pipeboardToken, custId, 'TODAY');
-        const campaigns = m?.campaigns || [];
-        for (const c of campaigns) spend += Number(c.cost || 0);
-      } catch { /* non-fatal */ }
-
-      return { spend, currency: gCurrency };
-    })();
-
-    // ── daily_pnl: L7 NC revenue + spend (aMER source) ──
-    const dailyPnlPromise = (async (): Promise<{ ncRev: number; meta: number; google: number; other: number; hasData: boolean }> => {
-      const { data, error } = await supabase
-        .from('daily_pnl')
-        .select('date, nc_revenue, meta_spend, google_spend, other_spend')
-        .eq('brand_id', brandId)
-        .gte('date', l7StartStr)
-        .lte('date', l7EndStr);
-      if (error || !data || data.length === 0) return { ncRev: 0, meta: 0, google: 0, other: 0, hasData: false };
-      let ncRev = 0, meta = 0, google = 0, other = 0;
-      for (const r of data) {
-        ncRev += parseFloat(r.nc_revenue || '0');
-        meta += parseFloat(r.meta_spend || '0');
-        google += parseFloat(r.google_spend || '0');
-        other += parseFloat(r.other_spend || '0');
-      }
-      return { ncRev, meta, google, other, hasData: true };
-    })();
-
-    // Await the primary parallel batch
-    const [todayHourlyJson, todayTotalsJson, l7DayResults, l7AggJson, lyDailyJson, tyDailyJson, campaignTodayRows, campaignL7Rows, googleRes, pnlRes] =
-      await Promise.all([
-        todayHourlyPromise, todayTotalsPromise, Promise.all(l7HourlyPromises), l7AggPromise,
-        lyDailyPromise, tyDailyPromise, campaignTodayPromise, campaignL7Promise,
-        googlePromise, dailyPnlPromise,
-      ]);
-
-    // ── Today Meta hourly + totals ──
-    let todayHourly: HourlyPoint[] = [];
-    let totalSpendSoFar = 0;
-    if (todayHourlyJson?.data) {
-      const hourlyMap = new Map<number, number>();
-      for (const row of todayHourlyJson.data) {
-        const hourlyStr = row.hourly_stats_aggregated_by_advertiser_time_zone || '';
-        const hourMatch = hourlyStr.match(/^(\d{1,2}):/);
-        if (hourMatch) {
-          const hour = parseInt(hourMatch[1], 10);
-          const spend = parseFloat(row.spend || '0');
-          hourlyMap.set(hour, (hourlyMap.get(hour) || 0) + spend);
-          totalSpendSoFar += spend;
-        }
-      }
-      todayHourly = Array.from({ length: 24 }, (_, i) => ({ hour: i, spend: hourlyMap.get(i) || 0 }));
+      historyCache.set(historyKey, { data: history, ts: Date.now() });
     }
-
-    let todayPurchases = 0;
-    let todayPurchaseValue = 0;
-    if (todayTotalsJson?.data?.length) {
-      const row = todayTotalsJson.data[0];
-      todayPurchases = purchases(row.actions);
-      todayPurchaseValue = purchaseValue(row.action_values);
-      if (totalSpendSoFar === 0) totalSpendSoFar = parseFloat(row.spend || '0');
-    }
-
-    // ── L7 Meta baseline ──
-    l7DayResults.sort((a, b) => a.date.localeCompare(b.date));
-    let l7DailyAvg = 0;
-    const l7HourlyAvg: HourlyPoint[] = Array.from({ length: 24 }, (_, i) => ({ hour: i, spend: 0 }));
-    const validDays = l7DayResults.filter(d => d.dayTotal > 0);
-    const dayCount = validDays.length;
-    if (dayCount > 0) {
-      l7DailyAvg = validDays.reduce((s, d) => s + d.dayTotal, 0) / dayCount;
-      for (let h = 0; h < 24; h++) {
-        const hourSum = validDays.reduce((s, d) => s + d.hourlySpend[h].spend, 0);
-        l7HourlyAvg[h] = { hour: h, spend: hourSum / dayCount };
-      }
-    }
-
-    let l7TotalSpend = 0;
-    let l7TotalPurchaseValue = 0;
-    if (l7AggJson?.data?.length) {
-      const row = l7AggJson.data[0];
-      l7TotalSpend = parseFloat(row.spend || '0');
-      l7TotalPurchaseValue = purchaseValue(row.action_values);
-    }
-
-    // ── BFCM daily ──
-    const buildDaily = (json: any, thanksgiving: Date): DailyPoint[] => {
-      const out: DailyPoint[] = [];
-      if (json?.data) {
-        for (const row of json.data) {
-          const spend = parseFloat(row.spend || '0');
-          const p = purchases(row.actions);
-          const pv = purchaseValue(row.action_values);
-          out.push({
-            date: row.date_start,
-            dayLabel: getDayLabel(new Date(row.date_start + 'T00:00:00'), thanksgiving),
-            spend,
-            purchases: p,
-            purchaseValue: pv,
-            roas: roas(spend, pv),
-          });
-        }
-        out.sort((a, b) => a.date.localeCompare(b.date));
-      }
-      return out;
-    };
-
-    const lastYearFullWindow = buildDaily(lyDailyJson, lastYearBfcmWindow.thanksgiving);
-    const thisYearFullWindow = buildDaily(tyDailyJson, bfcmWindow.thanksgiving);
-
-    let lastYearSameDay: BfcmPacingResponse['lastYearBfcm']['sameDay'] = {
-      dayLabel: '', date: '', totalSpend: 0, hourlySpend: [], purchases: 0, purchaseValue: 0, roas: 0,
-    };
-    const todayInWindow = (today.getDay() + 7 - bfcmWindow.start.getDay()) % 7;
-    if (todayInWindow >= 0 && todayInWindow < lastYearFullWindow.length) {
-      const lySameDay = lastYearFullWindow[todayInWindow];
-      lastYearSameDay = {
-        dayLabel: lySameDay.dayLabel,
-        date: lySameDay.date,
-        totalSpend: lySameDay.spend,
-        hourlySpend: [],
-        purchases: lySameDay.purchases,
-        purchaseValue: lySameDay.purchaseValue,
-        roas: lySameDay.roas,
-      };
-
-      const lyHourlyJson = await getInsights(
-        `level=account&time_range=${encodeURIComponent(JSON.stringify({ since: lySameDay.date, until: lySameDay.date }))}&breakdowns=hourly_stats_aggregated_by_advertiser_time_zone&fields=spend&limit=500`
-      );
-      if (lyHourlyJson?.data) {
-        const lyHourlyMap = new Map<number, number>();
-        for (const row of lyHourlyJson.data) {
-          const hourlyStr = row.hourly_stats_aggregated_by_advertiser_time_zone || '';
-          const hourMatch = hourlyStr.match(/^(\d{1,2}):/);
-          if (hourMatch) {
-            const hour = parseInt(hourMatch[1], 10);
-            const spend = parseFloat(row.spend || '0');
-            lyHourlyMap.set(hour, (lyHourlyMap.get(hour) || 0) + spend);
-          }
-        }
-        lastYearSameDay.hourlySpend = Array.from({ length: 24 }, (_, i) => ({ hour: i, spend: lyHourlyMap.get(i) || 0 }));
-      }
-    }
-
-    // ── Campaign table ──
-    const l7ByCampaign = new Map<string, { spend: number; purchaseValue: number }>();
-    for (const row of campaignL7Rows) {
-      const id = row.campaign_id;
-      if (!id) continue;
-      const cur = l7ByCampaign.get(id) || { spend: 0, purchaseValue: 0 };
-      cur.spend += parseFloat(row.spend || '0');
-      cur.purchaseValue += purchaseValue(row.action_values);
-      l7ByCampaign.set(id, cur);
-    }
-
-    const campaigns: CampaignToday[] = [];
-    const campaignIds = campaignTodayRows.map((r: any) => r.campaign_id).filter(Boolean);
-
-    const campaignMeta: Record<string, { objective: string; status: string }> = {};
-    if (campaignIds.length > 0) {
-      for (let i = 0; i < campaignIds.length; i += 50) {
-        const chunk = campaignIds.slice(i, i + 50);
-        try {
-          const metaRes: Response = await fetch(
-            `${META_BASE}/?ids=${chunk.join(',')}&fields=objective,effective_status&access_token=${metaToken}`
-          );
-          if (metaRes.ok) {
-            const metaJson = (await metaRes.json()) as Record<string, any>;
-            for (const [id, info] of Object.entries(metaJson)) {
-              campaignMeta[id] = {
-                objective: info?.objective || 'UNKNOWN',
-                status: info?.effective_status || 'UNKNOWN',
-              };
-            }
-          }
-        } catch { /* non-fatal */ }
-      }
-    }
-
-    for (const row of campaignTodayRows) {
-      const id = row.campaign_id;
-      if (!id) continue;
-      const spend = parseFloat(row.spend || '0');
-      if (spend <= 0) continue;
-
-      const p = purchases(row.actions);
-      const pv = purchaseValue(row.action_values);
-      const impressions = parseInt(row.impressions || '0');
-      const clicks = parseInt(row.clicks || '0');
-
-      const l7 = l7ByCampaign.get(id) || { spend: 0, purchaseValue: 0 };
-      const l7DailySpend = l7.spend / 7;
-      const l7Roas = roas(l7.spend, l7.purchaseValue);
-      const meta = campaignMeta[id] || { objective: 'UNKNOWN', status: 'UNKNOWN' };
-
-      campaigns.push({
-        campaignId: id,
-        campaignName: row.campaign_name || id,
-        objective: meta.objective,
-        status: meta.status,
-        spend,
-        impressions,
-        clicks,
-        ctr: impressions > 0 ? (clicks / impressions) * 100 : 0,
-        cpm: impressions > 0 ? (spend / impressions) * 1000 : 0,
-        cpc: clicks > 0 ? spend / clicks : 0,
-        purchases: p,
-        purchaseValue: pv,
-        roas: roas(spend, pv),
-        cpa: p > 0 ? spend / p : 0,
-        l7DailySpend,
-        l7Roas,
-        spendPaceVsL7: l7DailySpend > 0 ? spend / l7DailySpend : 0,
-        roasDeltaVsL7: l7.spend > 0 ? roas(spend, pv) - l7Roas : 0,
+    if (!live) {
+      live = await loadLive({
+        supabase,
+        brand,
+        brandId,
+        metaToken,
+        metaReady,
+        metaCurrency,
+        adAccountId: brand.meta_ad_account_id,
+        today: clock.today,
+        timezone,
+        connection,
+        campaignL7: history.campaignL7,
+        feed,
       });
+      if (!live.warnings.some((warning) => warning.startsWith('Shopify orders failed'))) {
+        liveCache.set(liveKey, { data: live, ts: Date.now() });
+      }
     }
-    campaigns.sort((a, b) => b.spend - a.spend);
-
-    // ── Assemble response ──
-    const googleSpend = Math.round(googleRes.spend * 100) / 100;
-    const acquisitionSpend = totalSpendSoFar + googleSpend;
-
-    const l7TotalSpendAll = pnlRes.meta + pnlRes.google + pnlRes.other;
-    const l7Amer: number | null = pnlRes.hasData && l7TotalSpendAll > 0 ? pnlRes.ncRev / l7TotalSpendAll : null;
-
-    const response: BfcmPacingResponse = {
-      currency,
-      timezone,
-      grossMarginPct: brand.gross_margin_pct != null ? Number(brand.gross_margin_pct) : null,
-      baseCurrency,
-      fxRates,
-      currencies: {
-        meta: currency,
-        google: googleRes.currency,
-      },
-      bfcmWindow: { start: tyStart, end: tyEnd },
-      today: {
-        date: todayStr,
-        dayLabel: getDayLabel(today, bfcmWindow.thanksgiving),
-        hourlySpend: todayHourly,
-        totalSpendSoFar: Math.round(totalSpendSoFar * 100) / 100,
-        googleSpend,
-        acquisitionSpend: Math.round(acquisitionSpend * 100) / 100,
-        purchases: todayPurchases,
-        purchaseValue: Math.round(todayPurchaseValue * 100) / 100,
-        roas: roas(totalSpendSoFar, todayPurchaseValue),
-      },
-      l7Baseline: {
-        hourlyAvg: l7HourlyAvg.map(p => ({ hour: p.hour, spend: Math.round(p.spend * 100) / 100 })),
-        dailyAvg: Math.round(l7DailyAvg * 100) / 100,
-        dailyHourly: l7DayResults.map(d => ({
-          date: d.date,
-          hourlySpend: d.hourlySpend.map(p => ({ hour: p.hour, spend: Math.round(p.spend * 100) / 100 })),
-          dayTotal: Math.round(d.dayTotal * 100) / 100,
-        })),
-        roas: roas(l7TotalSpend, l7TotalPurchaseValue),
-        totalSpend: Math.round(l7TotalSpend * 100) / 100,
-        totalPurchaseValue: Math.round(l7TotalPurchaseValue * 100) / 100,
-      },
-      aMer: {
-        available: pnlRes.hasData,
-        l7NcRevenue: Math.round(pnlRes.ncRev * 100) / 100,
-        l7MetaSpend: Math.round(pnlRes.meta * 100) / 100,
-        l7GoogleSpend: Math.round(pnlRes.google * 100) / 100,
-        l7OtherSpend: Math.round(pnlRes.other * 100) / 100,
-        l7TotalSpend: Math.round(l7TotalSpendAll * 100) / 100,
-        l7: l7Amer !== null ? Math.round(l7Amer * 100) / 100 : null,
-      },
-      lastYearBfcm: { sameDay: lastYearSameDay, fullWindow: lastYearFullWindow },
-      thisYearBfcm: { fullWindow: thisYearFullWindow },
-      campaigns,
-    };
-
-    cache.set(cacheKey, { data: response, ts: Date.now() });
-
-    return NextResponse.json(response);
-  } catch (e: any) {
-    return NextResponse.json({ error: `Failed to fetch BFCM pacing data: ${e.message}` }, { status: 500 });
   }
+
+  if (!history || !live) {
+    return NextResponse.json({ error: 'Failed to fetch BFCM pacing data' }, { status: 500 });
+  }
+  const historyWarnings = history.warnings || [];
+  const liveWarnings = live.warnings || [];
+  const allWarnings = [...warnings, ...historyWarnings, ...liveWarnings];
+  const metaCurrencyResolved = live.metaCurrency || (metaReady ? metaCurrency : null);
+  const metaOk = metaReady && live.metaOk;
+  const googleOk = live.google.configured && !live.google.error && live.google.spend != null;
+  const shopifyCurrency = shopCurrency || reportingCurrency;
+  const revenueReporting = toReportingCurrency(live.shopifyToday.revenue, shopifyCurrency, reportingCurrency, fxRates);
+  const ncReporting = toReportingCurrency(live.shopifyToday.ncRevenue, shopifyCurrency, reportingCurrency, fxRates);
+  const metaSpendReporting = metaOk
+    ? toReportingCurrency(live.totalSpendSoFar, metaCurrencyResolved || reportingCurrency, reportingCurrency, fxRates)
+    : 0;
+  const googleSpendReporting = googleOk
+    ? toReportingCurrency(live.google.spend || 0, live.google.currency || reportingCurrency, reportingCurrency, fxRates)
+    : 0;
+  const spendForMer = (metaConfigured && !metaOk) || (live.google.configured && !googleOk)
+    ? null
+    : metaSpendReporting + googleSpendReporting;
+  const mer = spendForMer == null ? null : merRatio(revenueReporting, spendForMer);
+  const amer = spendForMer == null ? null : merRatio(ncReporting, spendForMer);
+  const googleSpend = live.google.spend ?? 0;
+  const acquisitionSpend = live.totalSpendSoFar + googleSpend;
+
+  const response = {
+    currency: metaCurrencyResolved || reportingCurrency,
+    reportingCurrency,
+    timezone,
+    timezoneSource,
+    grossMarginPct: brand.gross_margin_pct != null ? Number(brand.gross_margin_pct) : null,
+    baseCurrency,
+    fxRates,
+    currencies: {
+      meta: metaOk ? metaCurrencyResolved : null,
+      google: live.google.currency,
+      shopify: shopifyCurrency,
+    },
+    warnings: allWarnings,
+    meta: {
+      available: metaOk,
+      configured: metaConfigured,
+      reason: metaOk ? null : metaConfigured ? 'Meta data is unavailable for this refresh.' : 'No Meta ad account configured.',
+    },
+    bfcmWindow: { start: window.start, end: window.end, days: window.days },
+    comparison: alignment,
+    today: {
+      date: clock.today,
+      dayLabel: alignment.inWindow ? (window.days.find((day) => day.date === clock.today)?.dayLabel || alignment.dayLabel) : alignment.dayLabel,
+      hour: clock.hour,
+      minute: clock.minute,
+      hourlySpend: live.hourlySpend,
+      totalSpendSoFar: r2(live.totalSpendSoFar),
+      googleSpend: r2(googleSpend),
+      acquisitionSpend: r2(acquisitionSpend),
+      purchases: live.purchases,
+      purchaseValue: r2(live.purchaseValue),
+      roas: ratio(live.totalSpendSoFar, live.purchaseValue),
+    },
+    l7Baseline: {
+      hourlyAvg: history.l7HourlyAvg.map((point) => ({ hour: point.hour, spend: r2(point.spend) })),
+      dailyAvg: r2(history.l7DailyAvg),
+      dailyHourly: history.l7DailyHourly,
+      roas: history.l7Roas,
+      totalSpend: r2(history.l7TotalSpend),
+      totalPurchaseValue: r2(history.l7TotalPurchaseValue),
+    },
+    aMer: {
+      available: history.pnl.hasData,
+      l7NcRevenue: r2(history.pnl.ncRev),
+      l7MetaSpend: r2(history.pnl.meta),
+      l7GoogleSpend: r2(history.pnl.google),
+      l7OtherSpend: r2(history.pnl.other),
+      l7TotalSpend: r2(history.pnl.meta + history.pnl.google + history.pnl.other),
+      l7: history.pnl.hasData && history.pnl.meta + history.pnl.google + history.pnl.other > 0
+        ? r2(history.pnl.ncRev / (history.pnl.meta + history.pnl.google + history.pnl.other))
+        : null,
+    },
+    lastYearBfcm: {
+      sameDay: history.lySameDay,
+      fullWindow: history.lyWindow,
+    },
+    thisYearBfcm: { fullWindow: clock.today < window.start ? [] : history.tyWindow },
+    campaigns: live.campaigns,
+    google: live.google,
+    shopify: {
+      currency: shopifyCurrency,
+      today: roundDay(live.shopifyToday),
+      l7HourlyAvg: roundHours(history.shopifyL7Hourly),
+      l7DailyAvgRevenue: r2(history.shopifyL7DailyAvg),
+      lastYear: {
+        status: lastYearSalesStatus(alignment.date, history.earliestOrderDay),
+        date: alignment.date,
+        dayLabel: alignment.dayLabel,
+        rule: alignment.rule,
+        earliestOrderDay: history.earliestOrderDay,
+        sales: history.shopifyLastYear ? roundDay(history.shopifyLastYear) : null,
+      },
+      mer: mer == null ? null : r2(mer),
+      amer: amer == null ? null : r2(amer),
+      revenueReporting: r2(revenueReporting),
+      ncRevenueReporting: r2(ncReporting),
+      spendReporting: spendForMer == null ? null : r2(spendForMer),
+      freshness: {
+        asOf: live.newestOrderAt,
+        feed: live.feed.feed,
+        label: live.feed.label,
+      },
+    },
+  };
+
+  return NextResponse.json(response);
+}
+
+async function loadHistory(input: {
+  supabase: any;
+  brand: any;
+  brandId: string;
+  metaToken: string;
+  metaReady: boolean;
+  adAccountId: string | null;
+  clock: { today: string; l7: string[] };
+  window: ReturnType<typeof bfcmWindow>;
+  alignment: ReturnType<typeof alignLastYear>;
+  timezone: string;
+  connection: { domain: string | null; token: string | null };
+}): Promise<HistorySlice> {
+  const warnings: string[] = [];
+  const lastWindow = bfcmWindow(Number(input.clock.today.slice(0, 4)) - 1);
+  const emptyLy = {
+    dayLabel: input.alignment.dayLabel,
+    date: input.alignment.date,
+    totalSpend: 0,
+    hourlySpend: emptyHourlySpend(),
+    purchases: 0,
+    purchaseValue: 0,
+    roas: 0,
+  };
+  const slice: HistorySlice = {
+    l7HourlyAvg: emptyHourlySpend(),
+    l7DailyAvg: 0,
+    l7DailyHourly: input.clock.l7.map((date) => ({ date, hourlySpend: emptyHourlySpend(), dayTotal: 0 })),
+    l7TotalSpend: 0,
+    l7TotalPurchaseValue: 0,
+    l7Roas: 0,
+    lyWindow: fillWindow(lastWindow.days, []),
+    tyWindow: fillWindow(input.window.days, []),
+    lySameDay: emptyLy,
+    campaignL7: {},
+    shopifyL7Hourly: emptyDaySales().hourly,
+    shopifyL7DailyAvg: 0,
+    shopifyLastYear: null,
+    earliestOrderDay: null,
+    pnl: { ncRev: 0, meta: 0, google: 0, other: 0, hasData: false },
+    warnings,
+  };
+
+  let earliestAt: string | null = null;
+  try {
+    const freshness = await loadOrderFreshness(input.supabase, input.brandId);
+    earliestAt = freshness.earliestAt;
+    slice.earliestOrderDay = earliestAt ? shopLocalDay(earliestAt, input.timezone) : null;
+  } catch (err) {
+    warnings.push(`Shopify freshness failed: ${err instanceof Error ? err.message : 'query failed'}`);
+  }
+
+  const lyStatus = lastYearSalesStatus(input.alignment.date, slice.earliestOrderDay);
+  const l7Range = shopDayRangeIso(input.clock.l7[0], input.clock.l7[input.clock.l7.length - 1], input.timezone);
+  const lyRange = lyStatus === 'ok' ? shopDayRangeIso(input.alignment.date, input.alignment.date, input.timezone) : null;
+
+  const shopifyL7 = (async () => {
+    const orders = await loadOrdersBetween(input.supabase, input.brandId, l7Range.min, l7Range.max);
+    await enrichOrders(input.connection.domain, input.connection.token, orders);
+    const byDay = salesByDay(orders, input.timezone);
+    const days = input.clock.l7.map((day) => daySalesOrEmpty(byDay, day));
+    slice.shopifyL7Hourly = averageSalesByHour(days);
+    slice.shopifyL7DailyAvg = days.reduce((sum, day) => sum + day.revenue, 0) / days.length;
+  })().catch((err) => {
+    warnings.push(`Shopify L7 failed: ${err instanceof Error ? err.message : 'query failed'}`);
+  });
+
+  const shopifyLy = (async () => {
+    if (!lyRange || lyStatus !== 'ok') {
+      slice.shopifyLastYear = null;
+      return;
+    }
+    const orders = await loadOrdersBetween(input.supabase, input.brandId, lyRange.min, lyRange.max);
+    await enrichOrders(input.connection.domain, input.connection.token, orders);
+    slice.shopifyLastYear = daySalesOrEmpty(salesByDay(orders, input.timezone), input.alignment.date);
+  })().catch((err) => {
+    warnings.push(`Shopify last year failed: ${err instanceof Error ? err.message : 'query failed'}`);
+  });
+
+  const pnl = (async () => {
+    const { data, error } = await input.supabase
+      .from('daily_pnl')
+      .select('date, nc_revenue, meta_spend, google_spend, other_spend')
+      .eq('brand_id', input.brandId)
+      .gte('date', input.clock.l7[0])
+      .lte('date', input.clock.l7[input.clock.l7.length - 1]);
+    if (error || !data || data.length === 0) return;
+    let ncRev = 0;
+    let meta = 0;
+    let google = 0;
+    let other = 0;
+    for (const row of data) {
+      ncRev += parseFloat(row.nc_revenue || '0');
+      meta += parseFloat(row.meta_spend || '0');
+      google += parseFloat(row.google_spend || '0');
+      other += parseFloat(row.other_spend || '0');
+    }
+    slice.pnl = { ncRev, meta, google, other, hasData: true };
+  })().catch(() => undefined);
+
+  const meta = (async () => {
+    if (!input.metaReady || !input.adAccountId) return;
+    const account = input.adAccountId;
+    const l7Start = input.clock.l7[0];
+    const l7End = input.clock.l7[input.clock.l7.length - 1];
+    const range = (since: string, until: string, extra: string) =>
+      insightUrl(account, `level=account&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&${extra}&limit=500`);
+    const lyOutside = input.alignment.date < lastWindow.start || input.alignment.date > lastWindow.end;
+    const campaignQuery = `level=campaign&time_range=${encodeURIComponent(JSON.stringify({ since: l7Start, until: l7End }))}&fields=spend,actions,action_values&${ATTRIBUTION}&limit=500`;
+    const [hourlyRows, l7Agg, lyDaily, tyDaily, lyHourly, lyOutsideTotals, campaignRows] = await Promise.all([
+      metaCollect(insightUrl(account, l7HourlyInsightQuery(l7Start, l7End)), input.metaToken),
+      metaCollect(range(l7Start, l7End, `fields=spend,actions,action_values&${ATTRIBUTION}`), input.metaToken),
+      metaCollect(range(lastWindow.start, lastWindow.end, `time_increment=1&fields=spend,actions,action_values&${ATTRIBUTION}`), input.metaToken),
+      metaCollect(range(input.window.start, input.window.end, `time_increment=1&fields=spend,actions,action_values&${ATTRIBUTION}`), input.metaToken),
+      metaCollect(
+        range(input.alignment.date, input.alignment.date, 'breakdowns=hourly_stats_aggregated_by_advertiser_time_zone&fields=spend'),
+        input.metaToken
+      ),
+      lyOutside
+        ? metaCollect(range(input.alignment.date, input.alignment.date, `fields=spend,actions,action_values&${ATTRIBUTION}`), input.metaToken)
+        : Promise.resolve([] as any[]),
+      metaCollect(insightUrl(account, campaignQuery), input.metaToken).catch(() => [] as any[]),
+    ]);
+    const byDay = parseHourlySpendRows(hourlyRows);
+    const dailyHourly = input.clock.l7.map((date) => {
+      const hourlySpend = byDay.get(date) || emptyHourlySpend();
+      const dayTotal = hourlySpend.reduce((sum, point) => sum + point.spend, 0);
+      return { date, hourlySpend, dayTotal: r2(dayTotal) };
+    });
+    slice.l7DailyHourly = dailyHourly;
+    slice.l7HourlyAvg = averageHourlySpend(dailyHourly.map((day) => day.hourlySpend)).map((point) => ({
+      hour: point.hour,
+      spend: point.spend,
+    }));
+    slice.l7DailyAvg = dailyHourly.filter((day) => day.dayTotal > 0).reduce((sum, day, _, arr) => sum + day.dayTotal / arr.length, 0);
+    if (l7Agg[0]) {
+      slice.l7TotalSpend = parseFloat(l7Agg[0].spend || '0');
+      slice.l7TotalPurchaseValue = firstAction(l7Agg[0].action_values);
+      slice.l7Roas = ratio(slice.l7TotalSpend, slice.l7TotalPurchaseValue);
+    }
+    slice.lyWindow = fillWindow(lastWindow.days, dailyFromRows(lyDaily, lastWindow.days));
+    slice.tyWindow = fillWindow(input.window.days, dailyFromRows(tyDaily, input.window.days));
+    const lyHours = parseHourlySpendRows(lyHourly).get(input.alignment.date) || emptyHourlySpend();
+    const lyPoint = slice.lyWindow.find((day) => day.date === input.alignment.date);
+    const lyOutsidePoint = lyOutsideTotals[0];
+    const lySpend = lyHours.reduce((sum, point) => sum + point.spend, 0);
+    const outsideSpend = lyOutsidePoint ? parseFloat(lyOutsidePoint.spend || '0') : 0;
+    const outsideValue = lyOutsidePoint ? firstAction(lyOutsidePoint.action_values) : 0;
+    slice.lySameDay = {
+      dayLabel: input.alignment.dayLabel,
+      date: input.alignment.date,
+      totalSpend: lyPoint?.spend || outsideSpend || lySpend,
+      hourlySpend: lyHours,
+      purchases: lyPoint?.purchases || (lyOutsidePoint ? firstAction(lyOutsidePoint.actions) : 0),
+      purchaseValue: lyPoint?.purchaseValue || outsideValue,
+      roas: lyPoint?.roas || ratio(outsideSpend, outsideValue),
+    };
+    for (const row of campaignRows) {
+      const id = row.campaign_id;
+      if (!id) continue;
+      const current = slice.campaignL7[id] || { spend: 0, purchaseValue: 0 };
+      current.spend += parseFloat(row.spend || '0');
+      current.purchaseValue += firstAction(row.action_values);
+      slice.campaignL7[id] = current;
+    }
+  })().catch((err) => {
+    warnings.push(`Meta history failed: ${err instanceof Error ? err.message : 'request failed'}`);
+  });
+
+  await Promise.all([shopifyL7, shopifyLy, pnl, meta]);
+  return slice;
+}
+
+async function loadLive(input: {
+  supabase: any;
+  brand: any;
+  brandId: string;
+  metaToken: string;
+  metaReady: boolean;
+  metaCurrency: string;
+  adAccountId: string | null;
+  today: string;
+  timezone: string;
+  connection: { domain: string | null; token: string | null; connection: 'shopify_admin' | 'triple_whale' | 'none' };
+  campaignL7: Record<string, { spend: number; purchaseValue: number }>;
+  feed: { feed: string; label: string };
+}): Promise<LiveSlice> {
+  const warnings: string[] = [];
+  const slice: LiveSlice & { feed: { feed: string; label: string } } = {
+    hourlySpend: emptyHourlySpend(),
+    totalSpendSoFar: 0,
+    purchases: 0,
+    purchaseValue: 0,
+    campaigns: [],
+    shopifyToday: emptyDaySales(),
+    newestOrderAt: null,
+    google: {
+      configured: !!(input.brand.google_ads_customer_id && String(input.brand.google_ads_customer_id).trim()),
+      spend: null,
+      conversionValue: null,
+      conversions: null,
+      roas: null,
+      currency: null,
+      valueLabel: 'unavailable',
+      error: null,
+    },
+    metaOk: false,
+    metaCurrency: null,
+    warnings,
+    feed: input.feed,
+  };
+
+  const todayRange = shopDayRangeIso(input.today, input.today, input.timezone);
+  const shopify = (async () => {
+    const [orders, freshness] = await Promise.all([
+      loadOrdersBetween(input.supabase, input.brandId, todayRange.min, todayRange.max),
+      loadOrderFreshness(input.supabase, input.brandId),
+    ]);
+    await enrichOrders(input.connection.domain, input.connection.token, orders);
+    slice.shopifyToday = daySalesOrEmpty(salesByDay(orders, input.timezone), input.today);
+    slice.newestOrderAt = freshness.newestAt;
+  })().catch((err) => {
+    warnings.push(`Shopify orders failed: ${err instanceof Error ? err.message : 'query failed'}`);
+  });
+
+  const meta = (async () => {
+    if (!input.metaReady || !input.adAccountId) return;
+    const account = input.adAccountId;
+    const range = encodeURIComponent(JSON.stringify({ since: input.today, until: input.today }));
+    const [hourlyRows, totals, campaignRows] = await Promise.all([
+      metaCollect(
+        insightUrl(account, `level=account&time_range=${range}&breakdowns=hourly_stats_aggregated_by_advertiser_time_zone&fields=spend&limit=500`),
+        input.metaToken
+      ),
+      metaCollect(
+        insightUrl(account, `level=account&time_range=${range}&fields=spend,impressions,clicks,actions,action_values&${ATTRIBUTION}&limit=10`),
+        input.metaToken
+      ),
+      metaCollect(
+        insightUrl(account, `level=campaign&time_range=${range}&fields=spend,impressions,clicks,actions,action_values&${ATTRIBUTION}&limit=500`),
+        input.metaToken
+      ),
+    ]);
+    const hours = parseHourlySpendRows(hourlyRows).get(input.today) || emptyHourlySpend();
+    slice.hourlySpend = hours;
+    slice.totalSpendSoFar = hours.reduce((sum, point) => sum + point.spend, 0);
+    if (totals[0]) {
+      slice.purchases = firstAction(totals[0].actions);
+      slice.purchaseValue = firstAction(totals[0].action_values);
+      if (slice.totalSpendSoFar === 0) slice.totalSpendSoFar = parseFloat(totals[0].spend || '0');
+    }
+    try {
+      const accountInfo = await metaAccount(input.metaToken, account);
+      slice.metaCurrency = accountInfo.currency;
+    } catch {
+      slice.metaCurrency = input.metaCurrency || null;
+    }
+    slice.campaigns = await campaignsFromRows(campaignRows, input.campaignL7, input.metaToken);
+    slice.metaOk = true;
+  })().catch((err) => {
+    warnings.push(`Meta today failed: ${err instanceof Error ? err.message : 'request failed'}`);
+  });
+
+  const google = (async () => {
+    if (!slice.google.configured) return;
+    const pipeboardToken = await resolvePipeboardToken(process.env.PIPEBOARD_API_TOKEN, async (key) => {
+      const { data } = await input.supabase.from('app_settings').select('value').eq('key', key).maybeSingle();
+      return data?.value || null;
+    });
+    if (!pipeboardToken) {
+      slice.google.error = 'PIPEBOARD_API_TOKEN is not configured';
+      return;
+    }
+    const [rows, currency] = await Promise.all([
+      gaqlQueryStrict(pipeboardToken, input.brand.google_ads_customer_id, googleTodayQuery(input.today)),
+      fetchGoogleAdsCurrency(pipeboardToken, input.brand.google_ads_customer_id),
+    ]);
+    const totals = sumGoogleToday(rows);
+    slice.google.currency = currency;
+    slice.google.spend = totals.spend;
+    slice.google.conversionValue = totals.conversionValue;
+    slice.google.conversions = totals.conversions;
+    slice.google.roas = totals.spend > 0 ? totals.conversionValue / totals.spend : null;
+    slice.google.valueLabel = 'conversion value';
+  })().catch((err) => {
+    slice.google.error = err instanceof Error ? err.message : 'Google request failed';
+    slice.google.valueLabel = 'unavailable';
+  });
+
+  await Promise.all([shopify, meta, google]);
+  return slice;
+}
+
+async function campaignsFromRows(
+  rows: any[],
+  l7: Record<string, { spend: number; purchaseValue: number }>,
+  token: string
+): Promise<CampaignToday[]> {
+  const ids = rows.map((row) => row.campaign_id).filter(Boolean);
+  const meta: Record<string, { objective: string; status: string }> = {};
+  await Promise.all(
+    Array.from({ length: Math.ceil(ids.length / 50) }, (_, index) => ids.slice(index * 50, index * 50 + 50)).map(async (chunk) => {
+      if (chunk.length === 0) return;
+      try {
+        const json = await metaGet(`${META_BASE}/?ids=${chunk.join(',')}&fields=objective,effective_status`, token);
+        for (const [id, info] of Object.entries(json || {})) {
+          const record = info as { objective?: string; effective_status?: string };
+          meta[id] = { objective: record?.objective || 'UNKNOWN', status: record?.effective_status || 'UNKNOWN' };
+        }
+      } catch {
+        /* campaign status is optional */
+      }
+    })
+  );
+
+  const campaigns: CampaignToday[] = [];
+  for (const row of rows) {
+    const id = row.campaign_id;
+    if (!id) continue;
+    const spend = parseFloat(row.spend || '0');
+    if (spend <= 0) continue;
+    const purchases = firstAction(row.actions);
+    const purchaseValue = firstAction(row.action_values);
+    const impressions = parseInt(row.impressions || '0', 10);
+    const clicks = parseInt(row.clicks || '0', 10);
+    const prior = l7[id] || { spend: 0, purchaseValue: 0 };
+    const l7DailySpend = prior.spend / 7;
+    const l7Roas = ratio(prior.spend, prior.purchaseValue);
+    const info = meta[id] || { objective: 'UNKNOWN', status: 'UNKNOWN' };
+    const roas = ratio(spend, purchaseValue);
+    campaigns.push({
+      campaignId: id,
+      campaignName: row.campaign_name || id,
+      objective: info.objective,
+      status: info.status,
+      spend,
+      impressions,
+      clicks,
+      ctr: impressions > 0 ? (clicks / impressions) * 100 : 0,
+      cpm: impressions > 0 ? (spend / impressions) * 1000 : 0,
+      cpc: clicks > 0 ? spend / clicks : 0,
+      purchases,
+      purchaseValue,
+      roas,
+      cpa: purchases > 0 ? spend / purchases : 0,
+      l7DailySpend,
+      l7Roas,
+      spendPaceVsL7: l7DailySpend > 0 ? spend / l7DailySpend : 0,
+      roasDeltaVsL7: prior.spend > 0 ? roas - l7Roas : 0,
+    });
+  }
+  campaigns.sort((a, b) => b.spend - a.spend);
+  return campaigns;
 }
