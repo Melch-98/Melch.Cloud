@@ -37,7 +37,15 @@ import type { MetaAdInsight, MetaAdAccount } from '@/lib/meta-api';
 import DataFreshness, { friendlyError } from '@/components/DataFreshness';
 import { makeFmt, DEFAULT_FMT, type Fmt } from '@/lib/format';
 import { AdSliceFilters, PartnerPill } from '@/components/AdSliceFilters';
+import { ByProductView, ProductChip, ProductFilter, ProductOverride, type ProductChoice } from '@/components/LiveProductControls';
 import { formatBadgeKey, matchesAdSlice, type AdFormat, type AdSource } from '@/lib/ad-classification';
+import {
+  adMatchesProduct,
+  chipForAd,
+  groupAdsByProduct,
+  productFilterOptions,
+  type LiveCreativeView,
+} from '@/lib/live-creatives/present';
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -151,11 +159,13 @@ function CreativeDetailPanel({
   onClose,
   fmt,
   roasFloor,
+  productLabel,
 }: {
   ad: MetaAdInsight;
   onClose: () => void;
   fmt: Fmt;
   roasFloor: number;
+  productLabel?: string | null;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -416,9 +426,10 @@ function CreativeDetailPanel({
 
         {/* Ad info header */}
         <div className="px-6 pt-6 pb-4">
-          <div className="flex items-center gap-2.5 mb-3">
+          <div className="flex items-center gap-2.5 mb-3 flex-wrap">
             <TypeBadge type={ad.ad_format ? formatBadgeKey(ad.ad_format) : ad.creative_type} size="lg" />
             <PartnerPill source={ad.ad_source} />
+            {productLabel && <ProductChip label={productLabel} />}
           </div>
           <h3 className="text-[15px] font-semibold mb-1.5" style={{ color: '#f0f0f0', letterSpacing: '-0.01em' }}>
             {ad.ad_name}
@@ -615,6 +626,7 @@ export default function AnalyticsPage() {
 
   // Auth state
   const [userRole, setUserRole] = useState<string | null>(null);
+  const [profileBrandId, setProfileBrandId] = useState<string | null>(null);
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [scopedAccountId, setScopedAccountId] = useState<string | null>(null); // strategist's brand ad account
@@ -638,9 +650,16 @@ export default function AnalyticsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [sourceFilter, setSourceFilter] = useState<AdSource | 'all'>('all');
   const [formatFilter, setFormatFilter] = useState<AdFormat | 'all'>('all');
+  const [productFilter, setProductFilter] = useState<string[]>([]);
+  const [liveRows, setLiveRows] = useState<LiveCreativeView[]>([]);
+  const [productChoices, setProductChoices] = useState<ProductChoice[]>([]);
+  const [canOverrideProduct, setCanOverrideProduct] = useState(false);
+  const [savingProduct, setSavingProduct] = useState<string | null>(null);
+  const [syncingProducts, setSyncingProducts] = useState(false);
+  const [productNotice, setProductNotice] = useState<string | null>(null);
 
   // View state
-  const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
+  const [viewMode, setViewMode] = useState<'cards' | 'table' | 'products'>('cards');
   const [cardMetrics, setCardMetrics] = useState<(keyof MetaAdInsight)[]>(DEFAULT_CARD_METRICS);
   const [sortField, setSortField] = useState<SortField>('spend');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
@@ -679,6 +698,7 @@ export default function AnalyticsPage() {
       }
 
       setUserRole(profile.role);
+      setProfileBrandId(profile.brand_id);
 
       // If strategist, fetch their brand's ad account to auto-scope
       if (profile.role === 'strategist' && profile.brand_id) {
@@ -817,7 +837,112 @@ export default function AnalyticsPage() {
   useEffect(() => {
     setSourceFilter('all');
     setFormatFilter('all');
+    setProductFilter([]);
   }, [selectedAccount]);
+
+  const activeBrandId = useMemo(() => {
+    if (userRole !== 'admin' && profileBrandId) return profileBrandId;
+    const acct = accounts.find((account) => account.id === selectedAccount) as (MetaAdAccount & { brand_id?: string }) | undefined;
+    return acct?.brand_id || profileBrandId;
+  }, [userRole, profileBrandId, accounts, selectedAccount]);
+
+  const loadLive = useCallback(async () => {
+    if (!authToken || !activeBrandId) {
+      setLiveRows([]);
+      setProductChoices([]);
+      setCanOverrideProduct(false);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/live-creatives?brandId=${encodeURIComponent(activeBrandId)}`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setLiveRows([]);
+        setProductChoices([]);
+        setCanOverrideProduct(false);
+        if (res.status === 503) setProductNotice(data.error || 'Product tags are not available yet.');
+        return;
+      }
+      setProductNotice(null);
+      setLiveRows(data.rows || []);
+      setProductChoices(data.choices || []);
+      setCanOverrideProduct(data.access === 'write');
+    } catch {
+      setLiveRows([]);
+    }
+  }, [authToken, activeBrandId]);
+
+  useEffect(() => {
+    if (!loading && authToken) loadLive();
+  }, [loading, authToken, loadLive]);
+
+  const rowsByAd = useMemo(() => {
+    const map = new Map<string, LiveCreativeView[]>();
+    for (const row of liveRows) {
+      const list = map.get(row.ad_id) || [];
+      list.push(row);
+      map.set(row.ad_id, list);
+    }
+    return map;
+  }, [liveRows]);
+
+  const saveProduct = async (adId: string, choice: ProductChoice | null) => {
+    if (!authToken || !activeBrandId) return;
+    setSavingProduct(adId);
+    setProductNotice(null);
+    try {
+      const res = await fetch('/api/live-creatives/override', {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(choice
+          ? {
+              brandId: activeBrandId,
+              adId,
+              productKey: choice.product_key,
+              productLabel: choice.product_label,
+              productKind: choice.product_kind,
+            }
+          : { brandId: activeBrandId, adId, clear: true }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setProductNotice(data.error || 'Could not save the product.');
+        return;
+      }
+      await loadLive();
+    } catch {
+      setProductNotice('Could not save the product.');
+    } finally {
+      setSavingProduct(null);
+    }
+  };
+
+  const syncProducts = async () => {
+    if (!authToken || !activeBrandId || userRole !== 'admin') return;
+    setSyncingProducts(true);
+    setProductNotice(null);
+    try {
+      const res = await fetch('/api/live-creatives/sync', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brandId: activeBrandId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setProductNotice(data.error || 'Product sync failed.');
+        return;
+      }
+      const deferred = Array.isArray(data.deferred) ? data.deferred.length : 0;
+      setProductNotice(deferred ? 'Sync started. Some brands were left for the next run.' : 'Product sync finished.');
+      await loadLive();
+    } catch {
+      setProductNotice('Product sync failed.');
+    } finally {
+      setSyncingProducts(false);
+    }
+  };
 
   // ─── Save Token ────────────────────────────────────────────
 
@@ -845,6 +970,7 @@ export default function AnalyticsPage() {
     let list = [...insights];
 
     list = list.filter((i) => matchesAdSlice(i, sourceFilter, formatFilter));
+    list = list.filter((i) => adMatchesProduct(rowsByAd.get(i.ad_id) || [], productFilter));
 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -865,7 +991,7 @@ export default function AnalyticsPage() {
     });
 
     return list;
-  }, [insights, searchQuery, sortField, sortDir, sourceFilter, formatFilter]);
+  }, [insights, searchQuery, sortField, sortDir, sourceFilter, formatFilter, productFilter, rowsByAd]);
 
   // ─── Toggle metric in card view ────────────────────────────
 
@@ -906,6 +1032,19 @@ export default function AnalyticsPage() {
       winners,
     };
   }, [filteredInsights, roasFloor]);
+
+  const productUniverse = useMemo(
+    () => insights.filter((ad) => matchesAdSlice(ad, sourceFilter, formatFilter)),
+    [insights, sourceFilter, formatFilter],
+  );
+  const productOptions = useMemo(
+    () => productFilterOptions(productUniverse, rowsByAd),
+    [productUniverse, rowsByAd],
+  );
+  const productGroups = useMemo(
+    () => groupAdsByProduct(filteredInsights, rowsByAd),
+    [filteredInsights, rowsByAd],
+  );
 
   const dateRange = getDatePreset(datePreset);
   const selectedAccountObj = accounts.find((a) => a.id === selectedAccount);
@@ -970,6 +1109,22 @@ export default function AnalyticsPage() {
             )}
 
             {/* Refresh */}
+            {userRole === 'admin' && activeBrandId && (
+              <button
+                onClick={syncProducts}
+                disabled={syncingProducts}
+                className="px-3 py-2 rounded-lg text-xs font-semibold"
+                style={{
+                  backgroundColor: 'rgba(200,184,154,0.12)',
+                  border: '1px solid rgba(200,184,154,0.25)',
+                  color: '#C8B89A',
+                }}
+                title="Pull active Meta ads and tag them by landing page"
+              >
+                {syncingProducts ? 'Syncing…' : 'Sync products'}
+              </button>
+            )}
+
             <button
               onClick={loadInsights}
               disabled={fetchingInsights}
@@ -1010,6 +1165,16 @@ export default function AnalyticsPage() {
                 }}
               >
                 <List size={16} />
+              </button>
+              <button
+                onClick={() => setViewMode('products')}
+                className="px-3 text-xs font-semibold transition-colors"
+                style={{
+                  backgroundColor: viewMode === 'products' ? 'rgba(200,184,154,0.15)' : 'rgba(255,255,255,0.04)',
+                  color: viewMode === 'products' ? '#C8B89A' : '#666',
+                }}
+              >
+                By product
               </button>
             </div>
           </div>
@@ -1135,6 +1300,12 @@ export default function AnalyticsPage() {
             format={formatFilter}
             onSource={setSourceFilter}
             onFormat={setFormatFilter}
+          />
+
+          <ProductFilter
+            options={productOptions}
+            selected={productFilter}
+            onChange={setProductFilter}
           />
 
           {/* Search */}
@@ -1266,6 +1437,10 @@ export default function AnalyticsPage() {
         )}
 
         {/* ─── Error State ─────────────────────────────────── */}
+        {productNotice && (
+          <p className="text-xs mb-4" style={{ color: '#C8B89A' }}>{productNotice}</p>
+        )}
+
         {error && (
           <div
             className="flex items-center gap-3 p-4 rounded-xl mb-6"
@@ -1324,6 +1499,10 @@ export default function AnalyticsPage() {
         {/* ═══════════════════════════════════════════════════ */}
         {/* ─── CARD VIEW ───────────────────────────────────── */}
         {/* ═══════════════════════════════════════════════════ */}
+        {!fetchingInsights && filteredInsights.length > 0 && viewMode === 'products' && (
+          <ByProductView groups={productGroups} fmt={fmt} />
+        )}
+
         {!fetchingInsights && filteredInsights.length > 0 && viewMode === 'cards' && (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5 mb-8">
             {filteredInsights.map((ad) => {
@@ -1422,12 +1601,28 @@ export default function AnalyticsPage() {
                 {/* Info */}
                 <div className="p-4">
                   <p
-                    className="text-[11px] font-medium truncate mb-3"
+                    className="text-[11px] font-medium truncate mb-2"
                     style={{ color: '#999', letterSpacing: '0.02em' }}
                     title={ad.ad_name}
                   >
                     {ad.ad_name}
                   </p>
+                  <div className="mb-3 space-y-2" onClick={(event) => event.stopPropagation()}>
+                    <ProductChip
+                      label={chipForAd(rowsByAd.get(ad.ad_id) || []).label}
+                      title={chipForAd(rowsByAd.get(ad.ad_id) || []).title}
+                    />
+                    {canOverrideProduct && (
+                      <ProductOverride
+                        choices={productChoices}
+                        value={(rowsByAd.get(ad.ad_id) || []).some((row) => row.product_source === 'manual')
+                          ? (rowsByAd.get(ad.ad_id) || [])[0]?.product_key || ''
+                          : ''}
+                        disabled={savingProduct === ad.ad_id}
+                        onChange={(choice) => saveProduct(ad.ad_id, choice)}
+                      />
+                    )}
+                  </div>
 
                   {/* Metric values */}
                   <div className="space-y-2">
@@ -1568,6 +1763,7 @@ export default function AnalyticsPage() {
                             <p className="text-[10px] truncate flex items-center gap-1.5" style={{ color: '#555', maxWidth: '220px' }}>
                               <span className="truncate">{ad.campaign_name}</span>
                               <PartnerPill source={ad.ad_source} />
+                              <ProductChip label={chipForAd(rowsByAd.get(ad.ad_id) || []).label} />
                             </p>
                           </div>
                         </div>
@@ -1605,7 +1801,7 @@ export default function AnalyticsPage() {
         {!fetchingInsights && filteredInsights.length > 0 && (
           <p className="text-xs mt-4 text-center" style={{ color: '#555' }}>
             {filteredInsights.length} ad{filteredInsights.length !== 1 ? 's' : ''} shown
-            {(searchQuery || sourceFilter !== 'all' || formatFilter !== 'all') && ` (filtered from ${insights.length})`}
+            {(searchQuery || sourceFilter !== 'all' || formatFilter !== 'all' || productFilter.length > 0) && ` (filtered from ${insights.length})`}
           </p>
         )}
       </div>
@@ -1617,6 +1813,7 @@ export default function AnalyticsPage() {
           onClose={() => setSelectedAd(null)}
           fmt={fmt}
           roasFloor={roasFloor}
+          productLabel={chipForAd(rowsByAd.get(selectedAd.ad_id) || []).label}
         />
       )}
 

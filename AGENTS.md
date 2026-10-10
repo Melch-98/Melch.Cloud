@@ -52,7 +52,7 @@ Design: dark `#0a0a0a`, text `#f5f5f8`, gold `#c8b89a` (`brand.*` in Tailwind).
 | `/analytics/campaigns`, `/analytics/geo-performance` | admin / founder / strategist | Campaigns; geo aMER |
 | `/analytics/efficiency`, `/analytics/ltv-cohorts`, `/analytics/forecast`, `/analytics/creative-matrix`, `/analytics/ad-perspective` | — | Retired. Permanent redirects to `/dashboard` (`next.config.mjs`). |
 | `/analytics/trybe-program` | admin / strategist / founder | Trybe Program Overview (read-only). Nav: Creative Analytics → **Trybe Program**. Excludes FOND. |
-| `/analytics` (+ copy) | role-gated | Creative analytics. |
+| `/analytics` (+ copy) | role-gated | Creative analytics. Top Creatives filters and groups by the landing-page product (`live_creatives`). |
 | `/analytics/funnel-viewer` | admin / strategist / founder | Funnel Viewer constellation. Port of Odylic Constellation. One live route, `GET /api/funnel-viewer/ads`. Attribution default is 7-day click only (`FUNNEL_ATTRIBUTION` in `src/lib/meta-funnel.ts`). Non-admins are locked to `users_profile.brand_id`. |
 | `/ad-changelog` | admin + founder | Live Meta `/activities` + Google Ads `change_event` feed (`ad_activity`). Cron `GET /api/cron/ad-activity` every 15 minutes. Admin brand picker lists non-archived brands; founder is locked to `users_profile.brand_id`. System events (Meta review, billing, spend limit, first delivery) are hidden until the toggle is on. |
 | `/calendar` | — | Retired. Permanent redirect to `/dashboard` (`next.config.mjs`). |
@@ -141,6 +141,10 @@ POST /api/admin/shopify-order-backfill
 
 Use `"brand_name": "Tallow Twins"` for that brand. The cursor is stored server-side.
 
+## Live ad product tags
+
+Step 1 is rules-based. No AI. `GET /api/cron/live-creatives` runs hourly at minute 10 (`Bearer CRON_SECRET`) and upserts `live_creatives` for active Meta ads on brands that have a Meta account. Apply `supabase/migrations/add_live_creatives.sql` before the cron can write. One row per brand, platform `meta`, ad, and asset. Flexible ads are one row per image hash or video id. Catalog ads use `catalog:{ad_id}`. The product comes from the ad's own landing URL, matched to the brand's myshopify domain and custom domain. A carousel uses the first card and stores every card. `manual_product_*` is the override and wins on read (`effectiveProduct`). The cron and admin sync omit `manual_product_*` and `product_source` from the upsert, so an override saved after the read stays, and a new row leaves those columns null. Top Creatives (`/analytics`) has a product filter and a By product view (active creatives, spend, ROAS, CPA — same sums as the page). Admins and founders override from the card (`PUT /api/live-creatives/override`). Strategists read their own brand. Founders can update their own brand (`FOR UPDATE`); admins keep `FOR ALL`. Admin sync is `POST /api/live-creatives/sync`. Reads use `createServiceClient` (`cache: 'no-store'`) and the routes set `fetchCache = 'force-no-store'` and `revalidate = 0`. Meta calls send the token in the Authorization header.
+
 ## Ship / ops footguns
 
 1. **No secrets in chat, docs, commits, or screenshots.** Env + Vercel + `app_settings` only. Trybe keys stay on `brand_integrations.api_key`.
@@ -156,5 +160,5 @@ Use `"brand_name": "Tallow Twins"` for that brand. The cursor is stored server-s
 
 - Path alias: `@/*` → `src/*`.
 - Local: `npm install` then `npm run dev` (needs env mirroring Vercel for real data).
-- Cron: `vercel.json` → `/api/cron/sync-pending` every 5 minutes (Dropbox resume), `/api/cron/shopify-orders` every 2 hours at minute 20 UTC, and `/api/cron/ad-activity` every 15 minutes. All use `CRON_SECRET`. The 5-minute Dropbox cron is already running in production, so this project accepts sub-daily schedules.
+- Cron: `vercel.json` → `/api/cron/sync-pending` every 5 minutes (Dropbox resume), `/api/cron/shopify-orders` every 2 hours at minute 20 UTC, `/api/cron/ad-activity` every 15 minutes, and `/api/cron/live-creatives` hourly at minute 10. All use `CRON_SECRET`. The 5-minute Dropbox cron is already running in production, so this project accepts sub-daily schedules.
 - Agents: prefer this file over archived Hermes. Update **this** file when product truth changes.
