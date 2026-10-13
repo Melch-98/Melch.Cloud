@@ -64,11 +64,15 @@ export async function readJsonObject(
 /**
  * Auth for a manual brand sync. Returns the JSON body when the caller may run it.
  * `brandKey` is `brand_id` on Shopify and `brandId` on Triple Whale.
+ * Cron and admins may omit the brand. A founder must name their own brand.
+ * Shopify and Triple Whale answer a missing founder brand with 403.
+ * Product sync passes `founderMissingBrandStatus: 400` because an omitted id syncs every brand.
  */
 export async function authorizeBrandSync(
   request: Request,
   supabase: AuthClient,
-  brandKey: 'brand_id' | 'brandId'
+  brandKey: 'brand_id' | 'brandId',
+  options?: { founderMissingBrandStatus?: 400 }
 ): Promise<{ error: NextResponse } | { body: Record<string, unknown> }> {
   const header = request.headers.get('authorization');
   if (authorizationMatchesSecret(header, process.env.CRON_SECRET)) {
@@ -105,11 +109,18 @@ export async function authorizeBrandSync(
   const parsed = await readJsonObject(request);
   if (!parsed.ok) return { error: parsed.response };
 
+  const targetBrandId = brandIdFromBody(parsed.body, brandKey);
+  if (profile.role === 'founder' && !targetBrandId && options?.founderMissingBrandStatus === 400) {
+    return {
+      error: NextResponse.json({ error: `${brandKey} is required` }, { status: 400 }),
+    };
+  }
+
   const allowed = mayTriggerBrandSync({
     via: 'session',
     role: profile.role ?? null,
     ownBrandId: profile.brand_id ?? null,
-    targetBrandId: brandIdFromBody(parsed.body, brandKey),
+    targetBrandId,
   });
   if (!allowed) {
     return {

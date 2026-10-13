@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { SHOPIFY_CONFIG } from '@/lib/shopify/config';
 import { shopifyProductTags, shopifyProductsFromPayload } from '@/lib/shopify/rest-payload';
+import { authorizeBrandSync, brandIdFromBody } from '@/lib/sync-brand-access';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -12,30 +13,13 @@ export async function POST(request: NextRequest) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
-  // Auth check
-  const authHeader = request.headers.get('authorization');
-  if (!authHeader) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  const token = authHeader.replace('Bearer ', '');
-  const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-  if (authError || !user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  // Check admin role
-  const { data: profile } = await supabase
-    .from('users_profile')
-    .select('role')
-    .eq('id', user.id)
-    .single();
-
-  if (!profile || !['admin', 'founder'].includes(profile.role)) {
-    return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
-  }
-
-  const body = await request.json().catch(() => ({}));
-  const targetBrandId = body.brand_id;
+  // Admin or cron secret: any brand, including every credentialed brand when brand_id is omitted.
+  // Founder: brand_id is required and must be users_profile.brand_id.
+  const auth = await authorizeBrandSync(request, supabase, 'brand_id', {
+    founderMissingBrandStatus: 400,
+  });
+  if ('error' in auth) return auth.error;
+  const targetBrandId = brandIdFromBody(auth.body, 'brand_id');
 
   // Query brands that have Shopify configured
   let query = supabase
