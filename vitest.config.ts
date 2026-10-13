@@ -31,6 +31,7 @@ export default defineConfig({
       'src/lib/sync-brand-access.test.ts',
       'src/app/api/auth/dropbox/**/*.test.ts',
       'src/app/api/shopify-sync/**/*.test.ts',
+      'src/app/api/sync-products/**/*.test.ts',
       'src/app/api/triplewhale-sync/**/*.test.ts',
       'src/lib/shopify/run-triplewhale-brand-sync.test.ts',
       'src/app/admin/dropbox/**/*.test.ts',
