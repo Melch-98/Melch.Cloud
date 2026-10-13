@@ -1,7 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CREATIVE_FIELD_LIST, POST_FIELDS, dropCreativeField, rejectedCreativeField, syncLiveCreatives } from '@/lib/live-creatives/sync';
 
 const TOKEN = 'meta-token-should-not-leak';
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-10-10T12:00:00.000Z'));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function fakeSupabase(upserts: Array<Array<Record<string, unknown>>>) {
   return {

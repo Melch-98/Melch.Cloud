@@ -1,7 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LiveCreativeDraft } from '@/lib/live-creatives/assets';
 import { CRON_OMITTED_COLUMNS, effectiveProduct, mergeCronRow } from '@/lib/live-creatives/merge';
 import { syncLiveCreatives } from '@/lib/live-creatives/sync';
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-10-10T12:00:00.000Z'));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const incoming: LiveCreativeDraft = {
   brand_id: 'brand-1',
