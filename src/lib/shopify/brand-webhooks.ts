@@ -3,7 +3,7 @@ import { missingScopesFromShopifyBody, scopeErrorMessage } from './webhook-scope
 
 /**
  * Order topics a custom-app brand can subscribe to with its own token.
- * refunds/create is omitted: the refund Inngest handler only logs, and an
+ * refunds/create is omitted: the webhook route only logs that topic, and an
  * orders/updated delivery already upserts the order (refunds included in `raw`).
  */
 export const BRAND_ORDER_WEBHOOK_TOPICS = [

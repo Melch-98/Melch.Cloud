@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { SHOPIFY_CONFIG } from '@/lib/shopify/config';
 import { loadBrandClientSecrets } from '@/lib/shopify/brand-secrets';
 import { authorizeShopifyWebhook } from '@/lib/shopify/webhook-hmac';
-import { inngest } from '@/lib/inngest/client';
+import { dispatchShopifyWebhook } from '@/lib/shopify/webhook-handlers';
 import { createServiceClient } from '@/lib/supabase-server';
 
 /**
@@ -16,9 +16,10 @@ import { createServiceClient } from '@/lib/supabase-server';
  *   2. Verify X-Shopify-Hmac-Sha256 with the Melch.Cloud app secret, or with the
  *      custom-app secret stored on brands for X-Shopify-Shop-Domain.
  *      Unsigned or unverified payloads are rejected.
- *   3. Hand off to Inngest as an event (so the response is fast and retries are handled)
- *   4. For app/uninstalled, mark the store inactive immediately
- *   5. Return 200 ASAP — Shopify retries on non-2xx
+ *   3. Upsert orders/create, orders/updated, and orders/cancelled in this request.
+ *      The conflict key is shop_domain + shopify_order_id.
+ *   4. For app/uninstalled, mark the store inactive once.
+ *   5. Return 200. Shopify retries on non-2xx. The 2h order cron reconciles.
  */
 export async function POST(
   req: NextRequest,
@@ -51,60 +52,18 @@ export async function POST(
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  // Route to the appropriate Inngest event by topic.
   try {
-    switch (topicHeader) {
-      case 'orders/create':
-        await inngest.send({
-          name: 'shopify/order.created',
-          data: { shop_domain: shop, order: payload },
-        });
-        break;
-      case 'orders/updated':
-        await inngest.send({
-          name: 'shopify/order.updated',
-          data: { shop_domain: shop, order: payload },
-        });
-        break;
-      case 'orders/cancelled':
-        await inngest.send({
-          name: 'shopify/order.cancelled',
-          data: { shop_domain: shop, order: payload },
-        });
-        break;
-      case 'refunds/create':
-        await inngest.send({
-          name: 'shopify/refund.created',
-          data: { shop_domain: shop, refund: payload },
-        });
-        break;
-      case 'app/uninstalled': {
-        await inngest.send({
-          name: 'shopify/app.uninstalled',
-          data: { shop_domain: shop },
-        });
-        // Also mark the store as uninstalled immediately so we stop using its token.
-        const supabase = createServiceClient();
-        await supabase
-          .from('shopify_stores')
-          .update({ uninstalled_at: new Date().toISOString() })
-          .eq('shop_domain', shop);
-        break;
-      }
-      // GDPR mandatory webhooks — log for compliance, no-op for now.
-      case 'customers/data_request':
-      case 'customers/redact':
-      case 'shop/redact':
-        console.log(`[shopify-gdpr] ${topicHeader} from ${shop}`, payload);
-        break;
-      default:
-        console.warn(`[shopify-webhook] unhandled topic: ${topicHeader}`);
-    }
+    await dispatchShopifyWebhook({
+      supabase: createServiceClient(),
+      topic: topicHeader,
+      shop,
+      payload,
+    });
   } catch (err) {
-    console.error('[shopify-webhook] dispatch failed', err);
-    // Return 500 so Shopify retries with backoff. Silently returning 200 here
-    // would permanently drop the order/refund event if Inngest is down.
-    return NextResponse.json({ error: 'Dispatch failed' }, { status: 500 });
+    console.error('[shopify-webhook] handling failed', err);
+    const message = err instanceof Error ? err.message : 'Webhook handling failed';
+    const safe = message.startsWith('Server config error') ? message : 'Webhook handling failed';
+    return NextResponse.json({ error: safe }, { status: 500 });
   }
 
   return NextResponse.json({ ok: true });
