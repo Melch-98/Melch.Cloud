@@ -6,6 +6,7 @@ import ControlCard from '@/components/upload-v2/ControlCard';
 import {
   SAMPLE_CREATIVES,
   cloneCreative,
+  sampleBatchName,
   mediaKind,
   nearestAspectRatio,
   revokeMedia,
@@ -54,6 +55,8 @@ function measureMedia(url: string, kind: 'image' | 'video'): Promise<{ width: nu
 
 export default function UploadV2Studio() {
   const [creatives, setCreatives] = useState<Creative[]>(() => SAMPLE_CREATIVES.map(cloneCreative));
+  const [batchName] = useState(sampleBatchName);
+  const [creatorName, setCreatorName] = useState('');
   const [creativeType, setCreativeType] = useState<CreativeType>('whitelist');
   const [batchOn, setBatchOn] = useState(false);
   const [index, setIndex] = useState(0);
@@ -272,6 +275,8 @@ export default function UploadV2Studio() {
       </div>
       <div className="min-w-0 lg:col-start-2 lg:row-start-1">
         <ControlCard
+          batchName={batchName}
+          creatorName={creatorName}
           creative={creative}
           creativeIndex={safeIndex}
           creativeCount={creatives.length}
@@ -285,6 +290,7 @@ export default function UploadV2Studio() {
             setCreativeType(value);
             setMediaNote(null);
           }}
+          onCreatorName={setCreatorName}
           onBatch={(value) => {
             setBatchOn(value);
             setMediaNote(null);

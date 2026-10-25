@@ -54,6 +54,13 @@ export const SAMPLE_PRODUCTS: SampleProduct[] = [
 
 export const SAMPLE_BRAND = 'Sample Brand';
 
+export function sampleBatchName(now = new Date()): string {
+  const yy = String(now.getFullYear()).slice(-2);
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return `SMP_${yy}${mm}${dd}_0001`;
+}
+
 function card(
   id: string,
   headline: string,

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useId, useRef, useState } from 'react';
-import { GalleryHorizontal, Layers, Upload, Users, type LucideIcon } from 'lucide-react';
+import { Check, Copy, GalleryHorizontal, Layers, Upload, Users, type LucideIcon } from 'lucide-react';
 import {
   SAMPLE_PRODUCTS,
   aspectCropNote,
@@ -38,6 +38,8 @@ const RATIO_OPTIONS: { value: AspectRatio; label: string }[] = [
 type CreativePatch = Partial<Pick<Creative, 'caption' | 'productKey' | 'productLabel' | 'angle' | 'handle' | 'usageEndDate' | 'perpetual' | 'ratio'>>;
 
 type ControlCardProps = {
+  batchName: string;
+  creatorName: string;
   creative: Creative;
   creativeIndex: number;
   creativeCount: number;
@@ -48,6 +50,7 @@ type ControlCardProps = {
   shownMedia: LocalMedia | null;
   mediaNote: string | null;
   onCreativeType: (value: CreativeType) => void;
+  onCreatorName: (value: string) => void;
   onBatch: (value: boolean) => void;
   onSelectCreative: (index: number) => void;
   onPatch: (patch: CreativePatch) => void;
@@ -267,8 +270,34 @@ function ProductField({
   );
 }
 
+function CopyNameButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async (event) => {
+        event.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1500);
+        } catch {
+          setCopied(false);
+        }
+      }}
+      title={copied ? 'Copied' : 'Copy batch name'}
+      className="shrink-0 rounded-md p-1 hover:bg-[rgba(200,184,154,0.12)]"
+      style={{ color: copied ? '#7FD48F' : '#C8B89A' }}
+    >
+      {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+    </button>
+  );
+}
+
 export default function ControlCard(props: ControlCardProps) {
   const {
+    batchName,
+    creatorName,
     creative,
     creativeIndex,
     creativeCount,
@@ -279,6 +308,7 @@ export default function ControlCard(props: ControlCardProps) {
     shownMedia,
     mediaNote,
     onCreativeType,
+    onCreatorName,
     onBatch,
     onSelectCreative,
     onPatch,
@@ -311,6 +341,33 @@ export default function ControlCard(props: ControlCardProps) {
       style={{ backgroundColor: '#111111', border: '1px solid rgba(255,255,255,0.06)' }}
     >
       <div className="space-y-5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <span className={sectionLabelClass} style={{ marginBottom: 4 }}>
+              Batch name
+            </span>
+            <p className="truncate font-mono text-sm font-semibold text-[#C8B89A]">{batchName}</p>
+          </div>
+          <CopyNameButton text={batchName} />
+        </div>
+        <p className="-mt-3 text-[10px] leading-4 text-gray-600">
+          Sample of the live name: brand code, date, and sequence. Nothing is reserved or saved.
+        </p>
+        <div>
+          <label htmlFor="upload-v2-creator-name" className={sectionLabelClass}>
+            Creator name
+          </label>
+          <input
+            id="upload-v2-creator-name"
+            value={creatorName}
+            onChange={(event) => onCreatorName(event.target.value)}
+            placeholder="Creator name"
+            autoComplete="off"
+            className={inputClass}
+            style={inputStyle}
+          />
+          <p className="mt-1 text-[10px] text-gray-600">Optional. One name for this batch, shown on the batch card.</p>
+        </div>
         <Segmented
           label="Creative upload type"
           value={creativeType}
@@ -342,8 +399,8 @@ export default function ControlCard(props: ControlCardProps) {
           </div>
           <p className="mt-2 min-h-[2rem] text-[11px] leading-4 text-gray-500">
             {batchOn
-              ? 'Arrows above the phone move through this sample batch.'
-              : 'Batch is off. The preview shows one creative.'}
+              ? 'One batch. Arrows move through its creatives. The live card uses the batch name once and lists each file.'
+              : 'Batch is off. This is still one batch with one creative.'}
           </p>
           {batchOn ? (
             <div
@@ -359,7 +416,7 @@ export default function ControlCard(props: ControlCardProps) {
                     key={item.id}
                     type="button"
                     aria-current={selected ? 'true' : undefined}
-                    aria-label={`${item.name}, creative ${index + 1} of ${creativeCount}`}
+                    aria-label={`${item.media?.name || item.name}, ${item.ratio}, creative ${index + 1} of ${creativeCount}`}
                     onClick={() => onSelectCreative(index)}
                     className="w-16 shrink-0 text-left"
                   >
@@ -374,15 +431,21 @@ export default function ControlCard(props: ControlCardProps) {
                         // eslint-disable-next-line @next/next/no-img-element
                         <img src={thumb.url} alt="" className="h-full w-full object-cover" />
                       ) : null}
+                      {thumb?.kind === 'video' ? (
+                        <video src={thumb.url} muted playsInline preload="metadata" className="h-full w-full object-cover" />
+                      ) : null}
                       <span className="absolute left-1 top-1 rounded bg-black/65 px-1 text-[9px] font-semibold text-white">
                         {index + 1}
+                      </span>
+                      <span className="absolute bottom-1 right-1 rounded bg-black/65 px-1 text-[9px] font-semibold text-[#C8B89A]">
+                        {item.ratio}
                       </span>
                     </span>
                     <span
                       className="mt-1 block truncate text-[10px]"
                       style={{ color: selected ? '#C8B89A' : '#ABABAB' }}
                     >
-                      {item.name}
+                      {thumb?.name || item.name}
                     </span>
                   </button>
                 );
