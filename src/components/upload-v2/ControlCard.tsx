@@ -19,10 +19,11 @@ import {
   GENERIC_LANDING_OPTIONS,
   NO_PRODUCTS_SYNCED_NOTE,
   aspectCropNote,
+  batchFileNamePreview,
   formatBytes,
   mapProductRows,
   mediaRatioLabel,
-  previewCreativeFileNames,
+  previewCreativeFileName,
   visibleProductChoices,
   type AspectRatio,
   type Creative,
@@ -70,7 +71,6 @@ type ControlCardProps = {
   creatorName: string;
   creative: Creative;
   creativeIndex: number;
-  creativeCount: number;
   batchOn: boolean;
   creatives: Creative[];
   creativeType: CreativeType;
@@ -447,10 +447,43 @@ function Thumb({ media, from, to }: { media: LocalMedia | null; from: string; to
 }
 
 function dropHint(creativeType: CreativeType, batchOn: boolean): string {
+  if (batchOn) return `Images and video · up to ${BATCH_MAX_CREATIVES} creatives`;
   if (creativeType === 'carousel') return 'Images and video · 2–10 cards';
   if (creativeType === 'flexible') return 'Images and video · up to 10 assets';
-  if (batchOn) return 'Images and video · one creative per file';
   return 'Images and video';
+}
+
+function BatchSwitch({
+  id,
+  on,
+  describedBy,
+  onToggle,
+}: {
+  id: string;
+  on: boolean;
+  describedBy?: string;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      id={`${id}-switch`}
+      data-control="batch"
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-labelledby={id}
+      aria-describedby={describedBy}
+      onClick={onToggle}
+      className="relative h-6 w-11 shrink-0 rounded-full transition-colors"
+      style={{ backgroundColor: on ? '#C8B89A' : 'rgba(255,255,255,0.12)' }}
+    >
+      <span
+        aria-hidden
+        className="absolute top-0.5 h-5 w-5 rounded-full bg-[#0A0A0A] transition-transform duration-150"
+        style={{ transform: on ? 'translateX(22px)' : 'translateX(2px)' }}
+      />
+    </button>
+  );
 }
 
 export default function ControlCard(props: ControlCardProps) {
@@ -464,7 +497,6 @@ export default function ControlCard(props: ControlCardProps) {
     creatorName,
     creative,
     creativeIndex,
-    creativeCount,
     batchOn,
     creatives,
     creativeType,
@@ -506,27 +538,46 @@ export default function ControlCard(props: ControlCardProps) {
   const cropNote = shownMedia?.width && shownMedia.height
     ? aspectCropNote(shownMedia.width, shownMedia.height, creative.ratio)
     : null;
-  const fileNames = previewCreativeFileNames({
-    creatives,
-    creatorName,
-    creativeType,
-    batchOn,
-    activeIndex: creativeIndex,
-    activeShownName: shownMedia?.name ?? null,
-  });
-  const filePreview = fileNames[creativeIndex];
+  const filePreview = batchOn
+    ? batchFileNamePreview(creative)
+    : previewCreativeFileName(creative, creatorName, creativeType, shownMedia?.name ?? null);
   const savePath = [brandName, weekLabel, filePreview.fileName].filter(Boolean).join(' / ');
 
   const carouselFull = creative.cards.length >= CAROUSEL_MAX_CARDS && creative.cards.every((card) => card.media);
   const flexibleFull = creative.assets.length >= FLEXIBLE_MAX_ASSETS;
   const batchFull = creatives.length >= BATCH_MAX_CREATIVES;
-  const atCap = creativeType === 'carousel' ? carouselFull : creativeType === 'flexible' ? flexibleFull : batchOn && batchFull;
+  const atCap = batchOn
+    ? batchFull
+    : creativeType === 'carousel'
+      ? carouselFull
+      : creativeType === 'flexible'
+        ? flexibleFull
+        : false;
 
   const rows: FileRowModel[] = [];
   let listLabel = 'Files';
   let reorder: ((from: number, to: number) => void) | null = null;
 
-  if (creativeType === 'carousel' && creative.cards.some((card) => card.media)) {
+  if (batchOn) {
+    listLabel = 'Creatives in this batch';
+    reorder = onReorderCreatives;
+    creatives.forEach((item, index) => {
+      rows.push({
+        key: item.id,
+        index,
+        creativeIndex: index,
+        name: item.media?.name || item.originalName || item.name,
+        bytes: item.media?.bytes ?? null,
+        ratio: item.media ? mediaRatioLabel(item.media) : item.ratio,
+        media: item.media,
+        from: item.from,
+        to: item.to,
+        selected: index === creativeIndex,
+        canRemove: true,
+        removeLabel: `Remove ${item.media?.name || item.name || 'creative'}`,
+      });
+    });
+  } else if (creativeType === 'carousel' && creative.cards.some((card) => card.media)) {
     listLabel = 'Carousel cards';
     reorder = onReorderCards;
     creative.cards.forEach((card, index) => {
@@ -564,26 +615,6 @@ export default function ControlCard(props: ControlCardProps) {
         removeLabel: `Remove ${asset.media.name}`,
       });
     });
-  } else if (creativeType === 'whitelist' && batchOn) {
-    listLabel = 'Creatives in this batch';
-    reorder = onReorderCreatives;
-    creatives.forEach((item, index) => {
-      if (!item.media && !item.userAdded) return;
-      rows.push({
-        key: item.id,
-        index,
-        creativeIndex: index,
-        name: item.media?.name || item.originalName,
-        bytes: item.media?.bytes ?? null,
-        ratio: item.media ? mediaRatioLabel(item.media) : item.ratio,
-        media: item.media,
-        from: item.from,
-        to: item.to,
-        selected: index === creativeIndex,
-        canRemove: true,
-        removeLabel: `Remove ${item.media?.name || item.name}`,
-      });
-    });
   } else if (creative.media) {
     listLabel = 'File';
     rows.push({
@@ -605,18 +636,20 @@ export default function ControlCard(props: ControlCardProps) {
   const showList = rows.length > 0;
   const countHint = !showList
     ? undefined
-    : creativeType === 'carousel'
-      ? `${creative.cards.length} of ${CAROUSEL_MAX_CARDS} cards`
-      : creativeType === 'flexible'
-        ? `${creative.assets.length} of ${FLEXIBLE_MAX_ASSETS} assets`
-        : batchOn
-          ? `${rows.length} ${rows.length === 1 ? 'creative' : 'creatives'}`
+    : batchOn
+      ? `${rows.length} of ${BATCH_MAX_CREATIVES}`
+      : creativeType === 'carousel'
+        ? `${creative.cards.length} of ${CAROUSEL_MAX_CARDS} cards`
+        : creativeType === 'flexible'
+          ? `${creative.assets.length} of ${FLEXIBLE_MAX_ASSETS} assets`
           : '1 file';
-  const capCopy = creativeType === 'carousel'
-    ? 'Carousel holds 10 cards.'
-    : creativeType === 'flexible'
-      ? 'A flexible creative holds 10 assets.'
-      : 'A batch holds 20 creatives.';
+  const capCopy = batchOn
+    ? `A batch holds ${BATCH_MAX_CREATIVES} creatives.`
+    : creativeType === 'carousel'
+      ? 'Carousel holds 10 cards.'
+      : creativeType === 'flexible'
+        ? 'A flexible creative holds 10 assets.'
+        : '';
 
   function openPicker(target?: ReplaceTarget) {
     replaceTarget.current = target ?? null;
@@ -637,19 +670,21 @@ export default function ControlCard(props: ControlCardProps) {
   }
 
   function selectRow(row: FileRowModel) {
-    if (creativeType === 'carousel') onSelectCard(row.index);
+    if (batchOn) onSelectCreative(row.creativeIndex);
+    else if (creativeType === 'carousel') onSelectCard(row.index);
     else if (creativeType === 'flexible') onSelectAsset(row.index);
-    else if (batchOn) onSelectCreative(row.creativeIndex);
   }
 
   function replaceRow(row: FileRowModel) {
-    if (creativeType === 'carousel') openPicker({ kind: 'card', index: row.index });
+    if (batchOn) openPicker({ kind: 'media', creativeIndex: row.creativeIndex });
+    else if (creativeType === 'carousel') openPicker({ kind: 'card', index: row.index });
     else if (creativeType === 'flexible') openPicker({ kind: 'asset', index: row.index });
     else openPicker({ kind: 'media', creativeIndex: row.creativeIndex });
   }
 
   function removeRow(row: FileRowModel) {
-    if (creativeType === 'carousel') onRemoveCard(row.index);
+    if (batchOn) onRemoveMedia(row.creativeIndex);
+    else if (creativeType === 'carousel') onRemoveCard(row.index);
     else if (creativeType === 'flexible') onRemoveAsset(row.index);
     else onRemoveMedia(row.creativeIndex);
   }
@@ -687,6 +722,7 @@ export default function ControlCard(props: ControlCardProps) {
 
   return (
     <div
+      data-mode={batchOn ? 'batch' : 'single'}
       className="min-w-0 rounded-xl"
       style={{ backgroundColor: '#111111', border: '1px solid rgba(255,255,255,0.06)' }}
     >
@@ -835,7 +871,7 @@ export default function ControlCard(props: ControlCardProps) {
             </ul>
             {atCap ? (
               <p className="mt-2 text-[11px] text-[#C8B89A]">{capCopy}</p>
-            ) : creativeType === 'carousel' || creativeType === 'flexible' || batchOn ? (
+            ) : batchOn || creativeType === 'carousel' || creativeType === 'flexible' ? (
               <button
                 type="button"
                 onClick={() => openPicker()}
@@ -870,46 +906,47 @@ export default function ControlCard(props: ControlCardProps) {
         ) : null}
       </section>
 
-      <section data-section="type" className="border-t border-white/[0.06] px-4 py-4 sm:px-5">
-        <SectionHeading index={2} title="Upload type" />
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <div className="min-w-[220px] flex-1">
-            <Segmented
-              label="Creative upload type"
-              hideLabel
-              value={creativeType}
-              options={TYPE_OPTIONS}
-              onChange={onCreativeType}
-            />
-          </div>
-          <div className="flex h-10 items-center gap-2.5 pl-1">
-            <label id={switchId} htmlFor={`${switchId}-switch`} className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">
-              Batch
-            </label>
-            {batchOn ? (
-              <span className="text-[11px] font-medium tabular-nums text-[#C8B89A]" aria-hidden>
-                {creativeIndex + 1}/{creativeCount}
-              </span>
-            ) : null}
-            <button
-              id={`${switchId}-switch`}
-              data-control="batch"
-              type="button"
-              role="switch"
-              aria-checked={batchOn}
-              aria-labelledby={switchId}
-              onClick={() => onBatch(!batchOn)}
-              className="relative h-6 w-11 shrink-0 rounded-full transition-colors"
-              style={{ backgroundColor: batchOn ? '#C8B89A' : 'rgba(255,255,255,0.12)' }}
-            >
-              <span
-                aria-hidden
-                className="absolute top-0.5 h-5 w-5 rounded-full bg-[#0A0A0A] transition-transform duration-150"
-                style={{ transform: batchOn ? 'translateX(22px)' : 'translateX(2px)' }}
+      <section data-section={batchOn ? 'batch' : 'type'} className="border-t border-white/[0.06] px-4 py-4 sm:px-5">
+        {batchOn ? (
+          <>
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <h2 className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">
+                <span className="tabular-nums text-[#C8B89A]">2</span>
+                <span id={switchId}>Batch</span>
+              </h2>
+              <BatchSwitch
+                id={switchId}
+                on={batchOn}
+                describedBy={`${switchId}-hint`}
+                onToggle={() => onBatch(false)}
               />
-            </button>
-          </div>
-        </div>
+            </div>
+            <p id={`${switchId}-hint`} className="text-[12px] leading-4 text-gray-500">
+              Plain creatives only, up to {BATCH_MAX_CREATIVES}. Original names are kept. Turn Batch off to use whitelist, carousel, or flexible.
+            </p>
+          </>
+        ) : (
+          <>
+            <SectionHeading index={2} title="Upload type" />
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <div className="min-w-[220px] flex-1">
+                <Segmented
+                  label="Creative upload type"
+                  hideLabel
+                  value={creativeType}
+                  options={TYPE_OPTIONS}
+                  onChange={onCreativeType}
+                />
+              </div>
+              <div className="flex h-10 items-center gap-2.5 pl-1">
+                <label id={switchId} htmlFor={`${switchId}-switch`} className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">
+                  Batch
+                </label>
+                <BatchSwitch id={switchId} on={batchOn} onToggle={() => onBatch(true)} />
+              </div>
+            </div>
+          </>
+        )}
         <div className="mt-3" data-control="ratio">
           <Segmented
             label="Aspect ratio"
@@ -920,11 +957,14 @@ export default function ControlCard(props: ControlCardProps) {
           {cropNote ? (
             <p role="status" className="mt-2 text-[11px] leading-4 text-[#C8B89A]">{cropNote}</p>
           ) : (
-            <p className="mt-2 text-[11px] leading-4 text-gray-600">A file snaps this to the nearest ratio.</p>
+            <p className="mt-2 text-[11px] leading-4 text-gray-600">
+              {batchOn ? 'Each file snaps this to the nearest ratio.' : 'A file snaps this to the nearest ratio.'}
+            </p>
           )}
         </div>
       </section>
 
+      {batchOn ? null : (
       <section data-section="details" className="border-t border-white/[0.06] px-4 py-4 sm:px-5">
         <SectionHeading index={3} title="Details" />
         <div className="space-y-3">
@@ -1061,9 +1101,10 @@ export default function ControlCard(props: ControlCardProps) {
           ) : null}
         </div>
       </section>
+      )}
 
       <section data-section="saves" className="border-t border-white/[0.06] px-4 py-4 sm:px-5" style={{ backgroundColor: 'rgba(255,255,255,0.02)' }}>
-        <SectionHeading index={4} title="Saves to" />
+        <SectionHeading index={batchOn ? 3 : 4} title="Saves to" />
         <p className="break-all text-sm leading-5 text-[#F5F5F8]">
           {brandName ? (
             <>
@@ -1072,10 +1113,23 @@ export default function ControlCard(props: ControlCardProps) {
             </>
           ) : null}
           {weekLabel}
-          <span className="text-gray-600"> / </span>
-          <span className="font-mono text-[13px]">{filePreview.fileName}</span>
+          {filePreview.fileName ? (
+            <>
+              <span className="text-gray-600"> / </span>
+              <span className="font-mono text-[13px]">{filePreview.fileName}</span>
+            </>
+          ) : null}
         </p>
-        <p className="mt-1 text-[11px] font-medium text-[#C8B89A]">{filePreview.label}</p>
+        <p className="mt-1 text-[11px] font-medium text-[#C8B89A]">
+          {batchOn ? 'Original names are kept' : filePreview.label}
+        </p>
+        {batchOn ? (
+          <p className="mt-1 text-[11px] leading-4 text-gray-600">
+            {filePreview.fileName
+              ? 'This file keeps its uploaded name. Creator, product, and angle do not apply.'
+              : 'Files keep the names they are uploaded with.'}
+          </p>
+        ) : null}
         <button
           type="button"
           disabled

@@ -29,6 +29,7 @@ import {
 type PhonePreviewProps = {
   creative: Creative;
   creativeType: CreativeType;
+  batchOn: boolean;
   cardIndex: number;
   assetIndex: number;
   brandName: string;
@@ -109,7 +110,26 @@ function SampleArt({ from, to, kicker }: { from: string; to: string; kicker: str
   );
 }
 
-function MediaFill({ media, from, to, kicker }: { media: LocalMedia | null; from: string; to: string; kicker: string }) {
+function MediaFill({
+  media,
+  from,
+  to,
+  kicker,
+  emptyLabel,
+}: {
+  media: LocalMedia | null;
+  from: string;
+  to: string;
+  kicker: string;
+  emptyLabel?: string;
+}) {
+  if (!media && emptyLabel) {
+    return (
+      <div className="absolute inset-0 flex items-center justify-center bg-[#141414]">
+        <p className="px-8 text-center text-[13px] leading-5 text-white/70">{emptyLabel}</p>
+      </div>
+    );
+  }
   if (!media) return <SampleArt from={from} to={to} kicker={kicker} />;
   if (media.kind === 'video') {
     return (
@@ -188,6 +208,7 @@ function FlexibleHint({ count, className = '' }: { count: number; className?: st
 export default function PhonePreview({
   creative,
   creativeType,
+  batchOn,
   cardIndex,
   assetIndex,
   brandName,
@@ -197,39 +218,54 @@ export default function PhonePreview({
   const [dragOver, setDragOver] = useState(false);
   const cards = creative.cards;
   const assets = creative.assets;
-  const safeIndex = Math.min(cards.length - 1, Math.max(0, cardIndex));
+  const safeIndex = Math.min(Math.max(cards.length - 1, 0), Math.max(0, cardIndex));
   const safeAsset = Math.min(Math.max(0, assets.length - 1), Math.max(0, assetIndex));
   const activeCard = cards[safeIndex];
   const activeAsset = assets[safeAsset];
-  const productTitle = isCatalogProductKey(creative.productKey) ? creative.productLabel.trim() : '';
-  const art = creativeType === 'carousel'
-    ? { from: activeCard.from, to: activeCard.to, kicker: productTitle || activeCard.kicker, media: activeCard.media, headline: activeCard.headline }
-    : creativeType === 'flexible' && activeAsset
-      ? { from: creative.from, to: creative.to, kicker: productTitle || creative.kicker, media: activeAsset.media, headline: '' }
-      : { from: creative.from, to: creative.to, kicker: productTitle || creative.kicker, media: creative.media, headline: '' };
+  const productTitle = !batchOn && isCatalogProductKey(creative.productKey) ? creative.productLabel.trim() : '';
+  const art = batchOn
+    ? { from: creative.from, to: creative.to, kicker: '', media: creative.media, headline: '' }
+    : creativeType === 'carousel' && activeCard
+      ? { from: activeCard.from, to: activeCard.to, kicker: productTitle || activeCard.kicker, media: activeCard.media, headline: activeCard.headline }
+      : creativeType === 'flexible' && activeAsset
+        ? { from: creative.from, to: creative.to, kicker: productTitle || creative.kicker, media: activeAsset.media, headline: '' }
+        : { from: creative.from, to: creative.to, kicker: productTitle || creative.kicker, media: creative.media, headline: '' };
   const handle = displayHandle(creative.handle);
   const caption = creative.caption.trim();
   const ratio = creative.ratio;
   const feed = ratio !== '9:16';
   const accountName = brandName.trim();
+  const partnership = !batchOn && creativeType === 'whitelist';
   const previewLabel = [
-    creativeType === 'whitelist' ? 'Whitelist ad preview' : creativeType === 'carousel' ? 'Carousel ad preview' : 'Flexible ad preview',
+    batchOn ? 'Creative preview' : partnership ? 'Whitelist ad preview' : creativeType === 'carousel' ? 'Carousel ad preview' : 'Flexible ad preview',
     ratio,
-    creative.name,
-    caption || 'No caption yet',
+    batchOn ? (creative.media?.name || 'No file yet') : creative.name,
+    batchOn ? 'Plain creative' : (caption || 'No caption yet'),
   ].join(', ');
+
+  const stageKey = batchOn
+    ? creative.media?.url ?? creative.id
+    : creativeType === 'carousel'
+      ? activeCard?.id ?? creative.id
+      : activeAsset?.id ?? creative.id;
 
   const stage = (
     <div className="absolute inset-0">
-      <div key={creativeType === 'carousel' ? activeCard.id : activeAsset?.id ?? creative.id} className="absolute inset-0 animate-fade-in">
-        <MediaFill media={art.media} from={art.from} to={art.to} kicker={art.kicker} />
+      <div key={stageKey} className="absolute inset-0 animate-fade-in">
+        <MediaFill
+          media={art.media}
+          from={art.from}
+          to={art.to}
+          kicker={art.kicker}
+          emptyLabel={batchOn && !art.media ? 'Drop creatives to preview them' : undefined}
+        />
       </div>
     </div>
   );
 
-  const usageLine = creativeType === 'whitelist' && creative.perpetual
+  const usageLine = partnership && creative.perpetual
     ? 'Perpetual'
-    : creativeType === 'whitelist' && !creative.perpetual && creative.usageEndDate
+    : partnership && !creative.perpetual && creative.usageEndDate
       ? `Usage ends ${formatUsageEnd(creative.usageEndDate)}`
       : null;
 
@@ -237,7 +273,7 @@ export default function PhonePreview({
     <div className="absolute inset-0 text-white">
       {stage}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-48 bg-gradient-to-t from-black/80 to-transparent" />
-      {creativeType === 'whitelist' ? (
+      {partnership ? (
         <PartnershipHeader name={accountName} logoUrl={brandLogoUrl} />
       ) : (
         <div aria-hidden className="absolute inset-x-0 top-11 z-20 flex justify-center gap-5 text-[14px] font-semibold">
@@ -247,24 +283,26 @@ export default function PhonePreview({
       )}
       <Rail />
       <div className="absolute inset-x-0 bottom-[52px] z-20 flex flex-col gap-2 px-3 pb-3 pr-16">
-        {creativeType === 'flexible' ? <FlexibleHint count={assets.length} /> : null}
+        {!batchOn && creativeType === 'flexible' ? <FlexibleHint count={assets.length} /> : null}
         <div className="flex items-center gap-2">
           <BrandMark name={accountName} logoUrl={brandLogoUrl} ink="white" />
           <span className="truncate text-[13px] font-semibold">{accountName}</span>
-          {creativeType === 'whitelist' ? null : (
+          {partnership ? null : (
             <span className="rounded border border-white/70 px-1.5 py-0.5 text-[11px] font-semibold">Follow</span>
           )}
         </div>
-        {creativeType === 'whitelist' && handle ? (
+        {partnership && handle ? (
           <p className="text-[10px] text-white/75">{handle}</p>
         ) : null}
         {usageLine ? <p className="text-[10px] text-white/75">{usageLine}</p> : null}
-        {creativeType === 'carousel' && art.headline ? (
+        {!batchOn && creativeType === 'carousel' && art.headline ? (
           <p className="text-[13px] font-semibold leading-snug">{art.headline}</p>
         ) : null}
-        <p className="line-clamp-3 text-[12px] leading-snug">
-          {caption || <span className="text-white/55">Add a caption</span>}
-        </p>
+        {batchOn ? null : (
+          <p className="line-clamp-3 text-[12px] leading-snug">
+            {caption || <span className="text-white/55">Add a caption</span>}
+          </p>
+        )}
       </div>
       <TabBar />
     </div>
@@ -277,7 +315,7 @@ export default function PhonePreview({
         <BrandMark name={accountName} logoUrl={brandLogoUrl} ink="black" />
         <div className="min-w-0 flex-1">
           <p className="truncate text-[13px] font-semibold leading-tight">{accountName}</p>
-          {creativeType === 'whitelist' ? (
+          {partnership ? (
             <p className="text-[10px] leading-tight text-[#8e8e8e]">Paid partnership</p>
           ) : null}
         </div>
@@ -294,14 +332,16 @@ export default function PhonePreview({
       </div>
       <div className="min-h-0 flex-1 overflow-hidden px-3 pb-5">
         <p className="text-[12px] font-semibold">128 likes</p>
-        {creativeType === 'flexible' ? <FlexibleHint count={assets.length} className="mt-1.5" /> : null}
-        {creativeType === 'carousel' && art.headline ? (
+        {!batchOn && creativeType === 'flexible' ? <FlexibleHint count={assets.length} className="mt-1.5" /> : null}
+        {!batchOn && creativeType === 'carousel' && art.headline ? (
           <p className="mt-1 text-[12px] font-semibold leading-snug">{art.headline}</p>
         ) : null}
-        <p className="mt-1 line-clamp-2 text-[12px] leading-snug">
-          <span className="font-semibold">{accountName} </span>
-          {caption || <span className="text-[#8e8e8e]">Add a caption</span>}
-        </p>
+        {batchOn ? null : (
+          <p className="mt-1 line-clamp-2 text-[12px] leading-snug">
+            <span className="font-semibold">{accountName} </span>
+            {caption || <span className="text-[#8e8e8e]">Add a caption</span>}
+          </p>
+        )}
         {usageLine ? <p className="mt-1 text-[10px] text-[#8e8e8e]">{usageLine}</p> : null}
       </div>
     </div>

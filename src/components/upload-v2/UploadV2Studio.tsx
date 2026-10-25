@@ -16,6 +16,7 @@ import {
   nearestAspectRatio,
   productAfterBrandChange,
   removeCarouselCard,
+  replaceBatchMedia,
   brandLogoUrl,
   revokeMedia,
   weekFolderLabel,
@@ -96,6 +97,28 @@ function revokeAll(creative: Creative) {
   creative.cards.forEach((card) => revokeMedia(card.media));
 }
 
+function emptyBatchCreative(ratio: Creative['ratio']): Creative {
+  return {
+    id: 'batch-empty',
+    name: '',
+    originalName: '',
+    caption: '',
+    productKey: '',
+    productLabel: '',
+    angle: '',
+    handle: '',
+    usageEndDate: '',
+    perpetual: false,
+    ratio,
+    kicker: '',
+    from: '#2C2C2C',
+    to: '#141414',
+    media: null,
+    assets: [],
+    cards: [],
+  };
+}
+
 export default function UploadV2Studio({
   brands,
   lockedBrandId,
@@ -112,6 +135,9 @@ export default function UploadV2Studio({
   const [creatorName, setCreatorName] = useState('');
   const [creativeType, setCreativeType] = useState<CreativeType>('whitelist');
   const [batchOn, setBatchOn] = useState(false);
+  const [batchCreatives, setBatchCreatives] = useState<Creative[]>([]);
+  const [batchIndex, setBatchIndex] = useState(0);
+  const [emptyBatchRatio, setEmptyBatchRatio] = useState<Creative['ratio']>('9:16');
   const [index, setIndex] = useState(0);
   const [cardIndexById, setCardIndexById] = useState<Record<string, number>>({});
   const [assetIndexById, setAssetIndexById] = useState<Record<string, number>>({});
@@ -119,6 +145,11 @@ export default function UploadV2Studio({
 
   const safeIndex = Math.min(creatives.length - 1, Math.max(0, index));
   const creative = creatives[safeIndex];
+  const batchSafeIndex = batchCreatives.length === 0
+    ? 0
+    : Math.min(batchCreatives.length - 1, Math.max(0, batchIndex));
+  const activeBatch = batchCreatives[batchSafeIndex] ?? null;
+  const displayed = batchOn ? (activeBatch ?? emptyBatchCreative(emptyBatchRatio)) : creative;
   const cardIndex = Math.min(
     creative.cards.length - 1,
     Math.max(0, cardIndexById[creative.id] ?? 0),
@@ -127,11 +158,13 @@ export default function UploadV2Studio({
     Math.max(0, creative.assets.length - 1),
     Math.max(0, assetIndexById[creative.id] ?? 0),
   );
-  const shownMedia = creativeType === 'carousel'
-    ? creative.cards[cardIndex]?.media ?? null
-    : creativeType === 'flexible'
-      ? creative.assets[assetIndex]?.media ?? null
-      : creative.media;
+  const shownMedia = batchOn
+    ? displayed.media
+    : creativeType === 'carousel'
+      ? creative.cards[cardIndex]?.media ?? null
+      : creativeType === 'flexible'
+        ? creative.assets[assetIndex]?.media ?? null
+        : creative.media;
 
   useEffect(() => {
     setWeekLabel(weekFolderLabel());
@@ -160,22 +193,26 @@ export default function UploadV2Studio({
     };
   }, []);
 
-  const pager = creativeType === 'carousel'
-    ? { noun: 'card' as const, index: cardIndex + 1, count: creative.cards.length }
-    : creativeType === 'flexible'
-      ? {
-        noun: 'asset' as const,
-        index: creative.assets.length === 0 ? 0 : assetIndex + 1,
-        count: creative.assets.length,
-      }
-      : batchOn
-        ? { noun: 'creative' as const, index: safeIndex + 1, count: creatives.length }
+  const pager = batchOn
+    ? {
+      noun: 'creative' as const,
+      index: batchCreatives.length === 0 ? 0 : batchSafeIndex + 1,
+      count: batchCreatives.length,
+    }
+    : creativeType === 'carousel'
+      ? { noun: 'card' as const, index: cardIndex + 1, count: creative.cards.length }
+      : creativeType === 'flexible'
+        ? {
+          noun: 'asset' as const,
+          index: creative.assets.length === 0 ? 0 : assetIndex + 1,
+          count: creative.assets.length,
+        }
         : null;
 
   useEffect(() => {
     if (!pager || pager.count < 2) return;
     const { noun, count } = pager;
-    const id = creative.id;
+    const id = batchOn ? displayed.id : creative.id;
     function onKey(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
       if (!target) return;
@@ -194,15 +231,26 @@ export default function UploadV2Studio({
           [id]: Math.min(count - 1, Math.max(0, (current[id] ?? 0) + delta)),
         }));
       } else {
-        setIndex((current) => Math.min(count - 1, Math.max(0, current + delta)));
+        setBatchIndex((current) => Math.min(count - 1, Math.max(0, current + delta)));
       }
       setMediaNote(null);
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [pager, creative.id]);
+  }, [pager, batchOn, displayed.id, creative.id]);
 
   function patchCreative(patch: Partial<Pick<Creative, 'caption' | 'productKey' | 'productLabel' | 'angle' | 'handle' | 'usageEndDate' | 'perpetual' | 'ratio'>>) {
+    if (batchOn) {
+      if (!activeBatch) {
+        if (patch.ratio) setEmptyBatchRatio(patch.ratio);
+        return;
+      }
+      const id = activeBatch.id;
+      setBatchCreatives((current) => current.map((item) => (
+        item.id === id ? { ...item, ...patch } : item
+      )));
+      return;
+    }
     const id = creative.id;
     setCreatives((current) => current.map((item) => (
       item.id === id ? { ...item, ...patch } : item
@@ -256,6 +304,16 @@ export default function UploadV2Studio({
     const read = await readFiles(files);
     if (!read) return;
     const { measured, skipped } = read;
+
+    if (batchOn) {
+      const placement = appendBatchCreatives(batchCreatives, measured, createLocalId);
+      measured.slice(placement.placed).forEach((media) => revokeMedia(media));
+      setBatchCreatives(placement.creatives);
+      if (placement.placed > 0) setBatchIndex(placement.firstNewIndex);
+      setMediaNote(placementNote('creatives', placement.leftover, skipped));
+      return;
+    }
+
     const snapshotId = creative.id;
     const snapshotType = creativeType;
 
@@ -289,15 +347,6 @@ export default function UploadV2Studio({
       return;
     }
 
-    if (batchOn) {
-      const placement = appendBatchCreatives(creatives, measured, creative, createLocalId);
-      measured.slice(placement.placed).forEach((media) => revokeMedia(media));
-      setCreatives(placement.creatives);
-      if (placement.placed > 0) setIndex(placement.firstNewIndex);
-      setMediaNote(placementNote('creatives', placement.leftover, skipped));
-      return;
-    }
-
     const first = measured[0];
     measured.slice(1).forEach((media) => revokeMedia(media));
     if (creative.media) {
@@ -317,6 +366,29 @@ export default function UploadV2Studio({
     if (!read) return;
     const nextMedia = read.measured[0];
     read.measured.slice(1).forEach((media) => revokeMedia(media));
+
+    if (batchOn) {
+      if (target.kind !== 'media') {
+        revokeMedia(nextMedia);
+        return;
+      }
+      const previous = batchCreatives[target.creativeIndex];
+      if (!previous) {
+        revokeMedia(nextMedia);
+        return;
+      }
+      if (previous.media) {
+        const previousMedia = previous.media;
+        queueMicrotask(() => revokeMedia(previousMedia));
+      }
+      setBatchCreatives((current) => current.map((item) => (
+        item.id === previous.id ? replaceBatchMedia(item, nextMedia) : item
+      )));
+      setBatchIndex(target.creativeIndex);
+      setMediaNote(null);
+      return;
+    }
+
     const snapshotId = creative.id;
 
     if (target.kind === 'card') {
@@ -368,15 +440,19 @@ export default function UploadV2Studio({
   }
 
   function removeMedia(creativeIndex: number) {
-    const target = creatives[creativeIndex];
-    if (!target) return;
-    if (target.userAdded && creatives.length > 1) {
+    if (batchOn) {
+      const target = batchCreatives[creativeIndex];
+      if (!target) return;
       queueMicrotask(() => revokeAll(target));
-      setCreatives((current) => current.filter((item) => item.id !== target.id));
-      setIndex((current) => Math.max(0, current > creativeIndex ? current - 1 : Math.min(current, creatives.length - 2)));
+      setBatchCreatives((current) => current.filter((item) => item.id !== target.id));
+      setBatchIndex((current) => (
+        current > creativeIndex ? current - 1 : Math.min(current, Math.max(0, batchCreatives.length - 2))
+      ));
       setMediaNote(null);
       return;
     }
+    const target = creatives[creativeIndex];
+    if (!target) return;
     if (target.media) {
       const previous = target.media;
       queueMicrotask(() => revokeMedia(previous));
@@ -439,8 +515,8 @@ export default function UploadV2Studio({
   }
 
   function reorderCreatives(from: number, to: number) {
-    setCreatives((current) => moveItem(current, from, to));
-    setIndex((current) => followMove(current, from, to));
+    setBatchCreatives((current) => moveItem(current, from, to));
+    setBatchIndex((current) => followMove(current, from, to));
   }
 
   function stepPager(delta: number) {
@@ -453,7 +529,7 @@ export default function UploadV2Studio({
     } else if (pager.noun === 'asset') {
       setAssetIndexById((current) => ({ ...current, [creative.id]: next - 1 }));
     } else {
-      setIndex(next - 1);
+      setBatchIndex(next - 1);
     }
   }
 
@@ -492,8 +568,9 @@ export default function UploadV2Studio({
           )}
         </div>
         <PhonePreview
-          creative={creative}
+          creative={displayed}
           creativeType={creativeType}
+          batchOn={batchOn}
           cardIndex={cardIndex}
           assetIndex={assetIndex}
           brandName={brand?.name ?? ''}
@@ -517,11 +594,10 @@ export default function UploadV2Studio({
             }));
           }}
           creatorName={creatorName}
-          creative={creative}
-          creativeIndex={safeIndex}
-          creativeCount={creatives.length}
+          creative={displayed}
+          creativeIndex={batchOn ? batchSafeIndex : safeIndex}
           batchOn={batchOn}
-          creatives={creatives}
+          creatives={batchOn ? batchCreatives : creatives}
           creativeType={creativeType}
           cardIndex={cardIndex}
           assetIndex={assetIndex}
@@ -537,7 +613,7 @@ export default function UploadV2Studio({
             setMediaNote(null);
           }}
           onSelectCreative={(next) => {
-            setIndex(next);
+            setBatchIndex(next);
             setMediaNote(null);
           }}
           onSelectCard={(next) => {

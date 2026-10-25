@@ -7,12 +7,15 @@ import {
   addCarouselMedia,
   addFlexibleAssets,
   appendBatchCreatives,
+  batchFileNamePreview,
   brandInitials,
   brandLogoUrl,
   followMove,
   formatBytes,
   moveItem,
+  previewCreativeFileName,
   removeCarouselCard,
+  replaceBatchMedia,
   type FlexibleAsset,
   type LocalMedia,
 } from '@/components/upload-v2/model';
@@ -98,19 +101,95 @@ describe('upload-v2 file placement', () => {
     expect(second.focusIndex).toBe(4);
   });
 
-  it('adds one batch creative per whitelist file and stops at 20', () => {
-    const incoming = Array.from({ length: 16 }, (_, index) => media(`pour-${index}.jpg`, 1080, 1920));
-    const result = appendBatchCreatives(SAMPLE_CREATIVES, incoming, SAMPLE_CREATIVES[0], (prefix) => prefix);
+  it('adds plain batch creatives and stops at 20', () => {
+    const incoming = [
+      media('pour-0.jpg', 1080, 1920),
+      media('shelf-1.jpg', 1080, 1350),
+      media('square-2.jpg', 1080, 1080),
+      ...Array.from({ length: 19 }, (_, index) => media(`extra-${index}.mp4`, 720, 1280)),
+    ];
+    let n = 0;
+    const result = appendBatchCreatives([], incoming, () => `id-${n++}`);
     expect(BATCH_MAX_CREATIVES).toBe(20);
-    expect(result.placed).toBe(14);
+    expect(result.placed).toBe(20);
     expect(result.leftover).toBe(2);
     expect(result.creatives).toHaveLength(20);
-    expect(result.firstNewIndex).toBe(6);
-    expect(result.creatives[6].userAdded).toBe(true);
-    expect(result.creatives[6].originalName).toBe('pour-0.jpg');
-    expect(result.creatives[6].ratio).toBe('9:16');
-    expect(result.creatives[6].media?.bytes).toBe(2_400_000);
+    expect(result.firstNewIndex).toBe(0);
+    expect(result.creatives[0]).toMatchObject({
+      originalName: 'pour-0.jpg',
+      ratio: '9:16',
+      productKey: '',
+      productLabel: '',
+      angle: '',
+      handle: '',
+      usageEndDate: '',
+      perpetual: false,
+      caption: '',
+      assets: [],
+      cards: [],
+    });
+    expect(result.creatives[0].media?.name).toBe('pour-0.jpg');
+    expect(result.creatives[0].media?.bytes).toBe(2_400_000);
+    expect(result.creatives[1].ratio).toBe('4:5');
+    expect(result.creatives[2].ratio).toBe('1:1');
+    expect(result.creatives[0]).not.toHaveProperty('userAdded');
     expect(SAMPLE_CREATIVES).toHaveLength(6);
+
+    const blocked = appendBatchCreatives(result.creatives, [media('overflow.jpg', 1080, 1080)], () => 'overflow');
+    expect(blocked.placed).toBe(0);
+    expect(blocked.leftover).toBe(1);
+    expect(blocked.creatives).toHaveLength(20);
+
+    const oneMore = appendBatchCreatives(
+      result.creatives.slice(0, 19),
+      [media('last.jpg', 1000, 1000), media('skipped.jpg', 1600, 900)],
+      () => 'last',
+    );
+    expect(oneMore.placed).toBe(1);
+    expect(oneMore.leftover).toBe(1);
+    expect(oneMore.firstNewIndex).toBe(19);
+    expect(oneMore.creatives[19].originalName).toBe('last.jpg');
+    expect(oneMore.creatives[19].ratio).toBe('1:1');
+  });
+
+  it('keeps a replaced batch file name and snaps that file’s ratio', () => {
+    const [first] = appendBatchCreatives([], [media('pour-0.jpg', 1080, 1920)], () => 'id').creatives;
+    const replaced = replaceBatchMedia(first, media('square.jpg', 800, 800));
+    expect(replaced.originalName).toBe('square.jpg');
+    expect(replaced.media?.name).toBe('square.jpg');
+    expect(replaced.ratio).toBe('1:1');
+    expect(replaced.productKey).toBe('');
+    expect(batchFileNamePreview(replaced)).toEqual({
+      fileName: 'square.jpg',
+      renamed: false,
+      label: 'Original name kept',
+    });
+  });
+
+  it('renames a single creative from inputs and never renames a batch file', () => {
+    const creative = {
+      ...SAMPLE_CREATIVES[0],
+      media: media('morning-reel.mp4', 1080, 1920),
+      productKey: 'product:chicken-bone-broth',
+      productLabel: 'Chicken Bone Broth',
+      angle: 'Morning ritual',
+    };
+    expect(previewCreativeFileName(creative, 'Jane Doe', 'whitelist', null)).toEqual({
+      fileName: 'jane-doe_whitelist_chicken-bone-broth_morning-ritual.mp4',
+      renamed: true,
+      label: 'Renamed from inputs',
+    });
+    const bare = { ...creative, productKey: '', productLabel: '', angle: '' };
+    expect(previewCreativeFileName(bare, '', 'carousel', null)).toEqual({
+      fileName: 'morning-reel.mp4',
+      renamed: false,
+      label: 'Original name kept',
+    });
+    expect(batchFileNamePreview(creative)).toEqual({
+      fileName: 'morning-reel.mp4',
+      renamed: false,
+      label: 'Original name kept',
+    });
   });
 
   it('moves a row and keeps the selection on it', () => {
