@@ -222,17 +222,36 @@ export function brandInitials(name: string): string {
   return (letters[0] + letters[1]).toUpperCase();
 }
 
-/** ISO week of the local calendar date (week 1 contains the first Thursday). */
-export function isoWeekNumber(date: Date): number {
+/**
+ * ISO week of the local calendar date. Week 1 contains the first Thursday.
+ * The year is the ISO week-year (the Thursday's year), which can differ from the calendar year.
+ */
+export function isoWeekParts(date: Date): { year: number; week: number } {
   const utc = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
   const day = utc.getUTCDay() || 7;
   utc.setUTCDate(utc.getUTCDate() + 4 - day);
-  const yearStart = new Date(Date.UTC(utc.getUTCFullYear(), 0, 1));
-  return Math.ceil(((utc.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  const year = utc.getUTCFullYear();
+  const yearStart = new Date(Date.UTC(year, 0, 1));
+  const week = Math.ceil(((utc.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return { year, week };
+}
+
+/** ISO week of the local calendar date (week 1 contains the first Thursday). */
+export function isoWeekNumber(date: Date): number {
+  return isoWeekParts(date).week;
 }
 
 export function weekFolderLabel(date = new Date()): string {
   return `Week ${isoWeekNumber(date)}`;
+}
+
+/**
+ * Value for submissions.week_folder. Includes the ISO week-year so Week 1 in late December
+ * is not filed under the previous calendar year. 2025-12-29 is 2026/Week 1.
+ */
+export function weekFolderStorageLabel(date = new Date()): string {
+  const { year, week } = isoWeekParts(date);
+  return `${year}/Week ${week}`;
 }
 
 function card(
