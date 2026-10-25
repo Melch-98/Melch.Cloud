@@ -4,6 +4,8 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { GalleryHorizontal, Layers, Upload, Users, type LucideIcon } from 'lucide-react';
 import {
   SAMPLE_PRODUCTS,
+  aspectCropNote,
+  type AspectRatio,
   type Creative,
   type CreativeType,
   type LocalMedia,
@@ -27,7 +29,13 @@ const TYPE_OPTIONS: { value: CreativeType; label: string; icon: LucideIcon }[] =
   { value: 'flexible', label: 'Flexible', icon: Layers },
 ];
 
-type CreativePatch = Partial<Pick<Creative, 'caption' | 'productKey' | 'productLabel' | 'angle' | 'handle' | 'usageEndDate' | 'perpetual'>>;
+const RATIO_OPTIONS: { value: AspectRatio; label: string }[] = [
+  { value: '9:16', label: '9:16' },
+  { value: '4:5', label: '4:5' },
+  { value: '1:1', label: '1:1' },
+];
+
+type CreativePatch = Partial<Pick<Creative, 'caption' | 'productKey' | 'productLabel' | 'angle' | 'handle' | 'usageEndDate' | 'perpetual' | 'ratio'>>;
 
 type ControlCardProps = {
   creative: Creative;
@@ -290,6 +298,9 @@ export default function ControlCard(props: ControlCardProps) {
   const fileRef = useRef<HTMLInputElement>(null);
   const activeCard = creative.cards[Math.min(creative.cards.length - 1, Math.max(0, cardIndex))];
   const usageError = creative.perpetual ? null : usageEndDateError(creative.usageEndDate, localToday());
+  const cropNote = shownMedia?.width && shownMedia.height
+    ? aspectCropNote(shownMedia.width, shownMedia.height, creative.ratio)
+    : null;
   const dropLabel = creativeType === 'carousel'
     ? `Drop media for card ${cardIndex + 1}`
     : 'Drop media for this creative';
@@ -443,6 +454,20 @@ export default function ControlCard(props: ControlCardProps) {
             <span className="ml-2 font-normal text-gray-600">Sample</span>
           </p>
           <div className="space-y-4">
+            <div>
+              <Segmented
+                label="Aspect ratio"
+                value={creative.ratio}
+                options={RATIO_OPTIONS}
+                onChange={(ratio) => onPatch({ ratio })}
+              />
+              <p className="mt-2 text-[10px] leading-4 text-gray-600">
+                Sets this creative’s frame. A file snaps it to the nearest ratio.
+              </p>
+              {cropNote ? (
+                <p role="status" className="mt-1 text-[11px] leading-4 text-[#C8B89A]">{cropNote}</p>
+              ) : null}
+            </div>
             <ProductField
               productKey={creative.productKey}
               productLabel={creative.productLabel}

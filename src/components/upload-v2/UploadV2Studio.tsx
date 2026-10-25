@@ -7,12 +7,50 @@ import {
   SAMPLE_CREATIVES,
   cloneCreative,
   mediaKind,
+  nearestAspectRatio,
   revokeMedia,
   type Creative,
   type CreativeType,
   type LocalMedia,
 } from '@/components/upload-v2/model';
 import PhonePreview from '@/components/upload-v2/PhonePreview';
+
+function measureMedia(url: string, kind: 'image' | 'video'): Promise<{ width: number; height: number } | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer = 0;
+    const finish = (value: { width: number; height: number } | null) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      resolve(value);
+    };
+    timer = window.setTimeout(() => finish(null), 4000);
+    if (kind === 'image') {
+      const image = new Image();
+      image.onload = () => {
+        finish(image.naturalWidth > 0 && image.naturalHeight > 0
+          ? { width: image.naturalWidth, height: image.naturalHeight }
+          : null);
+      };
+      image.onerror = () => finish(null);
+      image.src = url;
+      return;
+    }
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.muted = true;
+    video.onloadedmetadata = () => {
+      finish(video.videoWidth > 0 && video.videoHeight > 0
+        ? { width: video.videoWidth, height: video.videoHeight }
+        : null);
+      video.removeAttribute('src');
+      video.load();
+    };
+    video.onerror = () => finish(null);
+    video.src = url;
+  });
+}
 
 export default function UploadV2Studio() {
   const [creatives, setCreatives] = useState<Creative[]>(() => SAMPLE_CREATIVES.map(cloneCreative));
@@ -60,7 +98,7 @@ export default function UploadV2Studio() {
     return () => window.removeEventListener('keydown', onKey);
   }, [batchOn, creatives.length]);
 
-  function patchCreative(patch: Partial<Pick<Creative, 'caption' | 'productKey' | 'productLabel' | 'angle' | 'handle' | 'usageEndDate' | 'perpetual'>>) {
+  function patchCreative(patch: Partial<Pick<Creative, 'caption' | 'productKey' | 'productLabel' | 'angle' | 'handle' | 'usageEndDate' | 'perpetual' | 'ratio'>>) {
     setCreatives((current) => current.map((item) => (
       item.id === creative.id ? { ...item, ...patch } : item
     )));
@@ -78,7 +116,7 @@ export default function UploadV2Studio() {
     }));
   }
 
-  function applyFiles(files: File[]) {
+  async function applyFiles(files: File[]) {
     const accepted = files.flatMap((file) => {
       const kind = mediaKind(file);
       return kind ? [{ file, kind }] : [];
@@ -88,41 +126,70 @@ export default function UploadV2Studio() {
       return;
     }
 
-    const next = creatives.map(cloneCreative);
-    const replaced: LocalMedia[] = [];
-    let placed = 0;
+    const snapshotType = creativeType;
+    const snapshotIndex = safeIndex;
+    const snapshotCard = cardIndex;
+    const snapshotBatch = batchOn;
+    const measured = await Promise.all(accepted.map(async (item) => {
+      const url = URL.createObjectURL(item.file);
+      const size = await measureMedia(url, item.kind);
+      const media: LocalMedia = {
+        url,
+        kind: item.kind,
+        name: item.file.name,
+        width: size?.width ?? null,
+        height: size?.height ?? null,
+      };
+      return media;
+    }));
 
-    if (creativeType === 'carousel') {
-      accepted.forEach((item, offset) => {
-        const position = cardIndex + offset;
-        const card = next[safeIndex].cards[position];
-        if (!card) return;
-        if (card.media) replaced.push(card.media);
-        card.media = {
-          url: URL.createObjectURL(item.file),
-          kind: item.kind,
-          name: item.file.name,
-        };
-        placed += 1;
-      });
-    } else {
-      accepted.forEach((item, offset) => {
-        const position = batchOn ? safeIndex + offset : safeIndex;
-        if (!batchOn && offset > 0) return;
-        const target = next[position];
+    const slots: { creativeIndex: number; cardIndex: number | null; media: LocalMedia }[] = [];
+    measured.forEach((media, offset) => {
+      if (snapshotType === 'carousel') {
+        const position = snapshotCard + offset;
+        if (position < 0 || position >= creatives[snapshotIndex].cards.length) return;
+        slots.push({ creativeIndex: snapshotIndex, cardIndex: position, media });
+        return;
+      }
+      const position = snapshotBatch ? snapshotIndex + offset : snapshotIndex;
+      if (!snapshotBatch && offset > 0) return;
+      if (position < 0 || position >= creatives.length) return;
+      slots.push({ creativeIndex: position, cardIndex: null, media });
+    });
+
+    const placed = slots.length;
+    const placedUrls = new Set(slots.map((slot) => slot.media.url));
+    measured.forEach((media) => {
+      if (!placedUrls.has(media.url)) URL.revokeObjectURL(media.url);
+    });
+    setCreatives((current) => {
+      const next = current.map(cloneCreative);
+      const stale: string[] = [];
+      const carouselSnap = snapshotType === 'carousel'
+        ? slots.find((slot) => slot.media.width && slot.media.height)
+        : null;
+      slots.forEach((slot) => {
+        const target = next[slot.creativeIndex];
         if (!target) return;
-        if (target.media) replaced.push(target.media);
-        target.media = {
-          url: URL.createObjectURL(item.file),
-          kind: item.kind,
-          name: item.file.name,
-        };
-        placed += 1;
+        if (slot.cardIndex == null) {
+          if (target.media?.url.startsWith('blob:')) stale.push(target.media.url);
+          target.media = slot.media;
+          if (slot.media.width && slot.media.height) {
+            target.ratio = nearestAspectRatio(slot.media.width, slot.media.height);
+          }
+          return;
+        }
+        const card = target.cards[slot.cardIndex];
+        if (!card) return;
+        if (card.media?.url.startsWith('blob:')) stale.push(card.media.url);
+        card.media = slot.media;
       });
-    }
-
-    replaced.forEach((media) => revokeMedia(media));
-    setCreatives(next);
+      if (carouselSnap?.media.width && carouselSnap.media.height && next[snapshotIndex]) {
+        next[snapshotIndex].ratio = nearestAspectRatio(carouselSnap.media.width, carouselSnap.media.height);
+      }
+      if (stale.length) queueMicrotask(() => stale.forEach((url) => URL.revokeObjectURL(url)));
+      return next;
+    });
 
     if (placed < accepted.length) {
       setMediaNote(

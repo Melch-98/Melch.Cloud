@@ -1,9 +1,13 @@
 export type CreativeType = 'whitelist' | 'carousel' | 'flexible';
 
+export type AspectRatio = '9:16' | '4:5' | '1:1';
+
 export type LocalMedia = {
   url: string;
   kind: 'image' | 'video';
   name: string;
+  width: number | null;
+  height: number | null;
 };
 
 export type CarouselCard = {
@@ -31,6 +35,7 @@ export type Creative = {
   handle: string;
   usageEndDate: string;
   perpetual: boolean;
+  ratio: AspectRatio;
   kicker: string;
   from: string;
   to: string;
@@ -70,6 +75,7 @@ export const SAMPLE_CREATIVES: Creative[] = [
     handle: '@sample.creator',
     usageEndDate: '2026-12-31',
     perpetual: false,
+    ratio: '9:16',
     kicker: 'Broth pour',
     from: '#E7C89A',
     to: '#6A4328',
@@ -90,6 +96,7 @@ export const SAMPLE_CREATIVES: Creative[] = [
     handle: '@sample.cook',
     usageEndDate: '',
     perpetual: true,
+    ratio: '4:5',
     kicker: 'Bestsellers',
     from: '#F3E6CF',
     to: '#8C7352',
@@ -110,6 +117,7 @@ export const SAMPLE_CREATIVES: Creative[] = [
     handle: '@sample.founder',
     usageEndDate: '2027-01-15',
     perpetual: false,
+    ratio: '1:1',
     kicker: 'Homepage',
     from: '#D9D4CC',
     to: '#4E5550',
@@ -130,6 +138,7 @@ export const SAMPLE_CREATIVES: Creative[] = [
     handle: '@sample.ugc',
     usageEndDate: '',
     perpetual: true,
+    ratio: '9:16',
     kicker: 'Taste test',
     from: '#F2C7A5',
     to: '#7A4B45',
@@ -150,6 +159,7 @@ export const SAMPLE_CREATIVES: Creative[] = [
     handle: '@sample.shop',
     usageEndDate: '2026-11-30',
     perpetual: false,
+    ratio: '4:5',
     kicker: 'The set',
     from: '#E7B7C4',
     to: '#6A3A48',
@@ -170,6 +180,7 @@ export const SAMPLE_CREATIVES: Creative[] = [
     handle: '@sample.story',
     usageEndDate: '',
     perpetual: true,
+    ratio: '1:1',
     kicker: 'Cutdown',
     from: '#C9D4F2',
     to: '#3A4670',
@@ -207,6 +218,42 @@ export function mediaKind(file: File): 'image' | 'video' | null {
 
 export function revokeMedia(media: LocalMedia | null) {
   if (media?.url.startsWith('blob:')) URL.revokeObjectURL(media.url);
+}
+
+export const ASPECT_RATIOS: { value: AspectRatio; widthOverHeight: number }[] = [
+  { value: '9:16', widthOverHeight: 9 / 16 },
+  { value: '4:5', widthOverHeight: 4 / 5 },
+  { value: '1:1', widthOverHeight: 1 },
+];
+
+export function nearestAspectRatio(width: number, height: number): AspectRatio {
+  if (!(width > 0) || !(height > 0)) return '9:16';
+  const value = width / height;
+  let best: AspectRatio = '9:16';
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const option of ASPECT_RATIOS) {
+    const distance = Math.abs(Math.log(value) - Math.log(option.widthOverHeight));
+    if (distance < bestDistance) {
+      best = option.value;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+/** Null when the file already matches the selected frame closely enough to skip a crop warning. */
+export function aspectCropNote(width: number, height: number, selected: AspectRatio): string | null {
+  if (!(width > 0) || !(height > 0)) return null;
+  const target = ASPECT_RATIOS.find((option) => option.value === selected);
+  if (!target) return null;
+  const value = width / height;
+  const relative = Math.abs(value - target.widthOverHeight) / target.widthOverHeight;
+  if (relative < 0.03) return null;
+  const size = `${Math.round(width)}×${Math.round(height)}`;
+  if (value < target.widthOverHeight) {
+    return `${size} is taller than ${selected}. The top and bottom will be cropped.`;
+  }
+  return `${size} is wider than ${selected}. The sides will be cropped.`;
 }
 
 export function formatUsageEnd(iso: string): string {

@@ -10,6 +10,7 @@ import {
   Heart,
   Home,
   MessageCircle,
+  MoreHorizontal,
   Plus,
   Search,
   Send,
@@ -41,9 +42,9 @@ const RAIL = [
   { key: 'save', icon: Bookmark, count: '' },
 ];
 
-function StatusBar() {
+function StatusBar({ ink }: { ink: 'white' | 'black' }) {
   return (
-    <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-center justify-between px-5 pt-3 text-[11px] font-semibold text-white">
+    <div aria-hidden className={`pointer-events-none absolute inset-x-0 top-0 z-30 flex items-center justify-between px-5 pt-3 text-[11px] font-semibold ${ink === 'white' ? 'text-white' : 'text-black'}`}>
       <span>9:41</span>
       <span className="flex items-center gap-1">
         <Signal className="h-3 w-3" strokeWidth={2.25} />
@@ -60,9 +61,9 @@ function Notch() {
   );
 }
 
-function HomeIndicator() {
+function HomeIndicator({ ink }: { ink: 'white' | 'black' }) {
   return (
-    <div aria-hidden className="pointer-events-none absolute bottom-1.5 left-1/2 z-40 h-1 w-24 -translate-x-1/2 rounded-full bg-white/80" />
+    <div aria-hidden className={`pointer-events-none absolute bottom-1.5 left-1/2 z-40 h-1 w-24 -translate-x-1/2 rounded-full ${ink === 'white' ? 'bg-white/80' : 'bg-black/35'}`} />
   );
 }
 
@@ -184,8 +185,12 @@ export default function PhonePreview({
     : { from: creative.from, to: creative.to, kicker: creative.kicker, media: creative.media, headline: '' };
   const handle = displayHandle(creative.handle);
   const caption = creative.caption.trim();
+  const ratio = creative.ratio;
+  const feed = ratio !== '9:16';
+  const accountName = creativeType === 'whitelist' ? handle : 'sample.brand';
   const previewLabel = [
     creativeType === 'whitelist' ? 'Whitelist ad preview' : creativeType === 'carousel' ? 'Carousel ad preview' : 'Flexible ad preview',
+    ratio,
     creative.name,
     caption || 'No caption yet',
   ].join(', ');
@@ -260,7 +265,7 @@ export default function PhonePreview({
         aria-label="Next card"
         disabled={safeIndex === cards.length - 1}
         onClick={() => stepCard(1)}
-        className="absolute right-12 top-1/2 z-20 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm disabled:opacity-30"
+        className={`absolute ${feed ? 'right-2' : 'right-12'} top-1/2 z-20 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm disabled:opacity-30`}
       >
         <ChevronRight className="h-4 w-4" />
       </button>
@@ -284,50 +289,98 @@ export default function PhonePreview({
     </div>
   );
 
-  const screen = (
-      <div className="absolute inset-0 text-white">
-        {stage}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-48 bg-gradient-to-t from-black/80 to-transparent" />
-        {creativeType === 'whitelist' ? (
-          <PartnershipHeader handle={handle} />
-        ) : (
-          <div aria-hidden className="absolute inset-x-0 top-11 z-20 flex justify-center gap-5 text-[14px] font-semibold">
-            <span>Reels</span>
-            <span className="text-white/45">Friends</span>
-          </div>
-        )}
-        <Rail />
-        <div className="absolute inset-x-0 bottom-[52px] z-20 flex flex-col gap-2 px-3 pb-3 pr-16">
-          {creativeType === 'flexible' ? <FlexibleHint /> : null}
-          {dots}
-          <div className="flex items-center gap-2">
-            <Avatar letter={(creativeType === 'whitelist' ? handle : 'S').replace('@', '').slice(0, 1).toUpperCase()} />
-            <span className="truncate text-[13px] font-semibold">
-              {creativeType === 'whitelist' ? handle : 'sample.brand'}
-            </span>
-            {creativeType === 'whitelist' ? null : (
-              <span className="rounded border border-white/70 px-1.5 py-0.5 text-[11px] font-semibold">Follow</span>
-            )}
-          </div>
-          {creativeType === 'whitelist' ? (
-            <p className="text-[10px] text-white/75">Paid partnership with {SAMPLE_BRAND}</p>
-          ) : null}
-          {creativeType === 'whitelist' && creative.perpetual ? (
-            <p className="text-[10px] text-white/75">Perpetual</p>
-          ) : null}
-          {creativeType === 'whitelist' && !creative.perpetual && creative.usageEndDate ? (
-            <p className="text-[10px] text-white/75">Usage ends {formatUsageEnd(creative.usageEndDate)}</p>
-          ) : null}
-          {creativeType === 'carousel' && art.headline ? (
-            <p className="text-[13px] font-semibold leading-snug">{art.headline}</p>
-          ) : null}
-          <p className="line-clamp-3 text-[12px] leading-snug">
-            {caption || <span className="text-white/55">Add a caption</span>}
-          </p>
+  const usageLine = creativeType === 'whitelist' && creative.perpetual
+    ? 'Perpetual'
+    : creativeType === 'whitelist' && !creative.perpetual && creative.usageEndDate
+      ? `Usage ends ${formatUsageEnd(creative.usageEndDate)}`
+      : null;
+
+  const reels = (
+    <div className="absolute inset-0 text-white">
+      {stage}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-48 bg-gradient-to-t from-black/80 to-transparent" />
+      {creativeType === 'whitelist' ? (
+        <PartnershipHeader handle={handle} />
+      ) : (
+        <div aria-hidden className="absolute inset-x-0 top-11 z-20 flex justify-center gap-5 text-[14px] font-semibold">
+          <span>Reels</span>
+          <span className="text-white/45">Friends</span>
         </div>
-        <TabBar />
+      )}
+      <Rail />
+      <div className="absolute inset-x-0 bottom-[52px] z-20 flex flex-col gap-2 px-3 pb-3 pr-16">
+        {creativeType === 'flexible' ? <FlexibleHint /> : null}
+        {dots}
+        <div className="flex items-center gap-2">
+          <Avatar letter={accountName.replace('@', '').slice(0, 1).toUpperCase() || 'S'} />
+          <span className="truncate text-[13px] font-semibold">{accountName}</span>
+          {creativeType === 'whitelist' ? null : (
+            <span className="rounded border border-white/70 px-1.5 py-0.5 text-[11px] font-semibold">Follow</span>
+          )}
+        </div>
+        {creativeType === 'whitelist' ? (
+          <p className="text-[10px] text-white/75">Paid partnership with {SAMPLE_BRAND}</p>
+        ) : null}
+        {usageLine ? <p className="text-[10px] text-white/75">{usageLine}</p> : null}
+        {creativeType === 'carousel' && art.headline ? (
+          <p className="text-[13px] font-semibold leading-snug">{art.headline}</p>
+        ) : null}
+        <p className="line-clamp-3 text-[12px] leading-snug">
+          {caption || <span className="text-white/55">Add a caption</span>}
+        </p>
       </div>
+      <TabBar />
+    </div>
   );
+
+  const feedPost = (
+    <div className="absolute inset-0 flex flex-col overflow-hidden bg-white text-[#262626]">
+      <div className="h-11 shrink-0" />
+      <div className="flex shrink-0 items-center gap-2 px-3 py-2">
+        <Avatar letter={accountName.replace('@', '').slice(0, 1).toUpperCase() || 'S'} />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[13px] font-semibold leading-tight">{accountName}</p>
+          {creativeType === 'whitelist' ? (
+            <p className="text-[10px] leading-tight text-[#8e8e8e]">Paid partnership</p>
+          ) : null}
+        </div>
+        <MoreHorizontal className="h-5 w-5 shrink-0" aria-hidden />
+      </div>
+      <div className="relative w-full shrink-0 bg-black" style={{ aspectRatio: ratio === '1:1' ? '1 / 1' : '4 / 5' }}>
+        {stage}
+        {creativeType === 'carousel' ? (
+          <span className="pointer-events-none absolute right-2 top-2 z-20 rounded-full bg-black/60 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+            {safeIndex + 1}/{cards.length}
+          </span>
+        ) : null}
+        {dots ? (
+          <div className="pointer-events-none absolute inset-x-0 bottom-2 z-20 flex justify-center [&_button]:pointer-events-auto">
+            {dots}
+          </div>
+        ) : null}
+      </div>
+      <div aria-hidden className="flex shrink-0 items-center gap-3 px-3 py-2">
+        <Heart className="h-5 w-5" strokeWidth={1.75} />
+        <MessageCircle className="h-5 w-5" strokeWidth={1.75} />
+        <Send className="h-5 w-5" strokeWidth={1.75} />
+        <Bookmark className="ml-auto h-5 w-5" strokeWidth={1.75} />
+      </div>
+      <div className="min-h-0 flex-1 overflow-hidden px-3 pb-5">
+        <p className="text-[12px] font-semibold">128 likes</p>
+        {creativeType === 'flexible' ? <FlexibleHint className="mt-1.5" /> : null}
+        {creativeType === 'carousel' && art.headline ? (
+          <p className="mt-1 text-[12px] font-semibold leading-snug">{art.headline}</p>
+        ) : null}
+        <p className="mt-1 line-clamp-2 text-[12px] leading-snug">
+          <span className="font-semibold">{accountName} </span>
+          {caption || <span className="text-[#8e8e8e]">Add a caption</span>}
+        </p>
+        {usageLine ? <p className="mt-1 text-[10px] text-[#8e8e8e]">{usageLine}</p> : null}
+      </div>
+    </div>
+  );
+
+  const screen = feed ? feedPost : reels;
 
   return (
     <div className="mx-auto w-full max-w-[280px]">
@@ -359,9 +412,9 @@ export default function PhonePreview({
       >
         <div className="relative aspect-[9/19.2] overflow-hidden rounded-[1.9rem] bg-black select-none">
           {screen}
-          <StatusBar />
+          <StatusBar ink={feed ? 'black' : 'white'} />
           <Notch />
-          <HomeIndicator />
+          <HomeIndicator ink={feed ? 'black' : 'white'} />
         </div>
       </div>
     </div>
