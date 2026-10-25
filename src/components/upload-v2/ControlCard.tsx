@@ -360,6 +360,7 @@ function ProductField({
           setOpen(true);
           setActive(0);
         }}
+        onMouseDown={() => setOpen(true)}
         onFocus={(event) => {
           setOpen(true);
           event.currentTarget.select();
