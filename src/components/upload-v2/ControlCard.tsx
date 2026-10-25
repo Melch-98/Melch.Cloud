@@ -1,10 +1,12 @@
 'use client';
 
 import { useEffect, useId, useRef, useState } from 'react';
-import { Check, Copy, GalleryHorizontal, Layers, Upload, Users, type LucideIcon } from 'lucide-react';
+import { GalleryHorizontal, Layers, Upload, Users, type LucideIcon } from 'lucide-react';
 import {
+  SAMPLE_BRAND,
   SAMPLE_PRODUCTS,
   aspectCropNote,
+  previewCreativeFileNames,
   type AspectRatio,
   type Creative,
   type CreativeType,
@@ -38,7 +40,7 @@ const RATIO_OPTIONS: { value: AspectRatio; label: string }[] = [
 type CreativePatch = Partial<Pick<Creative, 'caption' | 'productKey' | 'productLabel' | 'angle' | 'handle' | 'usageEndDate' | 'perpetual' | 'ratio'>>;
 
 type ControlCardProps = {
-  batchName: string;
+  weekLabel: string;
   creatorName: string;
   creative: Creative;
   creativeIndex: number;
@@ -128,11 +130,13 @@ function ProductField({
   productLabel,
   creativeId,
   onChange,
+  onClear,
 }: {
   productKey: string;
   productLabel: string;
   creativeId: string;
   onChange: (choice: SampleProduct) => void;
+  onClear: () => void;
 }) {
   const inputId = useId();
   const listId = useId();
@@ -266,37 +270,22 @@ function ProductField({
         </ul>
       ) : null}
       <p className="mt-1 text-[10px] text-gray-600">Sample catalog. Nothing is loaded from a store.</p>
+      {productKey ? (
+        <button
+          type="button"
+          onClick={onClear}
+          className="mt-1 text-[10px] text-gray-500 underline decoration-gray-700 underline-offset-2 hover:text-[#F5F5F8]"
+        >
+          Clear product
+        </button>
+      ) : null}
     </div>
-  );
-}
-
-function CopyNameButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      type="button"
-      onClick={async (event) => {
-        event.stopPropagation();
-        try {
-          await navigator.clipboard.writeText(text);
-          setCopied(true);
-          window.setTimeout(() => setCopied(false), 1500);
-        } catch {
-          setCopied(false);
-        }
-      }}
-      title={copied ? 'Copied' : 'Copy batch name'}
-      className="shrink-0 rounded-md p-1 hover:bg-[rgba(200,184,154,0.12)]"
-      style={{ color: copied ? '#7FD48F' : '#C8B89A' }}
-    >
-      {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-    </button>
   );
 }
 
 export default function ControlCard(props: ControlCardProps) {
   const {
-    batchName,
+    weekLabel,
     creatorName,
     creative,
     creativeIndex,
@@ -334,6 +323,16 @@ export default function ControlCard(props: ControlCardProps) {
   const dropLabel = creativeType === 'carousel'
     ? `Drop media for card ${cardIndex + 1}`
     : 'Drop media for this creative';
+  const fileNames = previewCreativeFileNames({
+    creatives,
+    creatorName,
+    creativeType,
+    batchOn,
+    activeIndex: creativeIndex,
+    activeShownName: shownMedia?.name ?? null,
+  });
+  const filePreview = fileNames[creativeIndex];
+  const savePath = `${SAMPLE_BRAND} / ${weekLabel}`;
 
   return (
     <div
@@ -341,18 +340,15 @@ export default function ControlCard(props: ControlCardProps) {
       style={{ backgroundColor: '#111111', border: '1px solid rgba(255,255,255,0.06)' }}
     >
       <div className="space-y-5">
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <span className={sectionLabelClass} style={{ marginBottom: 4 }}>
-              Batch name
-            </span>
-            <p className="truncate font-mono text-sm font-semibold text-[#C8B89A]">{batchName}</p>
-          </div>
-          <CopyNameButton text={batchName} />
+        <div>
+          <span className={sectionLabelClass} style={{ marginBottom: 4 }}>
+            Saves to
+          </span>
+          <p className="text-sm font-semibold text-[#C8B89A]">{savePath}</p>
+          <p className="mt-1 text-[10px] leading-4 text-gray-600">
+            This week’s folder in the brand’s Dropbox. Every upload this week uses it. The folder is not editable here.
+          </p>
         </div>
-        <p className="-mt-3 text-[10px] leading-4 text-gray-600">
-          Sample of the live name: brand code, date, and sequence. Nothing is reserved or saved.
-        </p>
         <div>
           <label htmlFor="upload-v2-creator-name" className={sectionLabelClass}>
             Creator name
@@ -366,7 +362,17 @@ export default function ControlCard(props: ControlCardProps) {
             className={inputClass}
             style={inputStyle}
           />
-          <p className="mt-1 text-[10px] text-gray-600">Optional. One name for this batch, shown on the batch card.</p>
+          <p className="mt-1 text-[10px] text-gray-600">Optional. One name for every creative in this upload.</p>
+        </div>
+        <div>
+          <span className={sectionLabelClass} style={{ marginBottom: 4 }}>
+            File name
+          </span>
+          <p className="break-all font-mono text-sm text-[#F5F5F8]">{filePreview.fileName}</p>
+          <p className="mt-1 text-[10px] font-medium text-[#C8B89A]">{filePreview.label}</p>
+          <p className="mt-1 break-all text-[11px] leading-4 text-gray-500">
+            {savePath} / {filePreview.fileName}
+          </p>
         </div>
         <Segmented
           label="Creative upload type"
@@ -399,8 +405,8 @@ export default function ControlCard(props: ControlCardProps) {
           </div>
           <p className="mt-2 min-h-[2rem] text-[11px] leading-4 text-gray-500">
             {batchOn
-              ? 'One batch. Arrows move through its creatives. The live card uses the batch name once and lists each file.'
-              : 'Batch is off. This is still one batch with one creative.'}
+              ? 'One upload. Arrows move through its creatives. Each file lands in this week’s folder.'
+              : 'Batch is off. This upload is one creative, still in this week’s folder.'}
           </p>
           {batchOn ? (
             <div
@@ -416,7 +422,7 @@ export default function ControlCard(props: ControlCardProps) {
                     key={item.id}
                     type="button"
                     aria-current={selected ? 'true' : undefined}
-                    aria-label={`${item.media?.name || item.name}, ${item.ratio}, creative ${index + 1} of ${creativeCount}`}
+                    aria-label={`${fileNames[index]?.fileName || item.name}, ${item.ratio}, creative ${index + 1} of ${creativeCount}`}
                     onClick={() => onSelectCreative(index)}
                     className="w-16 shrink-0 text-left"
                   >
@@ -445,7 +451,7 @@ export default function ControlCard(props: ControlCardProps) {
                       className="mt-1 block truncate text-[10px]"
                       style={{ color: selected ? '#C8B89A' : '#ABABAB' }}
                     >
-                      {thumb?.name || item.name}
+                      {fileNames[index]?.fileName || item.originalName}
                     </span>
                   </button>
                 );
@@ -536,6 +542,7 @@ export default function ControlCard(props: ControlCardProps) {
               productLabel={creative.productLabel}
               creativeId={creative.id}
               onChange={(choice) => onPatch({ productKey: choice.product_key, productLabel: choice.product_label })}
+              onClear={() => onPatch({ productKey: '', productLabel: '' })}
             />
             <div>
               <label htmlFor={angleId} className={sectionLabelClass}>

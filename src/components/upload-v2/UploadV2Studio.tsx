@@ -6,10 +6,10 @@ import ControlCard from '@/components/upload-v2/ControlCard';
 import {
   SAMPLE_CREATIVES,
   cloneCreative,
-  sampleBatchName,
   mediaKind,
   nearestAspectRatio,
   revokeMedia,
+  weekFolderLabel,
   type Creative,
   type CreativeType,
   type LocalMedia,
@@ -55,7 +55,7 @@ function measureMedia(url: string, kind: 'image' | 'video'): Promise<{ width: nu
 
 export default function UploadV2Studio() {
   const [creatives, setCreatives] = useState<Creative[]>(() => SAMPLE_CREATIVES.map(cloneCreative));
-  const [batchName] = useState(sampleBatchName);
+  const [weekLabel, setWeekLabel] = useState('Week');
   const [creatorName, setCreatorName] = useState('');
   const [creativeType, setCreativeType] = useState<CreativeType>('whitelist');
   const [batchOn, setBatchOn] = useState(false);
@@ -71,6 +71,10 @@ export default function UploadV2Studio() {
   );
   const activeCard = creative.cards[cardIndex];
   const shownMedia = creativeType === 'carousel' ? activeCard.media : creative.media;
+
+  useEffect(() => {
+    setWeekLabel(weekFolderLabel());
+  }, []);
 
   useEffect(() => {
     const stopNavigation = (event: DragEvent) => {
@@ -275,7 +279,7 @@ export default function UploadV2Studio() {
       </div>
       <div className="min-w-0 lg:col-start-2 lg:row-start-1">
         <ControlCard
-          batchName={batchName}
+          weekLabel={weekLabel}
           creatorName={creatorName}
           creative={creative}
           creativeIndex={safeIndex}

@@ -28,6 +28,8 @@ export type SampleProduct = {
 export type Creative = {
   id: string;
   name: string;
+  /** Sample filename used when no local file is attached. */
+  originalName: string;
   caption: string;
   productKey: string;
   productLabel: string;
@@ -54,11 +56,17 @@ export const SAMPLE_PRODUCTS: SampleProduct[] = [
 
 export const SAMPLE_BRAND = 'Sample Brand';
 
-export function sampleBatchName(now = new Date()): string {
-  const yy = String(now.getFullYear()).slice(-2);
-  const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const dd = String(now.getDate()).padStart(2, '0');
-  return `SMP_${yy}${mm}${dd}_0001`;
+/** ISO week of the local calendar date (week 1 contains the first Thursday). */
+export function isoWeekNumber(date: Date): number {
+  const utc = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const day = utc.getUTCDay() || 7;
+  utc.setUTCDate(utc.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(utc.getUTCFullYear(), 0, 1));
+  return Math.ceil(((utc.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+}
+
+export function weekFolderLabel(date = new Date()): string {
+  return `Week ${isoWeekNumber(date)}`;
 }
 
 function card(
@@ -75,6 +83,7 @@ export const SAMPLE_CREATIVES: Creative[] = [
   {
     id: 'broth-pour',
     name: 'Broth pour',
+    originalName: 'broth-pour.mp4',
     caption: 'A slow pour, a quiet morning. Sample caption for the broth creative.',
     productKey: 'product:chicken-bone-broth',
     productLabel: 'Chicken Bone Broth',
@@ -96,6 +105,7 @@ export const SAMPLE_CREATIVES: Creative[] = [
   {
     id: 'bestsellers-shelf',
     name: 'Bestsellers shelf',
+    originalName: 'bestsellers-shelf.jpg',
     caption: 'The shelf we keep restocking. Sample caption, not a live ad.',
     productKey: 'collection:bestsellers',
     productLabel: 'Collection: Bestsellers',
@@ -117,6 +127,7 @@ export const SAMPLE_CREATIVES: Creative[] = [
   {
     id: 'homepage-still',
     name: 'Homepage still',
+    originalName: 'homepage-still.jpg',
     caption: 'Homepage hero, held for a beat. Placeholder copy only.',
     productKey: 'homepage',
     productLabel: 'Homepage',
@@ -138,6 +149,7 @@ export const SAMPLE_CREATIVES: Creative[] = [
   {
     id: 'taste-test',
     name: 'Founder taste test',
+    originalName: 'taste-test.mp4',
     caption: 'First spoon, honest reaction. This creator is sample data.',
     productKey: 'product:chicken-bone-broth',
     productLabel: 'Chicken Bone Broth',
@@ -159,6 +171,7 @@ export const SAMPLE_CREATIVES: Creative[] = [
   {
     id: 'collection-grid',
     name: 'Collection grid',
+    originalName: 'collection-grid.jpg',
     caption: 'Every jar in the set, in one frame. Sample collection creative.',
     productKey: 'collection:bestsellers',
     productLabel: 'Collection: Bestsellers',
@@ -180,6 +193,7 @@ export const SAMPLE_CREATIVES: Creative[] = [
   {
     id: 'story-cutdown',
     name: 'Story cutdown',
+    originalName: 'story-cutdown.mp4',
     caption: 'A shorter cut for stories. Still a mock file, not a real asset.',
     productKey: 'shop_all',
     productLabel: 'Shop All',
@@ -270,5 +284,113 @@ export function formatUsageEnd(iso: string): string {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
+  });
+}
+
+/** Lowercase slug. Spaces and filename-unsafe characters become hyphens. */
+export function fileNameSlug(value: string): string {
+  return value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/** Product handle, or a slug of homepage / shop all. "No landing page" adds nothing. */
+export function productFileSlug(productKey: string): string {
+  const key = productKey.trim();
+  if (!key || key === 'none') return '';
+  const colon = key.indexOf(':');
+  const raw = colon >= 0 ? key.slice(colon + 1) : key;
+  return fileNameSlug(raw.replace(/_/g, '-'));
+}
+
+export function fileExtension(name: string): string {
+  const base = name.split(/[/\\]/).pop() || name;
+  const dot = base.lastIndexOf('.');
+  if (dot <= 0 || dot === base.length - 1) return '';
+  const ext = base.slice(dot + 1);
+  if (!/^[a-z0-9]{1,8}$/i.test(ext)) return '';
+  return `.${ext.toLowerCase()}`;
+}
+
+export type FileNamePreview = {
+  fileName: string;
+  renamed: boolean;
+  label: 'Original name kept' | 'Renamed from inputs';
+};
+
+export function sourceFileName(creative: Creative, shownName: string | null): string {
+  const shown = shownName?.trim();
+  if (shown) return shown;
+  if (creative.media?.name) return creative.media.name;
+  const cardName = creative.cards.find((card) => card.media?.name)?.media?.name;
+  if (cardName) return cardName;
+  return creative.originalName;
+}
+
+type NameDraft = {
+  renamed: boolean;
+  stem: string;
+  extension: string;
+  original: string;
+};
+
+/**
+ * Upload type is always selected, so it does not by itself replace the original name.
+ * A new name is built only when creator, product, or angle has a usable part.
+ */
+function nameDraft(
+  creative: Creative,
+  creatorName: string,
+  creativeType: CreativeType,
+  shownName: string | null,
+): NameDraft {
+  const original = sourceFileName(creative, shownName);
+  const creator = fileNameSlug(creatorName);
+  const product = productFileSlug(creative.productKey);
+  const angle = fileNameSlug(creative.angle);
+  const renamed = Boolean(creator || product || angle);
+  const stem = [creator, creativeType, product, angle].filter(Boolean).join('_');
+  return { renamed, stem, extension: fileExtension(original), original };
+}
+
+function candidateName(draft: NameDraft): string {
+  if (!draft.renamed) return draft.original;
+  return `${draft.stem}${draft.extension}`;
+}
+
+export function previewCreativeFileNames(input: {
+  creatives: Creative[];
+  creatorName: string;
+  creativeType: CreativeType;
+  batchOn: boolean;
+  activeIndex: number;
+  activeShownName: string | null;
+}): FileNamePreview[] {
+  const { creatives, creatorName, creativeType, batchOn, activeIndex, activeShownName } = input;
+  const drafts = creatives.map((creative, index) => nameDraft(
+    creative,
+    creatorName,
+    creativeType,
+    index === activeIndex ? activeShownName : null,
+  ));
+  const scope = batchOn
+    ? creatives.map((_, index) => index)
+    : [Math.min(creatives.length - 1, Math.max(0, activeIndex))];
+  const counts = new Map<string, number>();
+  for (const index of scope) {
+    const name = candidateName(drafts[index]);
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  return drafts.map((draft, index) => {
+    if (!draft.renamed) {
+      return { fileName: draft.original, renamed: false, label: 'Original name kept' };
+    }
+    const plain = candidateName(draft);
+    const collided = scope.includes(index) && (counts.get(plain) ?? 0) > 1;
+    const fileName = collided ? `${draft.stem}_${index + 1}${draft.extension}` : plain;
+    return { fileName, renamed: true, label: 'Renamed from inputs' };
   });
 }
