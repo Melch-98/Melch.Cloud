@@ -16,19 +16,24 @@ import {
   CAROUSEL_MAX_CARDS,
   CAROUSEL_MIN_CARDS,
   FLEXIBLE_MAX_ASSETS,
-  SAMPLE_PRODUCTS,
+  GENERIC_LANDING_OPTIONS,
+  NO_PRODUCTS_SYNCED_NOTE,
   aspectCropNote,
   formatBytes,
+  mapProductRows,
   mediaRatioLabel,
   previewCreativeFileNames,
+  visibleProductChoices,
   type AspectRatio,
   type Creative,
   type CreativeType,
   type LocalMedia,
+  type ProductChoice,
   type ReplaceTarget,
-  type SampleProduct,
+  type ShopifyProductRow,
   type UploadBrand,
 } from '@/components/upload-v2/model';
+import { createClient } from '@/lib/supabase';
 import { localToday, usageEndDateError } from '@/lib/usage-end-date';
 
 const inputClass =
@@ -186,17 +191,23 @@ function Segmented<T extends string>({
   );
 }
 
+type ProductLoad =
+  | { status: 'idle' | 'loading' | 'empty' | 'error' }
+  | { status: 'ready'; products: ProductChoice[] };
+
 function ProductField({
+  brandId,
   productKey,
   productLabel,
   creativeId,
   onChange,
   onClear,
 }: {
+  brandId?: string;
   productKey: string;
   productLabel: string;
   creativeId: string;
-  onChange: (choice: SampleProduct) => void;
+  onChange: (choice: ProductChoice) => void;
   onClear: () => void;
 }) {
   const inputId = useId();
@@ -205,6 +216,7 @@ function ProductField({
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const [query, setQuery] = useState(productLabel);
+  const [load, setLoad] = useState<ProductLoad>({ status: 'idle' });
 
   useEffect(() => {
     setQuery(productLabel);
@@ -213,26 +225,90 @@ function ProductField({
   }, [creativeId, productLabel]);
 
   useEffect(() => {
+    if (!brandId) {
+      setLoad({ status: 'idle' });
+      return;
+    }
+    let cancelled = false;
+    setLoad({ status: 'loading' });
+    const supabase = createClient();
+    if (!supabase) {
+      setLoad({ status: 'error' });
+      return;
+    }
+    void (async () => {
+      const { data, error } = await supabase
+        .from('shopify_products')
+        .select('title, handle')
+        .eq('brand_id', brandId)
+        .eq('status', 'active')
+        .order('title');
+      if (cancelled) return;
+      if (error) {
+        setLoad({ status: 'error' });
+        return;
+      }
+      const products = mapProductRows((data ?? []) as ShopifyProductRow[]);
+      setLoad(products.length === 0 ? { status: 'empty' } : { status: 'ready', products });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [brandId]);
+
+  useEffect(() => {
     if (!open) return;
     function onPointerDown(event: PointerEvent) {
-      if (!boxRef.current?.contains(event.target as Node)) {
-        setQuery(productLabel);
-        setOpen(false);
-      }
+      if (!boxRef.current?.contains(event.target as Node)) setOpen(false);
     }
     document.addEventListener('pointerdown', onPointerDown);
     return () => document.removeEventListener('pointerdown', onPointerDown);
-  }, [open, productLabel]);
+  }, [open]);
 
-  const trimmed = query.trim().toLowerCase();
-  const showingAll = trimmed === '' || trimmed === productLabel.trim().toLowerCase();
-  const options = showingAll
-    ? SAMPLE_PRODUCTS
-    : SAMPLE_PRODUCTS.filter((product) => product.product_label.toLowerCase().includes(trimmed));
+  const allowFreeText = load.status === 'empty' || load.status === 'error';
+  const catalog = load.status === 'ready'
+    ? [...load.products, ...GENERIC_LANDING_OPTIONS]
+    : GENERIC_LANDING_OPTIONS;
+  const options = visibleProductChoices({
+    catalog,
+    query,
+    selectedLabel: productLabel,
+    allowFreeText,
+  });
+  const note = !brandId
+    ? 'Choose a brand to see its products.'
+    : load.status === 'loading'
+      ? 'Loading products…'
+      : load.status === 'error'
+        ? 'Could not load products for this brand.'
+        : load.status === 'empty'
+          ? NO_PRODUCTS_SYNCED_NOTE
+          : null;
+  const activeIndex = options.length === 0 ? 0 : Math.min(active, options.length - 1);
 
-  function choose(choice: SampleProduct) {
+  function choose(choice: ProductChoice) {
     onChange(choice);
     setQuery(choice.product_label);
+    setOpen(false);
+  }
+
+  function commitOrRevert() {
+    const typed = query.trim();
+    const showingAll = typed === '' || typed.toLowerCase() === productLabel.trim().toLowerCase();
+    if (allowFreeText && !showingAll) {
+      const exact = catalog.find((choice) => choice.product_label.toLowerCase() === typed.toLowerCase());
+      if (exact) {
+        choose(exact);
+        return;
+      }
+      const catalogHit = catalog.some((choice) => choice.product_label.toLowerCase().includes(typed.toLowerCase()));
+      const custom = options.find((choice) => choice.product_key.startsWith('custom:'));
+      if (!catalogHit && custom) {
+        choose(custom);
+        return;
+      }
+    }
+    setQuery(productLabel);
     setOpen(false);
   }
 
@@ -252,7 +328,7 @@ function ProductField({
     }
     if (event.key === 'Enter' && open) {
       event.preventDefault();
-      const option = options[active];
+      const option = options[activeIndex];
       if (option) choose(option);
       return;
     }
@@ -274,43 +350,51 @@ function ProductField({
         aria-expanded={open}
         aria-controls={listId}
         aria-autocomplete="list"
-        aria-activedescendant={open && options[active] ? `${listId}-opt-${active}` : undefined}
+        aria-busy={load.status === 'loading'}
+        aria-activedescendant={open && options.length > 0 ? `${listId}-opt-${activeIndex}` : undefined}
         value={query}
-        placeholder="Search products"
+        placeholder={allowFreeText ? 'Type a product name' : 'Search products'}
         autoComplete="off"
         onChange={(event) => {
           setQuery(event.target.value);
           setOpen(true);
           setActive(0);
         }}
+        onMouseDown={() => setOpen(true)}
         onFocus={(event) => {
           setOpen(true);
           event.currentTarget.select();
         }}
-        onBlur={() => {
-          setQuery(productLabel);
-          setOpen(false);
-        }}
+        onBlur={commitOrRevert}
         onKeyDown={onKeyDown}
         className={inputClass}
         style={inputStyle}
       />
+      {note ? (
+        <p role="status" data-products-note={load.status} className="mt-1 text-[11px] leading-4 text-[#C8B89A]">
+          {note}
+        </p>
+      ) : null}
       {open ? (
+        <div className="relative">
         <ul
           id={listId}
           role="listbox"
           aria-label="Products"
-          className="absolute left-0 right-0 z-30 mt-1 max-h-52 overflow-auto rounded-lg py-1 shadow-popover"
+          className="absolute left-0 right-0 top-0 z-30 mt-1 max-h-52 overflow-auto rounded-lg py-1 shadow-popover"
           style={{ backgroundColor: '#1A1A1A', border: '1px solid rgba(255,255,255,0.1)' }}
         >
           {options.length === 0 ? (
-            <li className="px-3 py-2 text-sm text-gray-500">No matches in the sample catalog.</li>
+            <li className="px-3 py-2 text-sm text-gray-500">
+              {load.status === 'loading' ? 'Loading products…' : 'No matching products.'}
+            </li>
           ) : (
             options.map((product, index) => {
-              const highlighted = index === active;
+              const highlighted = index === activeIndex;
               const selected = product.product_key === productKey;
+              const typedName = product.product_key.startsWith('custom:');
               return (
-                <li key={product.product_key} id={`${listId}-opt-${index}`} role="option" aria-selected={selected}>
+                <li key={`${product.product_key}-${index}`} id={`${listId}-opt-${index}`} role="option" aria-selected={selected}>
                   <button
                     type="button"
                     className="block w-full px-3 py-2 text-left text-sm"
@@ -322,13 +406,14 @@ function ProductField({
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => choose(product)}
                   >
-                    {product.product_label}
+                    {typedName ? `Use “${product.product_label}”` : product.product_label}
                   </button>
                 </li>
               );
             })
           )}
         </ul>
+        </div>
       ) : null}
       {productKey ? (
         <button
@@ -921,6 +1006,7 @@ export default function ControlCard(props: ControlCardProps) {
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <ProductField
+              brandId={brandId}
               productKey={creative.productKey}
               productLabel={creative.productLabel}
               creativeId={creative.id}

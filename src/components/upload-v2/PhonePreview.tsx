@@ -20,6 +20,7 @@ import {
   brandInitials,
   displayHandle,
   formatUsageEnd,
+  isCatalogProductKey,
   type Creative,
   type CreativeType,
   type LocalMedia,
@@ -200,11 +201,12 @@ export default function PhonePreview({
   const safeAsset = Math.min(Math.max(0, assets.length - 1), Math.max(0, assetIndex));
   const activeCard = cards[safeIndex];
   const activeAsset = assets[safeAsset];
+  const productTitle = isCatalogProductKey(creative.productKey) ? creative.productLabel.trim() : '';
   const art = creativeType === 'carousel'
-    ? { from: activeCard.from, to: activeCard.to, kicker: activeCard.kicker, media: activeCard.media, headline: activeCard.headline }
+    ? { from: activeCard.from, to: activeCard.to, kicker: productTitle || activeCard.kicker, media: activeCard.media, headline: activeCard.headline }
     : creativeType === 'flexible' && activeAsset
-      ? { from: creative.from, to: creative.to, kicker: creative.kicker, media: activeAsset.media, headline: '' }
-      : { from: creative.from, to: creative.to, kicker: creative.kicker, media: creative.media, headline: '' };
+      ? { from: creative.from, to: creative.to, kicker: productTitle || creative.kicker, media: activeAsset.media, headline: '' }
+      : { from: creative.from, to: creative.to, kicker: productTitle || creative.kicker, media: creative.media, headline: '' };
   const handle = displayHandle(creative.handle);
   const caption = creative.caption.trim();
   const ratio = creative.ratio;
