@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import ControlCard from '@/components/upload-v2/ControlCard';
 import {
@@ -27,6 +27,11 @@ import {
   type UploadBrand,
 } from '@/components/upload-v2/model';
 import PhonePreview from '@/components/upload-v2/PhonePreview';
+import { v2SubmitBlocker } from '@/components/upload-v2/map-submission';
+import { submitUploadV2, type V2SubmitClient } from '@/components/upload-v2/submit-upload';
+import { measuredFileMedia } from '@/lib/media-info';
+import { createClient } from '@/lib/supabase';
+import { localToday } from '@/lib/usage-end-date';
 
 function measureMedia(url: string, kind: 'image' | 'video'): Promise<{ width: number; height: number } | null> {
   return new Promise((resolve) => {
@@ -142,6 +147,10 @@ export default function UploadV2Studio({
   const [cardIndexById, setCardIndexById] = useState<Record<string, number>>({});
   const [assetIndexById, setAssetIndexById] = useState<Record<string, number>>({});
   const [mediaNote, setMediaNote] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitPhase, setSubmitPhase] = useState<string | null>(null);
+  const [submitMessage, setSubmitMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const submittingRef = useRef(false);
 
   const safeIndex = Math.min(creatives.length - 1, Math.max(0, index));
   const creative = creatives[safeIndex];
@@ -287,13 +296,19 @@ export default function UploadV2Studio({
     const measured = await Promise.all(accepted.map(async (item) => {
       const url = URL.createObjectURL(item.file);
       const size = await measureMedia(url, item.kind);
+      const width = size?.width ?? null;
+      const height = size?.height ?? null;
+      const detected = measuredFileMedia(item.file, width, height);
       const media: LocalMedia = {
         url,
         kind: item.kind,
         name: item.file.name,
         bytes: item.file.size,
-        width: size?.width ?? null,
-        height: size?.height ?? null,
+        width,
+        height,
+        file: item.file,
+        mediaFormat: detected.mediaFormat,
+        detectedAspectRatio: detected.detectedAspectRatio,
       };
       return media;
     }));
@@ -519,6 +534,90 @@ export default function UploadV2Studio({
     setBatchIndex((current) => followMove(current, from, to));
   }
 
+  const today = localToday();
+  const submitBlocker = v2SubmitBlocker({
+    brandId,
+    creativeType,
+    batchOn,
+    creative,
+    batchCreatives,
+    today,
+  });
+
+  function resetAfterSubmit() {
+    creatives.forEach(revokeAll);
+    batchCreatives.forEach(revokeAll);
+    setCreatives(SAMPLE_CREATIVES.map(cloneCreative));
+    setBatchCreatives([]);
+    setBatchIndex(0);
+    setIndex(0);
+    setCreatorName('');
+    setCardIndexById({});
+    setAssetIndexById({});
+    setMediaNote(null);
+    setEmptyBatchRatio('9:16');
+  }
+
+  async function submit() {
+    if (submittingRef.current) return;
+    const blocker = v2SubmitBlocker({
+      brandId,
+      creativeType,
+      batchOn,
+      creative,
+      batchCreatives,
+      today: localToday(),
+    });
+    if (blocker || !brandId) {
+      setSubmitMessage({ type: 'error', text: blocker || 'Choose a brand' });
+      return;
+    }
+    const supabase = createClient();
+    if (!supabase) {
+      setSubmitMessage({ type: 'error', text: 'You need to be signed in' });
+      return;
+    }
+    submittingRef.current = true;
+    setSubmitting(true);
+    setSubmitMessage(null);
+    setSubmitPhase('Assigning a batch name…');
+    try {
+      const result = await submitUploadV2({
+        supabase: supabase as V2SubmitClient,
+        fetch: globalThis.fetch.bind(globalThis),
+        now: new Date(),
+        onProgress: setSubmitPhase,
+      }, {
+        brandId,
+        creatorName,
+        creativeType,
+        batchOn,
+        creative,
+        batchCreatives,
+        today: localToday(),
+      });
+      if (!result.ok) {
+        setSubmitMessage({ type: 'error', text: result.error });
+        return;
+      }
+      resetAfterSubmit();
+      const filesLabel = result.fileCount === 1 ? 'file' : 'files';
+      setSubmitMessage({
+        type: 'success',
+        text: `Submitted ${result.batchName} — ${result.fileCount} ${filesLabel} uploaded`,
+      });
+    } catch (error) {
+      setSubmitMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : 'Submission failed',
+      });
+    } finally {
+      submittingRef.current = false;
+      setSubmitting(false);
+      setSubmitPhase(null);
+    }
+  }
+
   function stepPager(delta: number) {
     if (!pager || pager.count < 2) return;
     const next = pager.index + delta;
@@ -632,6 +731,13 @@ export default function UploadV2Studio({
           onReorderCards={reorderCards}
           onReorderAssets={reorderAssets}
           onReorderCreatives={reorderCreatives}
+          canSubmit={!submitBlocker}
+          submitting={submitting}
+          submitPhase={submitPhase}
+          submitHint={submitBlocker}
+          submitError={submitMessage?.type === 'error' ? submitMessage.text : null}
+          submitSuccess={submitMessage?.type === 'success' ? submitMessage.text : null}
+          onSubmit={() => { void submit(); }}
         />
       </div>
     </div>
