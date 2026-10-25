@@ -1,11 +1,9 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import {
   BatteryFull,
   Bookmark,
-  ChevronLeft,
-  ChevronRight,
   Film,
   Heart,
   Home,
@@ -32,8 +30,6 @@ type PhonePreviewProps = {
   creativeType: CreativeType;
   cardIndex: number;
   assetIndex: number;
-  onCardIndex: (index: number) => void;
-  onAssetIndex: (index: number) => void;
   onDropFiles: (files: File[]) => void;
 };
 
@@ -177,12 +173,9 @@ export default function PhonePreview({
   creativeType,
   cardIndex,
   assetIndex,
-  onCardIndex,
-  onAssetIndex,
   onDropFiles,
 }: PhonePreviewProps) {
   const [dragOver, setDragOver] = useState(false);
-  const startX = useRef<number | null>(null);
   const cards = creative.cards;
   const assets = creative.assets;
   const safeIndex = Math.min(cards.length - 1, Math.max(0, cardIndex));
@@ -206,118 +199,11 @@ export default function PhonePreview({
     caption || 'No caption yet',
   ].join(', ');
 
-  function stepCard(delta: number) {
-    const next = Math.min(cards.length - 1, Math.max(0, safeIndex + delta));
-    if (next !== safeIndex) onCardIndex(next);
-  }
-
-  function stepAsset(delta: number) {
-    if (assets.length < 2) return;
-    const next = Math.min(assets.length - 1, Math.max(0, safeAsset + delta));
-    if (next !== safeAsset) onAssetIndex(next);
-  }
-
-  const canCycleAssets = creativeType === 'flexible' && assets.length > 1;
-  const canCycleCards = creativeType === 'carousel';
-
-  function stepCycle(delta: number) {
-    if (canCycleCards) stepCard(delta);
-    else if (canCycleAssets) stepAsset(delta);
-  }
-
-  function onPointerDown(event: React.PointerEvent<HTMLDivElement>) {
-    if (!canCycleCards && !canCycleAssets) return;
-    if ((event.target as HTMLElement).closest('button')) return;
-    startX.current = event.clientX;
-  }
-
-  function onPointerUp(event: React.PointerEvent<HTMLDivElement>) {
-    if (startX.current == null) return;
-    const delta = event.clientX - startX.current;
-    startX.current = null;
-    if (delta <= -36) stepCycle(1);
-    else if (delta >= 36) stepCycle(-1);
-  }
-
-  function onKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    if (!canCycleCards && !canCycleAssets) return;
-    if (event.key === 'ArrowRight') {
-      event.preventDefault();
-      event.stopPropagation();
-      stepCycle(1);
-    } else if (event.key === 'ArrowLeft') {
-      event.preventDefault();
-      event.stopPropagation();
-      stepCycle(-1);
-    }
-  }
-
-  const dots = creativeType === 'carousel' ? (
-    <div className="flex items-center justify-center gap-1.5">
-      {cards.map((item, index) => {
-        const selected = index === safeIndex;
-        return (
-          <button
-            key={item.id}
-            type="button"
-            aria-label={`Card ${index + 1} of ${cards.length}`}
-            aria-current={selected ? 'true' : undefined}
-            onClick={() => onCardIndex(index)}
-            className="h-1.5 rounded-full transition-[width,background-color] duration-150"
-            style={{
-              width: selected ? 14 : 6,
-              backgroundColor: selected ? '#ffffff' : 'rgba(255,255,255,0.45)',
-            }}
-          />
-        );
-      })}
-    </div>
-  ) : null;
-
-  const cycleIndex = canCycleCards ? safeIndex : safeAsset;
-  const cycleCount = canCycleCards ? cards.length : assets.length;
-  const showChevrons = canCycleCards || canCycleAssets;
-  const chevrons = showChevrons ? (
-    <>
-      <button
-        type="button"
-        aria-label={canCycleCards ? 'Previous card' : 'Previous asset'}
-        disabled={cycleIndex === 0}
-        onClick={() => stepCycle(-1)}
-        className="absolute left-2 top-1/2 z-20 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm disabled:opacity-30"
-      >
-        <ChevronLeft className="h-4 w-4" />
-      </button>
-      <button
-        type="button"
-        aria-label={canCycleCards ? 'Next card' : 'Next asset'}
-        disabled={cycleIndex === cycleCount - 1}
-        onClick={() => stepCycle(1)}
-        className={`absolute ${feed ? 'right-2' : 'right-12'} top-1/2 z-20 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm disabled:opacity-30`}
-      >
-        <ChevronRight className="h-4 w-4" />
-      </button>
-    </>
-  ) : null;
-
   const stage = (
-    <div
-      data-cycle={canCycleCards || canCycleAssets ? 'true' : undefined}
-      tabIndex={canCycleCards || canCycleAssets ? 0 : undefined}
-      onKeyDown={onKeyDown}
-      onPointerDown={onPointerDown}
-      onPointerUp={onPointerUp}
-      className="absolute inset-0 outline-none"
-      aria-label={canCycleCards
-        ? `Carousel cards, card ${safeIndex + 1} of ${cards.length}`
-        : canCycleAssets
-          ? `Flexible assets, asset ${safeAsset + 1} of ${assets.length}`
-          : undefined}
-    >
-      <div key={canCycleCards ? activeCard.id : activeAsset?.id ?? creative.id} className="absolute inset-0 animate-fade-in">
+    <div className="absolute inset-0">
+      <div key={creativeType === 'carousel' ? activeCard.id : activeAsset?.id ?? creative.id} className="absolute inset-0 animate-fade-in">
         <MediaFill media={art.media} from={art.from} to={art.to} kicker={art.kicker} />
       </div>
-      {chevrons}
     </div>
   );
 
@@ -342,10 +228,6 @@ export default function PhonePreview({
       <Rail />
       <div className="absolute inset-x-0 bottom-[52px] z-20 flex flex-col gap-2 px-3 pb-3 pr-16">
         {creativeType === 'flexible' ? <FlexibleHint count={assets.length} /> : null}
-        {canCycleCards || canCycleAssets ? (
-          <span className="text-[10px] font-semibold tabular-nums text-white/80">{cycleIndex + 1}/{cycleCount}</span>
-        ) : null}
-        {dots}
         <div className="flex items-center gap-2">
           <Avatar letter={accountName.replace('@', '').slice(0, 1).toUpperCase() || 'S'} />
           <span className="truncate text-[13px] font-semibold">{accountName}</span>
@@ -383,16 +265,6 @@ export default function PhonePreview({
       </div>
       <div className="relative w-full shrink-0 bg-black" style={{ aspectRatio: ratio === '1:1' ? '1 / 1' : '4 / 5' }}>
         {stage}
-        {canCycleCards || (creativeType === 'flexible' && assets.length > 0) ? (
-          <span className="pointer-events-none absolute right-2 top-2 z-20 rounded-full bg-black/60 px-1.5 py-0.5 text-[10px] font-semibold text-white">
-            {cycleIndex + 1}/{cycleCount}
-          </span>
-        ) : null}
-        {dots ? (
-          <div className="pointer-events-none absolute inset-x-0 bottom-2 z-20 flex justify-center [&_button]:pointer-events-auto">
-            {dots}
-          </div>
-        ) : null}
       </div>
       <div aria-hidden className="flex shrink-0 items-center gap-3 px-3 py-2">
         <Heart className="h-5 w-5" strokeWidth={1.75} />

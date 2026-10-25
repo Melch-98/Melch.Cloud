@@ -136,22 +136,47 @@ export default function UploadV2Studio() {
     };
   }, []);
 
+  const pager = creativeType === 'carousel'
+    ? { noun: 'card' as const, index: cardIndex + 1, count: creative.cards.length }
+    : creativeType === 'flexible'
+      ? {
+        noun: 'asset' as const,
+        index: creative.assets.length === 0 ? 0 : assetIndex + 1,
+        count: creative.assets.length,
+      }
+      : batchOn
+        ? { noun: 'creative' as const, index: safeIndex + 1, count: creatives.length }
+        : null;
+
   useEffect(() => {
-    if (!batchOn) return;
+    if (!pager || pager.count < 2) return;
+    const { noun, count } = pager;
+    const id = creative.id;
     function onKey(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
       if (!target) return;
-      if (target.closest('input, textarea, select, button, a, [role="combobox"], [role="listbox"], [data-cycle="true"]')) return;
+      if (target.closest('input, textarea, select, button, a, [role="combobox"], [role="listbox"]')) return;
       if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
       event.preventDefault();
-      setIndex((current) => {
-        const next = event.key === 'ArrowLeft' ? current - 1 : current + 1;
-        return Math.min(creatives.length - 1, Math.max(0, next));
-      });
+      const delta = event.key === 'ArrowLeft' ? -1 : 1;
+      if (noun === 'card') {
+        setCardIndexById((current) => ({
+          ...current,
+          [id]: Math.min(count - 1, Math.max(0, (current[id] ?? 0) + delta)),
+        }));
+      } else if (noun === 'asset') {
+        setAssetIndexById((current) => ({
+          ...current,
+          [id]: Math.min(count - 1, Math.max(0, (current[id] ?? 0) + delta)),
+        }));
+      } else {
+        setIndex((current) => Math.min(count - 1, Math.max(0, current + delta)));
+      }
+      setMediaNote(null);
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [batchOn, creatives.length]);
+  }, [pager, creative.id]);
 
   function patchCreative(patch: Partial<Pick<Creative, 'caption' | 'productKey' | 'productLabel' | 'angle' | 'handle' | 'usageEndDate' | 'perpetual' | 'ratio'>>) {
     const id = creative.id;
@@ -394,35 +419,44 @@ export default function UploadV2Studio() {
     setIndex((current) => followMove(current, from, to));
   }
 
-  function stepCreative(delta: number) {
-    setIndex((current) => Math.min(creatives.length - 1, Math.max(0, current + delta)));
+  function stepPager(delta: number) {
+    if (!pager || pager.count < 2) return;
+    const next = pager.index + delta;
+    if (next < 1 || next > pager.count) return;
     setMediaNote(null);
+    if (pager.noun === 'card') {
+      setCardIndexById((current) => ({ ...current, [creative.id]: next - 1 }));
+    } else if (pager.noun === 'asset') {
+      setAssetIndexById((current) => ({ ...current, [creative.id]: next - 1 }));
+    } else {
+      setIndex(next - 1);
+    }
   }
 
   return (
     <div data-prototype="upload-v2" className="grid w-full grid-cols-1 items-start gap-6 lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-x-10">
       <div className="order-2 lg:sticky lg:top-4 lg:col-start-1 lg:row-start-1 lg:self-start">
         <div className="mx-auto mb-3 flex h-11 w-full max-w-[280px] items-center justify-center gap-2">
-          {batchOn ? (
+          {pager ? (
             <>
               <button
                 type="button"
-                aria-label="Previous creative"
-                disabled={safeIndex === 0}
-                onClick={() => stepCreative(-1)}
+                aria-label={`Previous ${pager.noun}`}
+                disabled={pager.index <= 1}
+                onClick={() => stepPager(-1)}
                 className="flex h-11 w-11 items-center justify-center rounded-full text-[#F5F5F8] disabled:cursor-not-allowed disabled:opacity-30"
                 style={{ backgroundColor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}
               >
                 <ChevronLeft className="h-5 w-5" />
               </button>
               <p className="min-w-[9.5rem] text-center text-sm font-semibold tabular-nums text-[#F5F5F8]" aria-live="polite">
-                Creative {safeIndex + 1} of {creatives.length}
+                {pager.noun === 'card' ? 'Card' : pager.noun === 'asset' ? 'Asset' : 'Creative'} {pager.index} of {pager.count}
               </p>
               <button
                 type="button"
-                aria-label="Next creative"
-                disabled={safeIndex === creatives.length - 1}
-                onClick={() => stepCreative(1)}
+                aria-label={`Next ${pager.noun}`}
+                disabled={pager.count < 1 || pager.index >= pager.count}
+                onClick={() => stepPager(1)}
                 className="flex h-11 w-11 items-center justify-center rounded-full text-[#F5F5F8] disabled:cursor-not-allowed disabled:opacity-30"
                 style={{ backgroundColor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}
               >
@@ -438,14 +472,6 @@ export default function UploadV2Studio() {
           creativeType={creativeType}
           cardIndex={cardIndex}
           assetIndex={assetIndex}
-          onCardIndex={(next) => {
-            setCardIndexById((current) => ({ ...current, [creative.id]: next }));
-            setMediaNote(null);
-          }}
-          onAssetIndex={(next) => {
-            setAssetIndexById((current) => ({ ...current, [creative.id]: next }));
-            setMediaNote(null);
-          }}
           onDropFiles={applyFiles}
         />
       </div>
