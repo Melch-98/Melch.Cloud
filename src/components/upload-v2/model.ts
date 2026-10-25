@@ -76,8 +76,6 @@ export type Creative = {
   /** Flexible creatives keep every file here. Other types leave this empty. */
   assets: FlexibleAsset[];
   cards: CarouselCard[];
-  /** Appended when a dropped file becomes its own batch creative. */
-  userAdded?: boolean;
 };
 
 export const SAMPLE_BRAND = 'Sample Brand';
@@ -550,15 +548,20 @@ function fileStem(name: string): string {
   return stem.trim() || 'Creative';
 }
 
-export function creativeFromMedia(
+/**
+ * One plain creative for batch mode. Product, angle, handle, caption, and usage stay empty.
+ * submissions.creator_name is NOT NULL and allows ''; the wiring phase must write ''.
+ */
+export function plainCreativeFromMedia(
   media: LocalMedia,
-  template: Creative,
+  index: number,
   makeId: (prefix: string) => string,
 ): Creative {
+  const tone = CARD_TONES[index % CARD_TONES.length];
   const name = fileStem(media.name);
   const ratio = media.width && media.height
     ? nearestAspectRatio(media.width, media.height)
-    : template.ratio;
+    : '9:16';
   return {
     id: makeId('creative'),
     name,
@@ -567,32 +570,46 @@ export function creativeFromMedia(
     productKey: '',
     productLabel: '',
     angle: '',
-    handle: template.handle,
-    usageEndDate: template.usageEndDate,
-    perpetual: template.perpetual,
+    handle: '',
+    usageEndDate: '',
+    perpetual: false,
     ratio,
     kicker: name,
-    from: template.from,
-    to: template.to,
+    from: tone[0],
+    to: tone[1],
     media,
     assets: [],
-    cards: [
-      blankCard(makeId('card'), 0, null),
-      blankCard(makeId('card'), 1, null),
-    ],
-    userAdded: true,
+    cards: [],
   };
 }
 
+/** Replace the file on a batch creative and snap the preview frame to that file. */
+export function replaceBatchMedia(creative: Creative, media: LocalMedia): Creative {
+  const name = fileStem(media.name);
+  const ratio = media.width && media.height
+    ? nearestAspectRatio(media.width, media.height)
+    : creative.ratio;
+  return {
+    ...creative,
+    name,
+    originalName: media.name,
+    kicker: name,
+    ratio,
+    media,
+  };
+}
+
+/** Append plain creatives, one per file, and stop at BATCH_MAX_CREATIVES. */
 export function appendBatchCreatives(
   creatives: Creative[],
   incoming: LocalMedia[],
-  template: Creative,
   makeId: (prefix: string) => string,
 ): { creatives: Creative[]; placed: number; leftover: number; firstNewIndex: number } {
   const room = Math.max(0, BATCH_MAX_CREATIVES - creatives.length);
   const placedMedia = incoming.slice(0, room);
-  const added = placedMedia.map((media) => creativeFromMedia(media, template, makeId));
+  const added = placedMedia.map((media, offset) => (
+    plainCreativeFromMedia(media, creatives.length + offset, makeId)
+  ));
   return {
     creatives: [...creatives, ...added],
     placed: added.length,
@@ -734,41 +751,25 @@ function nameDraft(
   return { renamed, stem, extension: fileExtension(original), original };
 }
 
-function candidateName(draft: NameDraft): string {
-  if (!draft.renamed) return draft.original;
-  return `${draft.stem}${draft.extension}`;
+/** Single-creative modes. A new name is built only when creator, product, or angle has a usable part. */
+export function previewCreativeFileName(
+  creative: Creative,
+  creatorName: string,
+  creativeType: CreativeType,
+  shownName: string | null,
+): FileNamePreview {
+  const draft = nameDraft(creative, creatorName, creativeType, shownName);
+  if (!draft.renamed) {
+    return { fileName: draft.original, renamed: false, label: 'Original name kept' };
+  }
+  return { fileName: `${draft.stem}${draft.extension}`, renamed: true, label: 'Renamed from inputs' };
 }
 
-export function previewCreativeFileNames(input: {
-  creatives: Creative[];
-  creatorName: string;
-  creativeType: CreativeType;
-  batchOn: boolean;
-  activeIndex: number;
-  activeShownName: string | null;
-}): FileNamePreview[] {
-  const { creatives, creatorName, creativeType, batchOn, activeIndex, activeShownName } = input;
-  const drafts = creatives.map((creative, index) => nameDraft(
-    creative,
-    creatorName,
-    creativeType,
-    index === activeIndex ? activeShownName : null,
-  ));
-  const scope = batchOn
-    ? creatives.map((_, index) => index)
-    : [Math.min(creatives.length - 1, Math.max(0, activeIndex))];
-  const counts = new Map<string, number>();
-  for (const index of scope) {
-    const name = candidateName(drafts[index]);
-    counts.set(name, (counts.get(name) ?? 0) + 1);
-  }
-  return drafts.map((draft, index) => {
-    if (!draft.renamed) {
-      return { fileName: draft.original, renamed: false, label: 'Original name kept' };
-    }
-    const plain = candidateName(draft);
-    const collided = scope.includes(index) && (counts.get(plain) ?? 0) > 1;
-    const fileName = collided ? `${draft.stem}_${index + 1}${draft.extension}` : plain;
-    return { fileName, renamed: true, label: 'Renamed from inputs' };
-  });
+/** Batch mode keeps every uploaded file name. Creator, product, and angle are not collected. */
+export function batchFileNamePreview(creative: Creative): FileNamePreview {
+  return {
+    fileName: sourceFileName(creative, null),
+    renamed: false,
+    label: 'Original name kept',
+  };
 }
