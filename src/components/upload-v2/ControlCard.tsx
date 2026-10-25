@@ -610,7 +610,10 @@ export default function ControlCard(props: ControlCardProps) {
         />
         {showList ? (
           <div>
-            <ul aria-label={listLabel} className="space-y-1">
+            <ul
+              aria-label={listLabel}
+              className={`space-y-1 ${rows.length > 7 ? 'max-h-[320px] overflow-y-auto pr-1' : ''}`}
+            >
               {rows.map((row, visibleIndex) => (
                 <li
                   key={row.key}
@@ -667,7 +670,7 @@ export default function ControlCard(props: ControlCardProps) {
                     <Thumb media={row.media} from={row.from} to={row.to} />
                     <span className="w-4 shrink-0 text-[11px] tabular-nums text-gray-500">{visibleIndex + 1}</span>
                     <span className="min-w-0 flex-1 truncate text-[13px] text-[#F5F5F8]">{row.name}</span>
-                    <span className="hidden w-14 shrink-0 text-right text-[11px] tabular-nums text-gray-500 sm:block">
+                    <span className="w-14 shrink-0 text-right text-[11px] tabular-nums text-gray-500">
                       {row.bytes == null ? '—' : formatBytes(row.bytes)}
                     </span>
                     <span className="w-8 shrink-0 text-right text-[11px] font-medium tabular-nums text-[#C8B89A]">{row.ratio}</span>
