@@ -31,7 +31,9 @@ type PhonePreviewProps = {
   creative: Creative;
   creativeType: CreativeType;
   cardIndex: number;
+  assetIndex: number;
   onCardIndex: (index: number) => void;
+  onAssetIndex: (index: number) => void;
   onDropFiles: (files: File[]) => void;
 };
 
@@ -159,11 +161,13 @@ function PartnershipHeader({ handle }: { handle: string }) {
   );
 }
 
-function FlexibleHint({ className = '' }: { className?: string }) {
+function FlexibleHint({ count, className = '' }: { count: number; className?: string }) {
+  const text = count > 0
+    ? `${count} ${count === 1 ? 'asset' : 'assets'} · multiple placements`
+    : 'Multiple placements';
   return (
-    <div className={`inline-flex max-w-full flex-col rounded-lg bg-black/55 px-2.5 py-1.5 backdrop-blur-sm ${className}`}>
-      <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#C8B89A]">Multiple placements</span>
-      <span className="text-[11px] text-white/90">Feed · Stories · Reels</span>
+    <div className={`inline-flex max-w-full rounded-lg bg-black/55 px-2.5 py-1.5 backdrop-blur-sm ${className}`}>
+      <span className="text-[11px] font-medium text-white/90">{text}</span>
     </div>
   );
 }
@@ -172,17 +176,24 @@ export default function PhonePreview({
   creative,
   creativeType,
   cardIndex,
+  assetIndex,
   onCardIndex,
+  onAssetIndex,
   onDropFiles,
 }: PhonePreviewProps) {
   const [dragOver, setDragOver] = useState(false);
   const startX = useRef<number | null>(null);
   const cards = creative.cards;
+  const assets = creative.assets;
   const safeIndex = Math.min(cards.length - 1, Math.max(0, cardIndex));
+  const safeAsset = Math.min(Math.max(0, assets.length - 1), Math.max(0, assetIndex));
   const activeCard = cards[safeIndex];
+  const activeAsset = assets[safeAsset];
   const art = creativeType === 'carousel'
     ? { from: activeCard.from, to: activeCard.to, kicker: activeCard.kicker, media: activeCard.media, headline: activeCard.headline }
-    : { from: creative.from, to: creative.to, kicker: creative.kicker, media: creative.media, headline: '' };
+    : creativeType === 'flexible' && activeAsset
+      ? { from: creative.from, to: creative.to, kicker: creative.kicker, media: activeAsset.media, headline: '' }
+      : { from: creative.from, to: creative.to, kicker: creative.kicker, media: creative.media, headline: '' };
   const handle = displayHandle(creative.handle);
   const caption = creative.caption.trim();
   const ratio = creative.ratio;
@@ -200,8 +211,22 @@ export default function PhonePreview({
     if (next !== safeIndex) onCardIndex(next);
   }
 
+  function stepAsset(delta: number) {
+    if (assets.length < 2) return;
+    const next = Math.min(assets.length - 1, Math.max(0, safeAsset + delta));
+    if (next !== safeAsset) onAssetIndex(next);
+  }
+
+  const canCycleAssets = creativeType === 'flexible' && assets.length > 1;
+  const canCycleCards = creativeType === 'carousel';
+
+  function stepCycle(delta: number) {
+    if (canCycleCards) stepCard(delta);
+    else if (canCycleAssets) stepAsset(delta);
+  }
+
   function onPointerDown(event: React.PointerEvent<HTMLDivElement>) {
-    if (creativeType !== 'carousel') return;
+    if (!canCycleCards && !canCycleAssets) return;
     if ((event.target as HTMLElement).closest('button')) return;
     startX.current = event.clientX;
   }
@@ -210,20 +235,20 @@ export default function PhonePreview({
     if (startX.current == null) return;
     const delta = event.clientX - startX.current;
     startX.current = null;
-    if (delta <= -36) stepCard(1);
-    else if (delta >= 36) stepCard(-1);
+    if (delta <= -36) stepCycle(1);
+    else if (delta >= 36) stepCycle(-1);
   }
 
   function onKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    if (creativeType !== 'carousel') return;
+    if (!canCycleCards && !canCycleAssets) return;
     if (event.key === 'ArrowRight') {
       event.preventDefault();
       event.stopPropagation();
-      stepCard(1);
+      stepCycle(1);
     } else if (event.key === 'ArrowLeft') {
       event.preventDefault();
       event.stopPropagation();
-      stepCard(-1);
+      stepCycle(-1);
     }
   }
 
@@ -249,22 +274,25 @@ export default function PhonePreview({
     </div>
   ) : null;
 
-  const chevrons = creativeType === 'carousel' ? (
+  const cycleIndex = canCycleCards ? safeIndex : safeAsset;
+  const cycleCount = canCycleCards ? cards.length : assets.length;
+  const showChevrons = canCycleCards || canCycleAssets;
+  const chevrons = showChevrons ? (
     <>
       <button
         type="button"
-        aria-label="Previous card"
-        disabled={safeIndex === 0}
-        onClick={() => stepCard(-1)}
+        aria-label={canCycleCards ? 'Previous card' : 'Previous asset'}
+        disabled={cycleIndex === 0}
+        onClick={() => stepCycle(-1)}
         className="absolute left-2 top-1/2 z-20 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm disabled:opacity-30"
       >
         <ChevronLeft className="h-4 w-4" />
       </button>
       <button
         type="button"
-        aria-label="Next card"
-        disabled={safeIndex === cards.length - 1}
-        onClick={() => stepCard(1)}
+        aria-label={canCycleCards ? 'Next card' : 'Next asset'}
+        disabled={cycleIndex === cycleCount - 1}
+        onClick={() => stepCycle(1)}
         className={`absolute ${feed ? 'right-2' : 'right-12'} top-1/2 z-20 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm disabled:opacity-30`}
       >
         <ChevronRight className="h-4 w-4" />
@@ -274,15 +302,19 @@ export default function PhonePreview({
 
   const stage = (
     <div
-      data-carousel={creativeType === 'carousel' ? 'true' : undefined}
-      tabIndex={creativeType === 'carousel' ? 0 : undefined}
+      data-cycle={canCycleCards || canCycleAssets ? 'true' : undefined}
+      tabIndex={canCycleCards || canCycleAssets ? 0 : undefined}
       onKeyDown={onKeyDown}
       onPointerDown={onPointerDown}
       onPointerUp={onPointerUp}
       className="absolute inset-0 outline-none"
-      aria-label={creativeType === 'carousel' ? `Carousel cards, card ${safeIndex + 1} of ${cards.length}` : undefined}
+      aria-label={canCycleCards
+        ? `Carousel cards, card ${safeIndex + 1} of ${cards.length}`
+        : canCycleAssets
+          ? `Flexible assets, asset ${safeAsset + 1} of ${assets.length}`
+          : undefined}
     >
-      <div key={creativeType === 'carousel' ? activeCard.id : creative.id} className="absolute inset-0 animate-fade-in">
+      <div key={canCycleCards ? activeCard.id : activeAsset?.id ?? creative.id} className="absolute inset-0 animate-fade-in">
         <MediaFill media={art.media} from={art.from} to={art.to} kicker={art.kicker} />
       </div>
       {chevrons}
@@ -309,7 +341,10 @@ export default function PhonePreview({
       )}
       <Rail />
       <div className="absolute inset-x-0 bottom-[52px] z-20 flex flex-col gap-2 px-3 pb-3 pr-16">
-        {creativeType === 'flexible' ? <FlexibleHint /> : null}
+        {creativeType === 'flexible' ? <FlexibleHint count={assets.length} /> : null}
+        {canCycleCards || canCycleAssets ? (
+          <span className="text-[10px] font-semibold tabular-nums text-white/80">{cycleIndex + 1}/{cycleCount}</span>
+        ) : null}
         {dots}
         <div className="flex items-center gap-2">
           <Avatar letter={accountName.replace('@', '').slice(0, 1).toUpperCase() || 'S'} />
@@ -348,9 +383,9 @@ export default function PhonePreview({
       </div>
       <div className="relative w-full shrink-0 bg-black" style={{ aspectRatio: ratio === '1:1' ? '1 / 1' : '4 / 5' }}>
         {stage}
-        {creativeType === 'carousel' ? (
+        {canCycleCards || (creativeType === 'flexible' && assets.length > 0) ? (
           <span className="pointer-events-none absolute right-2 top-2 z-20 rounded-full bg-black/60 px-1.5 py-0.5 text-[10px] font-semibold text-white">
-            {safeIndex + 1}/{cards.length}
+            {cycleIndex + 1}/{cycleCount}
           </span>
         ) : null}
         {dots ? (
@@ -367,7 +402,7 @@ export default function PhonePreview({
       </div>
       <div className="min-h-0 flex-1 overflow-hidden px-3 pb-5">
         <p className="text-[12px] font-semibold">128 likes</p>
-        {creativeType === 'flexible' ? <FlexibleHint className="mt-1.5" /> : null}
+        {creativeType === 'flexible' ? <FlexibleHint count={assets.length} className="mt-1.5" /> : null}
         {creativeType === 'carousel' && art.headline ? (
           <p className="mt-1 text-[12px] font-semibold leading-snug">{art.headline}</p>
         ) : null}
@@ -389,14 +424,17 @@ export default function PhonePreview({
         aria-label={previewLabel}
         onDragEnter={(event) => {
           event.preventDefault();
-          setDragOver(true);
+          if (event.dataTransfer.types.includes('Files')) setDragOver(true);
         }}
         onDragOver={(event) => {
           event.preventDefault();
           event.stopPropagation();
-          setDragOver(true);
+          if (event.dataTransfer.types.includes('Files')) setDragOver(true);
         }}
-        onDragLeave={() => setDragOver(false)}
+        onDragLeave={(event) => {
+          if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+          setDragOver(false);
+        }}
         onDrop={(event) => {
           event.preventDefault();
           event.stopPropagation();

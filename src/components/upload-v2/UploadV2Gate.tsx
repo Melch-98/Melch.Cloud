@@ -110,12 +110,12 @@ export default function UploadV2Gate({ localPreview = false }: { localPreview?: 
 
   return (
     <Navbar>
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
-        <div className="mb-6 flex items-start justify-between gap-3">
+      <div className="mx-auto max-w-[1100px] px-4 py-4 sm:px-6 sm:py-5">
+        <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#C8B89A]">Post preview</p>
-            <h1 className="mt-1 text-2xl font-bold tracking-tight text-[#F5F5F8]">Upload Creatives</h1>
-            <p className="mt-2 text-sm text-[#ABABAB]">
+            <h1 className="mt-1 text-xl font-bold tracking-tight text-[#F5F5F8] sm:text-2xl">Upload Creatives</h1>
+            <p className="mt-1 text-sm text-[#ABABAB]">
               See the ad before anything is saved. This screen is a prototype.
             </p>
           </div>

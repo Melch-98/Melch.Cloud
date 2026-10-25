@@ -6,9 +6,26 @@ export type LocalMedia = {
   url: string;
   kind: 'image' | 'video';
   name: string;
+  bytes: number;
   width: number | null;
   height: number | null;
 };
+
+/** One image or video inside a flexible creative. Meta allows up to 10. */
+export type FlexibleAsset = {
+  id: string;
+  media: LocalMedia;
+};
+
+export const CAROUSEL_MIN_CARDS = 2;
+export const CAROUSEL_MAX_CARDS = 10;
+export const FLEXIBLE_MAX_ASSETS = 10;
+export const BATCH_MAX_CREATIVES = 20;
+
+export type ReplaceTarget =
+  | { kind: 'media'; creativeIndex: number }
+  | { kind: 'card'; index: number }
+  | { kind: 'asset'; index: number };
 
 export type CarouselCard = {
   id: string;
@@ -42,7 +59,11 @@ export type Creative = {
   from: string;
   to: string;
   media: LocalMedia | null;
+  /** Flexible creatives keep every file here. Other types leave this empty. */
+  assets: FlexibleAsset[];
   cards: CarouselCard[];
+  /** Appended when a dropped file becomes its own batch creative. */
+  userAdded?: boolean;
 };
 
 export const SAMPLE_PRODUCTS: SampleProduct[] = [
@@ -96,6 +117,7 @@ export const SAMPLE_CREATIVES: Creative[] = [
     from: '#E7C89A',
     to: '#6A4328',
     media: null,
+    assets: [],
     cards: [
       card('broth-1', 'Start with the pour', 'The pour', '#E7C89A', '#6A4328'),
       card('broth-2', 'Steam, then sip', 'The steam', '#F0D7B4', '#8A5A32'),
@@ -118,6 +140,7 @@ export const SAMPLE_CREATIVES: Creative[] = [
     from: '#F3E6CF',
     to: '#8C7352',
     media: null,
+    assets: [],
     cards: [
       card('shelf-1', 'The short list', 'Short list', '#F3E6CF', '#8C7352'),
       card('shelf-2', 'What sells through', 'Sell-through', '#E4D2B0', '#6E5840'),
@@ -140,6 +163,7 @@ export const SAMPLE_CREATIVES: Creative[] = [
     from: '#D9D4CC',
     to: '#4E5550',
     media: null,
+    assets: [],
     cards: [
       card('home-1', 'Open on the kitchen', 'Kitchen', '#D9D4CC', '#4E5550'),
       card('home-2', 'Then the product', 'Product', '#C9C3BA', '#3C433E'),
@@ -162,6 +186,7 @@ export const SAMPLE_CREATIVES: Creative[] = [
     from: '#F2C7A5',
     to: '#7A4B45',
     media: null,
+    assets: [],
     cards: [
       card('taste-1', 'The first spoon', 'First spoon', '#F2C7A5', '#7A4B45'),
       card('taste-2', 'The face after', 'Reaction', '#E7B394', '#5C3834'),
@@ -184,6 +209,7 @@ export const SAMPLE_CREATIVES: Creative[] = [
     from: '#E7B7C4',
     to: '#6A3A48',
     media: null,
+    assets: [],
     cards: [
       card('grid-1', 'Line them up', 'The line', '#E7B7C4', '#6A3A48'),
       card('grid-2', 'One of each', 'One of each', '#D9A3B2', '#54303C'),
@@ -206,6 +232,7 @@ export const SAMPLE_CREATIVES: Creative[] = [
     from: '#C9D4F2',
     to: '#3A4670',
     media: null,
+    assets: [],
     cards: [
       card('cut-1', 'Open fast', 'Open', '#C9D4F2', '#3A4670'),
       card('cut-2', 'Show the jar', 'The jar', '#B7C4EA', '#2E3858'),
@@ -218,10 +245,221 @@ export function cloneCreative(creative: Creative): Creative {
   return {
     ...creative,
     media: creative.media ? { ...creative.media } : null,
+    assets: creative.assets.map((asset) => ({
+      id: asset.id,
+      media: { ...asset.media },
+    })),
     cards: creative.cards.map((item) => ({
       ...item,
       media: item.media ? { ...item.media } : null,
     })),
+  };
+}
+
+export function createLocalId(prefix: string): string {
+  const rand = Math.random().toString(36).slice(2, 8);
+  return `${prefix}-${Date.now().toString(36)}-${rand}`;
+}
+
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '—';
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb >= 10 ? Math.round(kb) : kb.toFixed(1)} KB`;
+  const mb = kb / 1024;
+  return `${mb >= 10 ? Math.round(mb) : mb.toFixed(1)} MB`;
+}
+
+export function mediaRatioLabel(media: LocalMedia | null | undefined): string {
+  if (!media?.width || !media.height) return '—';
+  return nearestAspectRatio(media.width, media.height);
+}
+
+export function moveItem<T>(items: T[], from: number, to: number): T[] {
+  if (from === to || from < 0 || to < 0 || from >= items.length || to >= items.length) return items;
+  const next = items.slice();
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
+  return next;
+}
+
+/** Keep the active row selected after a reorder. */
+export function followMove(current: number, from: number, to: number): number {
+  if (current === from) return to;
+  if (from < current && to >= current) return current - 1;
+  if (from > current && to <= current) return current + 1;
+  return current;
+}
+
+const CARD_TONES = [
+  ['#E7C89A', '#6A4328'],
+  ['#F0D7B4', '#8A5A32'],
+  ['#C8B89A', '#3E2A1C'],
+  ['#E7B7C4', '#6A3A48'],
+  ['#C9D4F2', '#3A4670'],
+  ['#F2C7A5', '#7A4B45'],
+  ['#D9D4CC', '#4E5550'],
+  ['#E4D2B0', '#6E5840'],
+  ['#B7C4EA', '#2E3858'],
+  ['#C98A9C', '#3A2228'],
+];
+
+function blankCard(id: string, index: number, template?: CarouselCard | null): CarouselCard {
+  const tone = CARD_TONES[index % CARD_TONES.length];
+  return {
+    id,
+    headline: template?.headline ?? '',
+    kicker: template?.kicker ?? '',
+    from: template?.from ?? tone[0],
+    to: template?.to ?? tone[1],
+    media: null,
+  };
+}
+
+export type MediaPlacement = {
+  cards?: CarouselCard[];
+  assets?: FlexibleAsset[];
+  placed: number;
+  leftover: number;
+  focusIndex: number;
+};
+
+/**
+ * Files become carousel cards. An all-empty card list is replaced (so the
+ * sample three cards do not cap the creative). Later drops fill empty cards,
+ * then append, and stop at 10. At least 2 cards remain.
+ */
+export function addCarouselMedia(
+  cards: CarouselCard[],
+  incoming: LocalMedia[],
+  makeId: (prefix: string) => string,
+): MediaPlacement {
+  if (incoming.length === 0) {
+    return { cards, placed: 0, leftover: 0, focusIndex: 0 };
+  }
+
+  const allEmpty = cards.length === 0 || cards.every((card) => !card.media);
+  if (allEmpty) {
+    const count = Math.min(CAROUSEL_MAX_CARDS, Math.max(CAROUSEL_MIN_CARDS, incoming.length));
+    const next = Array.from({ length: count }, (_, index) => {
+      const card = blankCard(cards[index]?.id ?? makeId('card'), index, cards[index]);
+      card.media = incoming[index] ?? null;
+      return card;
+    });
+    const placed = Math.min(incoming.length, CAROUSEL_MAX_CARDS);
+    return { cards: next, placed, leftover: incoming.length - placed, focusIndex: 0 };
+  }
+
+  const next = cards.map((card) => ({ ...card, media: card.media }));
+  let cursor = 0;
+  let focusIndex = 0;
+  let focused = false;
+  for (let index = 0; index < next.length && cursor < incoming.length; index += 1) {
+    if (next[index].media) continue;
+    next[index] = { ...next[index], media: incoming[cursor] };
+    cursor += 1;
+    if (!focused) {
+      focusIndex = index;
+      focused = true;
+    }
+  }
+  while (cursor < incoming.length && next.length < CAROUSEL_MAX_CARDS) {
+    const card = blankCard(makeId('card'), next.length, null);
+    card.media = incoming[cursor];
+    cursor += 1;
+    if (!focused) {
+      focusIndex = next.length;
+      focused = true;
+    }
+    next.push(card);
+  }
+  while (next.length < CAROUSEL_MIN_CARDS) {
+    next.push(blankCard(makeId('card'), next.length, null));
+  }
+  return { cards: next, placed: cursor, leftover: incoming.length - cursor, focusIndex };
+}
+
+export function removeCarouselCard(cards: CarouselCard[], index: number): CarouselCard[] | null {
+  if (cards.length <= CAROUSEL_MIN_CARDS) return null;
+  if (index < 0 || index >= cards.length) return null;
+  return cards.filter((_, cardIndex) => cardIndex !== index);
+}
+
+export function addFlexibleAssets(
+  assets: FlexibleAsset[],
+  incoming: LocalMedia[],
+  makeId: (prefix: string) => string,
+): MediaPlacement {
+  const room = Math.max(0, FLEXIBLE_MAX_ASSETS - assets.length);
+  const placedMedia = incoming.slice(0, room);
+  const focusIndex = assets.length;
+  const next = [
+    ...assets,
+    ...placedMedia.map((media) => ({ id: makeId('asset'), media })),
+  ];
+  return {
+    assets: next,
+    placed: placedMedia.length,
+    leftover: incoming.length - placedMedia.length,
+    focusIndex: placedMedia.length ? focusIndex : Math.max(0, assets.length - 1),
+  };
+}
+
+function fileStem(name: string): string {
+  const base = name.split(/[/\\]/).pop() || name;
+  const dot = base.lastIndexOf('.');
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  return stem.trim() || 'Creative';
+}
+
+export function creativeFromMedia(
+  media: LocalMedia,
+  template: Creative,
+  makeId: (prefix: string) => string,
+): Creative {
+  const name = fileStem(media.name);
+  const ratio = media.width && media.height
+    ? nearestAspectRatio(media.width, media.height)
+    : template.ratio;
+  return {
+    id: makeId('creative'),
+    name,
+    originalName: media.name,
+    caption: '',
+    productKey: '',
+    productLabel: '',
+    angle: '',
+    handle: template.handle,
+    usageEndDate: template.usageEndDate,
+    perpetual: template.perpetual,
+    ratio,
+    kicker: name,
+    from: template.from,
+    to: template.to,
+    media,
+    assets: [],
+    cards: [
+      blankCard(makeId('card'), 0, null),
+      blankCard(makeId('card'), 1, null),
+    ],
+    userAdded: true,
+  };
+}
+
+export function appendBatchCreatives(
+  creatives: Creative[],
+  incoming: LocalMedia[],
+  template: Creative,
+  makeId: (prefix: string) => string,
+): { creatives: Creative[]; placed: number; leftover: number; firstNewIndex: number } {
+  const room = Math.max(0, BATCH_MAX_CREATIVES - creatives.length);
+  const placedMedia = incoming.slice(0, room);
+  const added = placedMedia.map((media) => creativeFromMedia(media, template, makeId));
+  return {
+    creatives: [...creatives, ...added],
+    placed: added.length,
+    leftover: incoming.length - added.length,
+    firstNewIndex: creatives.length,
   };
 }
 
@@ -325,6 +563,8 @@ export function sourceFileName(creative: Creative, shownName: string | null): st
   const shown = shownName?.trim();
   if (shown) return shown;
   if (creative.media?.name) return creative.media.name;
+  const assetName = creative.assets.find((asset) => asset.media?.name)?.media.name;
+  if (assetName) return assetName;
   const cardName = creative.cards.find((card) => card.media?.name)?.media?.name;
   if (cardName) return cardName;
   return creative.originalName;
