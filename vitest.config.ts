@@ -9,6 +9,7 @@ export default defineConfig({
     environment: 'node',
     include: [
       'src/components/funnel-viewer/**/*.test.ts',
+      'src/components/upload-v2/**/*.test.ts',
       'src/lib/meta-funnel.test.ts',
       'src/lib/ad-activity/activity.test.ts',
       'src/lib/batch-creative-type.test.ts',

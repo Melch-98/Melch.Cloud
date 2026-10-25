@@ -1,11 +1,9 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   BatteryFull,
   Bookmark,
-  ChevronLeft,
-  ChevronRight,
   Film,
   Heart,
   Home,
@@ -19,7 +17,7 @@ import {
   Wifi,
 } from 'lucide-react';
 import {
-  SAMPLE_BRAND,
+  brandInitials,
   displayHandle,
   formatUsageEnd,
   type Creative,
@@ -31,7 +29,9 @@ type PhonePreviewProps = {
   creative: Creative;
   creativeType: CreativeType;
   cardIndex: number;
-  onCardIndex: (index: number) => void;
+  assetIndex: number;
+  brandName: string;
+  brandLogoUrl: string | null;
   onDropFiles: (files: File[]) => void;
 };
 
@@ -67,14 +67,28 @@ function HomeIndicator({ ink }: { ink: 'white' | 'black' }) {
   );
 }
 
-function Avatar({ letter }: { letter: string }) {
+function BrandMark({ name, logoUrl, ink }: { name: string; logoUrl: string | null; ink: 'white' | 'black' }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+  }, [logoUrl]);
+  const initials = brandInitials(name);
+  if (logoUrl && !failed) {
+    return (
+      <span data-brand-mark="logo" className="flex h-7 w-7 shrink-0 overflow-hidden rounded-full bg-white ring-1 ring-black/10">
+        {/* Same favicon URL the navbar already loads from brands.website_url. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={logoUrl} alt="" className="h-full w-full object-cover" onError={() => setFailed(true)} />
+      </span>
+    );
+  }
   return (
     <span
+      data-brand-mark="initials"
       aria-hidden
-      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-[#0A0A0A]"
-      style={{ background: 'linear-gradient(135deg, #C8B89A 0%, #A89474 100%)' }}
+      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ${ink === 'white' ? 'bg-white/15 text-white' : 'bg-[#EFEFEF] text-[#262626]'}`}
     >
-      {letter}
+      {initials || '·'}
     </span>
   );
 }
@@ -144,12 +158,12 @@ function TabBar() {
   );
 }
 
-function PartnershipHeader({ handle }: { handle: string }) {
+function PartnershipHeader({ name, logoUrl }: { name: string; logoUrl: string | null }) {
   return (
     <div className="absolute inset-x-3 top-11 z-20 flex items-center gap-2 text-white">
-      <Avatar letter={handle.replace('@', '').slice(0, 1).toUpperCase() || 'S'} />
+      <BrandMark name={name} logoUrl={logoUrl} ink="white" />
       <div className="min-w-0">
-        <p className="truncate text-[12px] font-semibold leading-tight">{handle}</p>
+        <p className="truncate text-[12px] font-semibold leading-tight">{name}</p>
         <p className="text-[10px] leading-tight text-white/80">Paid partnership</p>
       </div>
       <span className="ml-auto shrink-0 rounded border border-white/80 px-2 py-0.5 text-[11px] font-semibold">
@@ -159,11 +173,13 @@ function PartnershipHeader({ handle }: { handle: string }) {
   );
 }
 
-function FlexibleHint({ className = '' }: { className?: string }) {
+function FlexibleHint({ count, className = '' }: { count: number; className?: string }) {
+  const text = count > 0
+    ? `${count} ${count === 1 ? 'asset' : 'assets'} · multiple placements`
+    : 'Multiple placements';
   return (
-    <div className={`inline-flex max-w-full flex-col rounded-lg bg-black/55 px-2.5 py-1.5 backdrop-blur-sm ${className}`}>
-      <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#C8B89A]">Multiple placements</span>
-      <span className="text-[11px] text-white/90">Feed · Stories · Reels</span>
+    <div className={`inline-flex max-w-full rounded-lg bg-black/55 px-2.5 py-1.5 backdrop-blur-sm ${className}`}>
+      <span className="text-[11px] font-medium text-white/90">{text}</span>
     </div>
   );
 }
@@ -172,22 +188,28 @@ export default function PhonePreview({
   creative,
   creativeType,
   cardIndex,
-  onCardIndex,
+  assetIndex,
+  brandName,
+  brandLogoUrl,
   onDropFiles,
 }: PhonePreviewProps) {
   const [dragOver, setDragOver] = useState(false);
-  const startX = useRef<number | null>(null);
   const cards = creative.cards;
+  const assets = creative.assets;
   const safeIndex = Math.min(cards.length - 1, Math.max(0, cardIndex));
+  const safeAsset = Math.min(Math.max(0, assets.length - 1), Math.max(0, assetIndex));
   const activeCard = cards[safeIndex];
+  const activeAsset = assets[safeAsset];
   const art = creativeType === 'carousel'
     ? { from: activeCard.from, to: activeCard.to, kicker: activeCard.kicker, media: activeCard.media, headline: activeCard.headline }
-    : { from: creative.from, to: creative.to, kicker: creative.kicker, media: creative.media, headline: '' };
+    : creativeType === 'flexible' && activeAsset
+      ? { from: creative.from, to: creative.to, kicker: creative.kicker, media: activeAsset.media, headline: '' }
+      : { from: creative.from, to: creative.to, kicker: creative.kicker, media: creative.media, headline: '' };
   const handle = displayHandle(creative.handle);
   const caption = creative.caption.trim();
   const ratio = creative.ratio;
   const feed = ratio !== '9:16';
-  const accountName = creativeType === 'whitelist' ? handle : 'sample.brand';
+  const accountName = brandName.trim();
   const previewLabel = [
     creativeType === 'whitelist' ? 'Whitelist ad preview' : creativeType === 'carousel' ? 'Carousel ad preview' : 'Flexible ad preview',
     ratio,
@@ -195,97 +217,11 @@ export default function PhonePreview({
     caption || 'No caption yet',
   ].join(', ');
 
-  function stepCard(delta: number) {
-    const next = Math.min(cards.length - 1, Math.max(0, safeIndex + delta));
-    if (next !== safeIndex) onCardIndex(next);
-  }
-
-  function onPointerDown(event: React.PointerEvent<HTMLDivElement>) {
-    if (creativeType !== 'carousel') return;
-    if ((event.target as HTMLElement).closest('button')) return;
-    startX.current = event.clientX;
-  }
-
-  function onPointerUp(event: React.PointerEvent<HTMLDivElement>) {
-    if (startX.current == null) return;
-    const delta = event.clientX - startX.current;
-    startX.current = null;
-    if (delta <= -36) stepCard(1);
-    else if (delta >= 36) stepCard(-1);
-  }
-
-  function onKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    if (creativeType !== 'carousel') return;
-    if (event.key === 'ArrowRight') {
-      event.preventDefault();
-      event.stopPropagation();
-      stepCard(1);
-    } else if (event.key === 'ArrowLeft') {
-      event.preventDefault();
-      event.stopPropagation();
-      stepCard(-1);
-    }
-  }
-
-  const dots = creativeType === 'carousel' ? (
-    <div className="flex items-center justify-center gap-1.5">
-      {cards.map((item, index) => {
-        const selected = index === safeIndex;
-        return (
-          <button
-            key={item.id}
-            type="button"
-            aria-label={`Card ${index + 1} of ${cards.length}`}
-            aria-current={selected ? 'true' : undefined}
-            onClick={() => onCardIndex(index)}
-            className="h-1.5 rounded-full transition-[width,background-color] duration-150"
-            style={{
-              width: selected ? 14 : 6,
-              backgroundColor: selected ? '#ffffff' : 'rgba(255,255,255,0.45)',
-            }}
-          />
-        );
-      })}
-    </div>
-  ) : null;
-
-  const chevrons = creativeType === 'carousel' ? (
-    <>
-      <button
-        type="button"
-        aria-label="Previous card"
-        disabled={safeIndex === 0}
-        onClick={() => stepCard(-1)}
-        className="absolute left-2 top-1/2 z-20 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm disabled:opacity-30"
-      >
-        <ChevronLeft className="h-4 w-4" />
-      </button>
-      <button
-        type="button"
-        aria-label="Next card"
-        disabled={safeIndex === cards.length - 1}
-        onClick={() => stepCard(1)}
-        className={`absolute ${feed ? 'right-2' : 'right-12'} top-1/2 z-20 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm disabled:opacity-30`}
-      >
-        <ChevronRight className="h-4 w-4" />
-      </button>
-    </>
-  ) : null;
-
   const stage = (
-    <div
-      data-carousel={creativeType === 'carousel' ? 'true' : undefined}
-      tabIndex={creativeType === 'carousel' ? 0 : undefined}
-      onKeyDown={onKeyDown}
-      onPointerDown={onPointerDown}
-      onPointerUp={onPointerUp}
-      className="absolute inset-0 outline-none"
-      aria-label={creativeType === 'carousel' ? `Carousel cards, card ${safeIndex + 1} of ${cards.length}` : undefined}
-    >
-      <div key={creativeType === 'carousel' ? activeCard.id : creative.id} className="absolute inset-0 animate-fade-in">
+    <div className="absolute inset-0">
+      <div key={creativeType === 'carousel' ? activeCard.id : activeAsset?.id ?? creative.id} className="absolute inset-0 animate-fade-in">
         <MediaFill media={art.media} from={art.from} to={art.to} kicker={art.kicker} />
       </div>
-      {chevrons}
     </div>
   );
 
@@ -300,7 +236,7 @@ export default function PhonePreview({
       {stage}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-48 bg-gradient-to-t from-black/80 to-transparent" />
       {creativeType === 'whitelist' ? (
-        <PartnershipHeader handle={handle} />
+        <PartnershipHeader name={accountName} logoUrl={brandLogoUrl} />
       ) : (
         <div aria-hidden className="absolute inset-x-0 top-11 z-20 flex justify-center gap-5 text-[14px] font-semibold">
           <span>Reels</span>
@@ -309,17 +245,16 @@ export default function PhonePreview({
       )}
       <Rail />
       <div className="absolute inset-x-0 bottom-[52px] z-20 flex flex-col gap-2 px-3 pb-3 pr-16">
-        {creativeType === 'flexible' ? <FlexibleHint /> : null}
-        {dots}
+        {creativeType === 'flexible' ? <FlexibleHint count={assets.length} /> : null}
         <div className="flex items-center gap-2">
-          <Avatar letter={accountName.replace('@', '').slice(0, 1).toUpperCase() || 'S'} />
+          <BrandMark name={accountName} logoUrl={brandLogoUrl} ink="white" />
           <span className="truncate text-[13px] font-semibold">{accountName}</span>
           {creativeType === 'whitelist' ? null : (
             <span className="rounded border border-white/70 px-1.5 py-0.5 text-[11px] font-semibold">Follow</span>
           )}
         </div>
-        {creativeType === 'whitelist' ? (
-          <p className="text-[10px] text-white/75">Paid partnership with {SAMPLE_BRAND}</p>
+        {creativeType === 'whitelist' && handle ? (
+          <p className="text-[10px] text-white/75">{handle}</p>
         ) : null}
         {usageLine ? <p className="text-[10px] text-white/75">{usageLine}</p> : null}
         {creativeType === 'carousel' && art.headline ? (
@@ -337,7 +272,7 @@ export default function PhonePreview({
     <div className="absolute inset-0 flex flex-col overflow-hidden bg-white text-[#262626]">
       <div className="h-11 shrink-0" />
       <div className="flex shrink-0 items-center gap-2 px-3 py-2">
-        <Avatar letter={accountName.replace('@', '').slice(0, 1).toUpperCase() || 'S'} />
+        <BrandMark name={accountName} logoUrl={brandLogoUrl} ink="black" />
         <div className="min-w-0 flex-1">
           <p className="truncate text-[13px] font-semibold leading-tight">{accountName}</p>
           {creativeType === 'whitelist' ? (
@@ -348,16 +283,6 @@ export default function PhonePreview({
       </div>
       <div className="relative w-full shrink-0 bg-black" style={{ aspectRatio: ratio === '1:1' ? '1 / 1' : '4 / 5' }}>
         {stage}
-        {creativeType === 'carousel' ? (
-          <span className="pointer-events-none absolute right-2 top-2 z-20 rounded-full bg-black/60 px-1.5 py-0.5 text-[10px] font-semibold text-white">
-            {safeIndex + 1}/{cards.length}
-          </span>
-        ) : null}
-        {dots ? (
-          <div className="pointer-events-none absolute inset-x-0 bottom-2 z-20 flex justify-center [&_button]:pointer-events-auto">
-            {dots}
-          </div>
-        ) : null}
       </div>
       <div aria-hidden className="flex shrink-0 items-center gap-3 px-3 py-2">
         <Heart className="h-5 w-5" strokeWidth={1.75} />
@@ -367,7 +292,7 @@ export default function PhonePreview({
       </div>
       <div className="min-h-0 flex-1 overflow-hidden px-3 pb-5">
         <p className="text-[12px] font-semibold">128 likes</p>
-        {creativeType === 'flexible' ? <FlexibleHint className="mt-1.5" /> : null}
+        {creativeType === 'flexible' ? <FlexibleHint count={assets.length} className="mt-1.5" /> : null}
         {creativeType === 'carousel' && art.headline ? (
           <p className="mt-1 text-[12px] font-semibold leading-snug">{art.headline}</p>
         ) : null}
@@ -389,14 +314,17 @@ export default function PhonePreview({
         aria-label={previewLabel}
         onDragEnter={(event) => {
           event.preventDefault();
-          setDragOver(true);
+          if (event.dataTransfer.types.includes('Files')) setDragOver(true);
         }}
         onDragOver={(event) => {
           event.preventDefault();
           event.stopPropagation();
-          setDragOver(true);
+          if (event.dataTransfer.types.includes('Files')) setDragOver(true);
         }}
-        onDragLeave={() => setDragOver(false)}
+        onDragLeave={(event) => {
+          if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+          setDragOver(false);
+        }}
         onDrop={(event) => {
           event.preventDefault();
           event.stopPropagation();
