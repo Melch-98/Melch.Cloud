@@ -40,7 +40,7 @@ describe('upload-v2 file placement', () => {
     expect(result.placed).toBe(7);
     expect(result.leftover).toBe(0);
     expect(result.focusIndex).toBe(0);
-    expect(result.cards?.[0].headline).toBe('Start with the pour');
+    expect(result.cards?.[0].headline).toBe('Open on the morning');
     expect(result.cards?.[0].media?.name).toBe('card-0.jpg');
     expect(result.cards?.[6].media?.name).toBe('card-6.jpg');
   });

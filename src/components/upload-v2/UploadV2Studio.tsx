@@ -14,6 +14,7 @@ import {
   mediaKind,
   moveItem,
   nearestAspectRatio,
+  productAfterBrandChange,
   removeCarouselCard,
   brandLogoUrl,
   revokeMedia,
@@ -507,7 +508,14 @@ export default function UploadV2Studio({
           brands={brands}
           brandId={brandId}
           brandLocked={brandLocked}
-          onBrand={setBrandId}
+          onBrand={(id) => {
+            setBrandId(id);
+            setCreatives((current) => current.map((item) => {
+              const next = productAfterBrandChange(item.productKey, item.productLabel);
+              if (next.productKey === item.productKey && next.productLabel === item.productLabel) return item;
+              return { ...item, ...next };
+            }));
+          }}
           creatorName={creatorName}
           creative={creative}
           creativeIndex={safeIndex}

@@ -36,10 +36,24 @@ export type CarouselCard = {
   media: LocalMedia | null;
 };
 
-export type SampleProduct = {
+export type ProductChoice = {
   product_key: string;
   product_label: string;
-  product_kind: 'product' | 'homepage' | 'collection' | 'shop_all' | 'none';
+  product_kind: 'product' | 'homepage' | 'shop_all' | 'none';
+};
+
+/** Landing choices that are not a store product. Shown for every brand. */
+export const GENERIC_LANDING_OPTIONS: ProductChoice[] = [
+  { product_key: 'homepage', product_label: 'Homepage', product_kind: 'homepage' },
+  { product_key: 'shop_all', product_label: 'Shop All', product_kind: 'shop_all' },
+  { product_key: 'none', product_label: 'No landing page', product_kind: 'none' },
+];
+
+export const NO_PRODUCTS_SYNCED_NOTE = 'No products synced for this brand yet';
+
+export type ShopifyProductRow = {
+  title?: string | null;
+  handle?: string | null;
 };
 
 export type Creative = {
@@ -66,16 +80,100 @@ export type Creative = {
   userAdded?: boolean;
 };
 
-export const SAMPLE_PRODUCTS: SampleProduct[] = [
-  { product_key: 'product:chicken-bone-broth', product_label: 'Chicken Bone Broth', product_kind: 'product' },
-  { product_key: 'product:variety-pack', product_label: 'Variety Pack', product_kind: 'product' },
-  { product_key: 'homepage', product_label: 'Homepage', product_kind: 'homepage' },
-  { product_key: 'collection:bestsellers', product_label: 'Collection: Bestsellers', product_kind: 'collection' },
-  { product_key: 'shop_all', product_label: 'Shop All', product_kind: 'shop_all' },
-  { product_key: 'none', product_label: 'No landing page', product_kind: 'none' },
-];
-
 export const SAMPLE_BRAND = 'Sample Brand';
+
+/** Active shopify_products rows, in the order the query returned (title). Duplicate handles are dropped. */
+export function mapProductRows(rows: readonly ShopifyProductRow[] | null | undefined): ProductChoice[] {
+  const seen = new Set<string>();
+  const products: ProductChoice[] = [];
+  for (const row of rows ?? []) {
+    const handle = row.handle?.trim() ?? '';
+    if (!handle || seen.has(handle)) continue;
+    seen.add(handle);
+    const title = row.title?.trim() ?? '';
+    products.push({
+      product_key: `product:${handle}`,
+      product_label: title || handle,
+      product_kind: 'product',
+    });
+  }
+  return products;
+}
+
+/** Synced products first, then the generic landing choices. */
+export function productChoicesForBrand(rows: readonly ShopifyProductRow[] | null | undefined): ProductChoice[] {
+  return [...mapProductRows(rows), ...GENERIC_LANDING_OPTIONS];
+}
+
+export function filterProductChoices(
+  choices: readonly ProductChoice[],
+  query: string,
+  selectedLabel: string,
+): ProductChoice[] {
+  const trimmed = query.trim().toLowerCase();
+  const showingAll = trimmed === '' || trimmed === selectedLabel.trim().toLowerCase();
+  if (showingAll) return [...choices];
+  return choices.filter((choice) => choice.product_label.toLowerCase().includes(trimmed));
+}
+
+/**
+ * Typed name when the brand has no synced products.
+ * An exact catalog label (including Homepage / Shop All / No landing page) is returned as that choice.
+ * Anything else becomes a free-text product whose file slug is the typed name.
+ * Null when the text is blank or has no filename-safe characters.
+ */
+export function freeTextProductChoice(
+  query: string,
+  catalog: readonly ProductChoice[],
+): ProductChoice | null {
+  const label = query.trim();
+  if (!label) return null;
+  const exact = catalog.find((choice) => choice.product_label.toLowerCase() === label.toLowerCase());
+  if (exact) return exact;
+  const slug = fileNameSlug(label);
+  if (!slug) return null;
+  return {
+    product_key: `custom:${slug}`,
+    product_label: label,
+    product_kind: 'product',
+  };
+}
+
+export function isCatalogProductKey(productKey: string): boolean {
+  return productKey.startsWith('product:') || productKey.startsWith('custom:');
+}
+
+/** Drop a store or typed product when the brand changes. Generic landings stay. */
+export function productAfterBrandChange(
+  productKey: string,
+  productLabel: string,
+): { productKey: string; productLabel: string } {
+  if (isCatalogProductKey(productKey)) return { productKey: '', productLabel: '' };
+  return { productKey, productLabel };
+}
+
+/**
+ * Combobox rows. Free text is appended only when `allowFreeText` is set
+ * (no synced products, or the read failed) and the typed name is not already listed.
+ */
+export function visibleProductChoices(input: {
+  catalog: readonly ProductChoice[];
+  query: string;
+  selectedLabel: string;
+  allowFreeText: boolean;
+}): ProductChoice[] {
+  const filtered = filterProductChoices(input.catalog, input.query, input.selectedLabel);
+  if (!input.allowFreeText) return filtered;
+  const typed = input.query.trim();
+  const showingAll = typed === '' || typed.toLowerCase() === input.selectedLabel.trim().toLowerCase();
+  if (showingAll) return filtered;
+  const custom = freeTextProductChoice(typed, input.catalog);
+  if (!custom) return filtered;
+  if (filtered.some((choice) => choice.product_key === custom.product_key && choice.product_label === custom.product_label)) {
+    return filtered;
+  }
+  return [...filtered, custom];
+}
 
 export type UploadBrand = {
   id: string;
@@ -142,48 +240,48 @@ function card(
 
 export const SAMPLE_CREATIVES: Creative[] = [
   {
-    id: 'broth-pour',
-    name: 'Broth pour',
-    originalName: 'broth-pour.mp4',
-    caption: 'A slow pour, a quiet morning. Sample caption for the broth creative.',
-    productKey: 'product:chicken-bone-broth',
-    productLabel: 'Chicken Bone Broth',
+    id: 'morning-reel',
+    name: 'Morning reel',
+    originalName: 'morning-reel.mp4',
+    caption: 'A quiet morning, held for a beat. Placeholder caption only.',
+    productKey: '',
+    productLabel: '',
     angle: 'Morning ritual',
     handle: '@sample.creator',
     usageEndDate: '2026-12-31',
     perpetual: false,
     ratio: '9:16',
-    kicker: 'Broth pour',
+    kicker: 'Morning reel',
     from: '#E7C89A',
     to: '#6A4328',
     media: null,
     assets: [],
     cards: [
-      card('broth-1', 'Start with the pour', 'The pour', '#E7C89A', '#6A4328'),
-      card('broth-2', 'Steam, then sip', 'The steam', '#F0D7B4', '#8A5A32'),
-      card('broth-3', 'Bowl on the table', 'The bowl', '#C8B89A', '#3E2A1C'),
+      card('morning-1', 'Open on the morning', 'The open', '#E7C89A', '#6A4328'),
+      card('morning-2', 'Hold the frame', 'The hold', '#F0D7B4', '#8A5A32'),
+      card('morning-3', 'Close on the table', 'The close', '#C8B89A', '#3E2A1C'),
     ],
   },
   {
-    id: 'bestsellers-shelf',
-    name: 'Bestsellers shelf',
-    originalName: 'bestsellers-shelf.jpg',
+    id: 'shelf-still',
+    name: 'Shelf still',
+    originalName: 'shelf-still.jpg',
     caption: 'The shelf we keep restocking. Sample caption, not a live ad.',
-    productKey: 'collection:bestsellers',
-    productLabel: 'Collection: Bestsellers',
-    angle: 'Gut health, simply',
+    productKey: '',
+    productLabel: '',
+    angle: 'Everyday use',
     handle: '@sample.cook',
     usageEndDate: '',
     perpetual: true,
     ratio: '4:5',
-    kicker: 'Bestsellers',
+    kicker: 'The shelf',
     from: '#F3E6CF',
     to: '#8C7352',
     media: null,
     assets: [],
     cards: [
       card('shelf-1', 'The short list', 'Short list', '#F3E6CF', '#8C7352'),
-      card('shelf-2', 'What sells through', 'Sell-through', '#E4D2B0', '#6E5840'),
+      card('shelf-2', 'What stays in frame', 'In frame', '#E4D2B0', '#6E5840'),
       card('shelf-3', 'Restock the row', 'Restock', '#D9C4A4', '#4A3828'),
     ],
   },
@@ -192,9 +290,9 @@ export const SAMPLE_CREATIVES: Creative[] = [
     name: 'Homepage still',
     originalName: 'homepage-still.jpg',
     caption: 'Homepage hero, held for a beat. Placeholder copy only.',
-    productKey: 'homepage',
-    productLabel: 'Homepage',
-    angle: 'Founder taste test',
+    productKey: '',
+    productLabel: '',
+    angle: 'Founder on camera',
     handle: '@sample.founder',
     usageEndDate: '2027-01-15',
     perpetual: false,
@@ -205,42 +303,42 @@ export const SAMPLE_CREATIVES: Creative[] = [
     media: null,
     assets: [],
     cards: [
-      card('home-1', 'Open on the kitchen', 'Kitchen', '#D9D4CC', '#4E5550'),
+      card('home-1', 'Open on the room', 'The room', '#D9D4CC', '#4E5550'),
       card('home-2', 'Then the product', 'Product', '#C9C3BA', '#3C433E'),
-      card('home-3', 'End on the bowl', 'Bowl', '#B7B1A8', '#2C312E'),
+      card('home-3', 'Hold the last frame', 'Last frame', '#B7B1A8', '#2C312E'),
     ],
   },
   {
-    id: 'taste-test',
-    name: 'Founder taste test',
-    originalName: 'taste-test.mp4',
-    caption: 'First spoon, honest reaction. This creator is sample data.',
-    productKey: 'product:chicken-bone-broth',
-    productLabel: 'Chicken Bone Broth',
+    id: 'first-look',
+    name: 'First look',
+    originalName: 'first-look.mp4',
+    caption: 'First look, honest reaction. This creator is sample data.',
+    productKey: '',
+    productLabel: '',
     angle: 'Before and after week',
     handle: '@sample.ugc',
     usageEndDate: '',
     perpetual: true,
     ratio: '9:16',
-    kicker: 'Taste test',
+    kicker: 'First look',
     from: '#F2C7A5',
     to: '#7A4B45',
     media: null,
     assets: [],
     cards: [
-      card('taste-1', 'The first spoon', 'First spoon', '#F2C7A5', '#7A4B45'),
-      card('taste-2', 'The face after', 'Reaction', '#E7B394', '#5C3834'),
-      card('taste-3', 'The second bowl', 'Second bowl', '#D9A088', '#3E2824'),
+      card('look-1', 'The first look', 'First look', '#F2C7A5', '#7A4B45'),
+      card('look-2', 'The face after', 'Reaction', '#E7B394', '#5C3834'),
+      card('look-3', 'One more take', 'One more', '#D9A088', '#3E2824'),
     ],
   },
   {
-    id: 'collection-grid',
-    name: 'Collection grid',
-    originalName: 'collection-grid.jpg',
-    caption: 'Every jar in the set, in one frame. Sample collection creative.',
-    productKey: 'collection:bestsellers',
-    productLabel: 'Collection: Bestsellers',
-    angle: 'Gift for the cook',
+    id: 'grid-still',
+    name: 'Grid still',
+    originalName: 'grid-still.jpg',
+    caption: 'The full set, in one frame. Sample creative.',
+    productKey: '',
+    productLabel: '',
+    angle: 'Gift set',
     handle: '@sample.shop',
     usageEndDate: '2026-11-30',
     perpetual: false,
@@ -261,8 +359,8 @@ export const SAMPLE_CREATIVES: Creative[] = [
     name: 'Story cutdown',
     originalName: 'story-cutdown.mp4',
     caption: 'A shorter cut for stories. Still a mock file, not a real asset.',
-    productKey: 'shop_all',
-    productLabel: 'Shop All',
+    productKey: '',
+    productLabel: '',
     angle: 'Morning ritual',
     handle: '@sample.story',
     usageEndDate: '',
@@ -275,8 +373,8 @@ export const SAMPLE_CREATIVES: Creative[] = [
     assets: [],
     cards: [
       card('cut-1', 'Open fast', 'Open', '#C9D4F2', '#3A4670'),
-      card('cut-2', 'Show the jar', 'The jar', '#B7C4EA', '#2E3858'),
-      card('cut-3', 'End on the sip', 'The sip', '#A3B2DE', '#242C44'),
+      card('cut-2', 'Show the product', 'The product', '#B7C4EA', '#2E3858'),
+      card('cut-3', 'Hold the end', 'The end', '#A3B2DE', '#242C44'),
     ],
   },
 ];
