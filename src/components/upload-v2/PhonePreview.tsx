@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   BatteryFull,
   Bookmark,
@@ -17,7 +17,7 @@ import {
   Wifi,
 } from 'lucide-react';
 import {
-  SAMPLE_BRAND,
+  brandInitials,
   displayHandle,
   formatUsageEnd,
   type Creative,
@@ -30,6 +30,8 @@ type PhonePreviewProps = {
   creativeType: CreativeType;
   cardIndex: number;
   assetIndex: number;
+  brandName: string;
+  brandLogoUrl: string | null;
   onDropFiles: (files: File[]) => void;
 };
 
@@ -65,14 +67,28 @@ function HomeIndicator({ ink }: { ink: 'white' | 'black' }) {
   );
 }
 
-function Avatar({ letter }: { letter: string }) {
+function BrandMark({ name, logoUrl, ink }: { name: string; logoUrl: string | null; ink: 'white' | 'black' }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+  }, [logoUrl]);
+  const initials = brandInitials(name);
+  if (logoUrl && !failed) {
+    return (
+      <span data-brand-mark="logo" className="flex h-7 w-7 shrink-0 overflow-hidden rounded-full bg-white ring-1 ring-black/10">
+        {/* Same favicon URL the navbar already loads from brands.website_url. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={logoUrl} alt="" className="h-full w-full object-cover" onError={() => setFailed(true)} />
+      </span>
+    );
+  }
   return (
     <span
+      data-brand-mark="initials"
       aria-hidden
-      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-[#0A0A0A]"
-      style={{ background: 'linear-gradient(135deg, #C8B89A 0%, #A89474 100%)' }}
+      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ${ink === 'white' ? 'bg-white/15 text-white' : 'bg-[#EFEFEF] text-[#262626]'}`}
     >
-      {letter}
+      {initials || '·'}
     </span>
   );
 }
@@ -142,12 +158,12 @@ function TabBar() {
   );
 }
 
-function PartnershipHeader({ handle }: { handle: string }) {
+function PartnershipHeader({ name, logoUrl }: { name: string; logoUrl: string | null }) {
   return (
     <div className="absolute inset-x-3 top-11 z-20 flex items-center gap-2 text-white">
-      <Avatar letter={handle.replace('@', '').slice(0, 1).toUpperCase() || 'S'} />
+      <BrandMark name={name} logoUrl={logoUrl} ink="white" />
       <div className="min-w-0">
-        <p className="truncate text-[12px] font-semibold leading-tight">{handle}</p>
+        <p className="truncate text-[12px] font-semibold leading-tight">{name}</p>
         <p className="text-[10px] leading-tight text-white/80">Paid partnership</p>
       </div>
       <span className="ml-auto shrink-0 rounded border border-white/80 px-2 py-0.5 text-[11px] font-semibold">
@@ -173,6 +189,8 @@ export default function PhonePreview({
   creativeType,
   cardIndex,
   assetIndex,
+  brandName,
+  brandLogoUrl,
   onDropFiles,
 }: PhonePreviewProps) {
   const [dragOver, setDragOver] = useState(false);
@@ -191,7 +209,7 @@ export default function PhonePreview({
   const caption = creative.caption.trim();
   const ratio = creative.ratio;
   const feed = ratio !== '9:16';
-  const accountName = creativeType === 'whitelist' ? handle : 'sample.brand';
+  const accountName = brandName.trim();
   const previewLabel = [
     creativeType === 'whitelist' ? 'Whitelist ad preview' : creativeType === 'carousel' ? 'Carousel ad preview' : 'Flexible ad preview',
     ratio,
@@ -218,7 +236,7 @@ export default function PhonePreview({
       {stage}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-48 bg-gradient-to-t from-black/80 to-transparent" />
       {creativeType === 'whitelist' ? (
-        <PartnershipHeader handle={handle} />
+        <PartnershipHeader name={accountName} logoUrl={brandLogoUrl} />
       ) : (
         <div aria-hidden className="absolute inset-x-0 top-11 z-20 flex justify-center gap-5 text-[14px] font-semibold">
           <span>Reels</span>
@@ -229,14 +247,14 @@ export default function PhonePreview({
       <div className="absolute inset-x-0 bottom-[52px] z-20 flex flex-col gap-2 px-3 pb-3 pr-16">
         {creativeType === 'flexible' ? <FlexibleHint count={assets.length} /> : null}
         <div className="flex items-center gap-2">
-          <Avatar letter={accountName.replace('@', '').slice(0, 1).toUpperCase() || 'S'} />
+          <BrandMark name={accountName} logoUrl={brandLogoUrl} ink="white" />
           <span className="truncate text-[13px] font-semibold">{accountName}</span>
           {creativeType === 'whitelist' ? null : (
             <span className="rounded border border-white/70 px-1.5 py-0.5 text-[11px] font-semibold">Follow</span>
           )}
         </div>
-        {creativeType === 'whitelist' ? (
-          <p className="text-[10px] text-white/75">Paid partnership with {SAMPLE_BRAND}</p>
+        {creativeType === 'whitelist' && handle ? (
+          <p className="text-[10px] text-white/75">{handle}</p>
         ) : null}
         {usageLine ? <p className="text-[10px] text-white/75">{usageLine}</p> : null}
         {creativeType === 'carousel' && art.headline ? (
@@ -254,7 +272,7 @@ export default function PhonePreview({
     <div className="absolute inset-0 flex flex-col overflow-hidden bg-white text-[#262626]">
       <div className="h-11 shrink-0" />
       <div className="flex shrink-0 items-center gap-2 px-3 py-2">
-        <Avatar letter={accountName.replace('@', '').slice(0, 1).toUpperCase() || 'S'} />
+        <BrandMark name={accountName} logoUrl={brandLogoUrl} ink="black" />
         <div className="min-w-0 flex-1">
           <p className="truncate text-[13px] font-semibold leading-tight">{accountName}</p>
           {creativeType === 'whitelist' ? (

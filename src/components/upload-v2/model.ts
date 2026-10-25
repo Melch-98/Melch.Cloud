@@ -77,6 +77,46 @@ export const SAMPLE_PRODUCTS: SampleProduct[] = [
 
 export const SAMPLE_BRAND = 'Sample Brand';
 
+export type UploadBrand = {
+  id: string;
+  name: string;
+  slug: string;
+  websiteUrl: string | null;
+};
+
+/** Hostname from brands.website_url. Matches the navbar favicon lookup. */
+export function brandDomain(websiteUrl: string | null | undefined): string | null {
+  const raw = websiteUrl?.trim();
+  if (!raw) return null;
+  try {
+    const url = new URL(raw.startsWith('http') ? raw : `https://${raw}`);
+    return url.hostname || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * brands has no logo column. The navbar already turns brands.website_url into this favicon URL.
+ * A null result means the brand has no website, so the phone uses initials.
+ */
+export function brandLogoUrl(websiteUrl: string | null | undefined): string | null {
+  const domain = brandDomain(websiteUrl);
+  if (!domain) return null;
+  return `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
+}
+
+export function brandInitials(name: string): string {
+  const letters = name
+    .trim()
+    .split(/\s+/)
+    .map((word) => word.match(/[A-Za-z0-9]/)?.[0] ?? '')
+    .filter(Boolean);
+  if (!letters.length) return '';
+  if (letters.length === 1) return letters[0].toUpperCase();
+  return (letters[0] + letters[1]).toUpperCase();
+}
+
 /** ISO week of the local calendar date (week 1 contains the first Thursday). */
 export function isoWeekNumber(date: Date): number {
   const utc = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));

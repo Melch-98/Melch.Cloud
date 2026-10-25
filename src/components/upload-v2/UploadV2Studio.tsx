@@ -15,12 +15,14 @@ import {
   moveItem,
   nearestAspectRatio,
   removeCarouselCard,
+  brandLogoUrl,
   revokeMedia,
   weekFolderLabel,
   type Creative,
   type CreativeType,
   type LocalMedia,
   type ReplaceTarget,
+  type UploadBrand,
 } from '@/components/upload-v2/model';
 import PhonePreview from '@/components/upload-v2/PhonePreview';
 
@@ -93,7 +95,17 @@ function revokeAll(creative: Creative) {
   creative.cards.forEach((card) => revokeMedia(card.media));
 }
 
-export default function UploadV2Studio() {
+export default function UploadV2Studio({
+  brands,
+  lockedBrandId,
+}: {
+  brands: UploadBrand[];
+  lockedBrandId?: string;
+}) {
+  const brandLocked = Boolean(lockedBrandId) || brands.length <= 1;
+  const [brandId, setBrandId] = useState<string | undefined>(
+    () => lockedBrandId || (brands.length === 1 ? brands[0]?.id : undefined),
+  );
   const [creatives, setCreatives] = useState<Creative[]>(() => SAMPLE_CREATIVES.map(cloneCreative));
   const [weekLabel, setWeekLabel] = useState('Week');
   const [creatorName, setCreatorName] = useState('');
@@ -123,6 +135,17 @@ export default function UploadV2Studio() {
   useEffect(() => {
     setWeekLabel(weekFolderLabel());
   }, []);
+
+  useEffect(() => {
+    if (lockedBrandId) {
+      setBrandId(lockedBrandId);
+      return;
+    }
+    if (brands.length === 1) setBrandId(brands[0].id);
+  }, [lockedBrandId, brands]);
+
+  const brand = brands.find((item) => item.id === brandId) ?? null;
+  const logoUrl = brandLogoUrl(brand?.websiteUrl);
 
   useEffect(() => {
     const stopNavigation = (event: DragEvent) => {
@@ -472,12 +495,19 @@ export default function UploadV2Studio() {
           creativeType={creativeType}
           cardIndex={cardIndex}
           assetIndex={assetIndex}
+          brandName={brand?.name ?? ''}
+          brandLogoUrl={logoUrl}
           onDropFiles={applyFiles}
         />
       </div>
       <div className="order-1 min-w-0 lg:col-start-2 lg:row-start-1">
         <ControlCard
           weekLabel={weekLabel}
+          brandName={brand?.name ?? ''}
+          brands={brands}
+          brandId={brandId}
+          brandLocked={brandLocked}
+          onBrand={setBrandId}
           creatorName={creatorName}
           creative={creative}
           creativeIndex={safeIndex}

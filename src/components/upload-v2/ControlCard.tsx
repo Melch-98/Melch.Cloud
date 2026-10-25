@@ -16,7 +16,6 @@ import {
   CAROUSEL_MAX_CARDS,
   CAROUSEL_MIN_CARDS,
   FLEXIBLE_MAX_ASSETS,
-  SAMPLE_BRAND,
   SAMPLE_PRODUCTS,
   aspectCropNote,
   formatBytes,
@@ -28,6 +27,7 @@ import {
   type LocalMedia,
   type ReplaceTarget,
   type SampleProduct,
+  type UploadBrand,
 } from '@/components/upload-v2/model';
 import { localToday, usageEndDateError } from '@/lib/usage-end-date';
 
@@ -57,6 +57,11 @@ type CreativePatch = Partial<Pick<Creative, 'caption' | 'productKey' | 'productL
 
 type ControlCardProps = {
   weekLabel: string;
+  brandName: string;
+  brands: UploadBrand[];
+  brandId?: string;
+  brandLocked: boolean;
+  onBrand: (id: string) => void;
   creatorName: string;
   creative: Creative;
   creativeIndex: number;
@@ -366,6 +371,11 @@ function dropHint(creativeType: CreativeType, batchOn: boolean): string {
 export default function ControlCard(props: ControlCardProps) {
   const {
     weekLabel,
+    brandName,
+    brands,
+    brandId,
+    brandLocked,
+    onBrand,
     creatorName,
     creative,
     creativeIndex,
@@ -420,7 +430,7 @@ export default function ControlCard(props: ControlCardProps) {
     activeShownName: shownMedia?.name ?? null,
   });
   const filePreview = fileNames[creativeIndex];
-  const savePath = `${SAMPLE_BRAND} / ${weekLabel} / ${filePreview.fileName}`;
+  const savePath = [brandName, weekLabel, filePreview.fileName].filter(Boolean).join(' / ');
 
   const carouselFull = creative.cards.length >= CAROUSEL_MAX_CARDS && creative.cards.every((card) => card.media);
   const flexibleFull = creative.assets.length >= FLEXIBLE_MAX_ASSETS;
@@ -595,6 +605,25 @@ export default function ControlCard(props: ControlCardProps) {
       className="min-w-0 rounded-xl"
       style={{ backgroundColor: '#111111', border: '1px solid rgba(255,255,255,0.06)' }}
     >
+      {!brandLocked && brands.length > 1 ? (
+        <div className="border-b border-white/[0.06] px-4 py-3 sm:px-5">
+          <label className="block">
+            <span className={fieldLabelClass}>Brand</span>
+            <select
+              data-control="brand"
+              value={brandId || ''}
+              onChange={(event) => onBrand(event.target.value)}
+              className={inputClass}
+              style={inputStyle}
+            >
+              <option value="" disabled>Choose a brand</option>
+              {brands.map((brand) => (
+                <option key={brand.id} value={brand.id}>{brand.name}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+      ) : null}
       <section data-section="files" className="p-4 sm:p-5" {...dragHandlers}>
         <SectionHeading index={1} title="Files" hint={countHint} hintAlert={atCap} />
         <input
@@ -950,8 +979,12 @@ export default function ControlCard(props: ControlCardProps) {
       <section data-section="saves" className="border-t border-white/[0.06] px-4 py-4 sm:px-5" style={{ backgroundColor: 'rgba(255,255,255,0.02)' }}>
         <SectionHeading index={4} title="Saves to" />
         <p className="break-all text-sm leading-5 text-[#F5F5F8]">
-          <span className="font-medium text-[#C8B89A]">{SAMPLE_BRAND}</span>
-          <span className="text-gray-600"> / </span>
+          {brandName ? (
+            <>
+              <span className="font-medium text-[#C8B89A]">{brandName}</span>
+              <span className="text-gray-600"> / </span>
+            </>
+          ) : null}
           {weekLabel}
           <span className="text-gray-600"> / </span>
           <span className="font-mono text-[13px]">{filePreview.fileName}</span>

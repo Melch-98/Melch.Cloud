@@ -7,6 +7,8 @@ import {
   addCarouselMedia,
   addFlexibleAssets,
   appendBatchCreatives,
+  brandInitials,
+  brandLogoUrl,
   followMove,
   formatBytes,
   moveItem,
@@ -118,5 +120,21 @@ describe('upload-v2 file placement', () => {
     expect(followMove(1, 3, 0)).toBe(2);
     expect(formatBytes(1536)).toBe('1.5 KB');
     expect(formatBytes(2_400_000)).toBe('2.3 MB');
+  });
+
+  it('uses the navbar favicon for a website and initials when there is none', () => {
+    expect(brandLogoUrl('https://www.shopmintier.com/')).toBe(
+      'https://www.google.com/s2/favicons?domain=www.shopmintier.com&sz=64',
+    );
+    expect(brandLogoUrl('tallowtwins.ca')).toBe(
+      'https://www.google.com/s2/favicons?domain=tallowtwins.ca&sz=64',
+    );
+    expect(brandLogoUrl(null)).toBeNull();
+    expect(brandLogoUrl('   ')).toBeNull();
+    expect(brandLogoUrl('not a url')).toBeNull();
+    expect(brandInitials('Tallow Twins')).toBe('TT');
+    expect(brandInitials('Mintier')).toBe('M');
+    expect(brandInitials('FOND Regenerative')).toBe('FR');
+    expect(brandInitials('')).toBe('');
   });
 });
