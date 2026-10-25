@@ -20,16 +20,15 @@ import {
 import {
   SAMPLE_BRAND,
   displayHandle,
+  formatUsageEnd,
   type Creative,
   type CreativeType,
   type LocalMedia,
-  type Placement,
 } from '@/components/upload-v2/model';
 
 type PhonePreviewProps = {
   creative: Creative;
   creativeType: CreativeType;
-  placement: Placement;
   cardIndex: number;
   onCardIndex: (index: number) => void;
   onDropFiles: (files: File[]) => void;
@@ -171,7 +170,6 @@ function FlexibleHint({ className = '' }: { className?: string }) {
 export default function PhonePreview({
   creative,
   creativeType,
-  placement,
   cardIndex,
   onCardIndex,
   onDropFiles,
@@ -262,7 +260,7 @@ export default function PhonePreview({
         aria-label="Next card"
         disabled={safeIndex === cards.length - 1}
         onClick={() => stepCard(1)}
-        className={`absolute top-1/2 z-20 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm disabled:opacity-30 ${placement === 'reels' ? 'right-12' : 'right-2'}`}
+        className="absolute right-12 top-1/2 z-20 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm disabled:opacity-30"
       >
         <ChevronRight className="h-4 w-4" />
       </button>
@@ -286,94 +284,7 @@ export default function PhonePreview({
     </div>
   );
 
-  let screen: React.ReactNode;
-  if (placement === 'feed') {
-    screen = (
-      <div className="absolute inset-0 flex flex-col bg-black text-white">
-        <div className="h-10 shrink-0" />
-        <div className="flex items-center gap-2 px-3 pb-2">
-          <Avatar letter={(creativeType === 'whitelist' ? handle : 'S').replace('@', '').slice(0, 1).toUpperCase()} />
-          <div className="min-w-0">
-            <p className="truncate text-[12px] font-semibold">{creativeType === 'whitelist' ? handle : 'sample.brand'}</p>
-            <p className="text-[10px] text-white/70">
-              {creativeType === 'whitelist' ? `Paid partnership with ${SAMPLE_BRAND}` : SAMPLE_BRAND}
-            </p>
-          </div>
-        </div>
-        <div className="relative min-h-0 flex-1">
-          {stage}
-          {creativeType === 'carousel' ? (
-            <div className="pointer-events-none absolute inset-x-0 bottom-2 z-20 flex justify-center [&_button]:pointer-events-auto">
-              {dots}
-            </div>
-          ) : null}
-        </div>
-        {creativeType === 'flexible' ? (
-          <div className="px-3 pt-2">
-            <FlexibleHint />
-          </div>
-        ) : null}
-        <div aria-hidden className="flex items-center gap-3 px-3 py-2">
-          <Heart className="h-5 w-5" strokeWidth={1.75} />
-          <MessageCircle className="h-5 w-5" strokeWidth={1.75} />
-          <Send className="h-5 w-5" strokeWidth={1.75} />
-          <Bookmark className="ml-auto h-5 w-5" strokeWidth={1.75} />
-        </div>
-        <div className="px-3 pb-5">
-          {creativeType === 'carousel' && art.headline ? (
-            <p className="text-[12px] font-semibold leading-snug">{art.headline}</p>
-          ) : null}
-          <p className="line-clamp-3 text-[12px] leading-snug text-white/90">
-            <span className="font-semibold">{creativeType === 'whitelist' ? handle : 'sample.brand'} </span>
-            {caption || <span className="text-white/50">Add a caption</span>}
-          </p>
-        </div>
-      </div>
-    );
-  } else if (placement === 'stories') {
-    screen = (
-      <div className="absolute inset-0 text-white">
-        {stage}
-        <div className="absolute inset-x-3 top-10 z-20 flex gap-1">
-          {(creativeType === 'carousel' ? cards : [cards[0]]).map((item, index) => (
-            <span
-              key={item.id}
-              className="h-0.5 flex-1 rounded-full"
-              style={{ backgroundColor: creativeType !== 'carousel' || index <= safeIndex ? '#ffffff' : 'rgba(255,255,255,0.35)' }}
-            />
-          ))}
-        </div>
-        <div className="absolute inset-x-3 top-12 z-20 flex items-center gap-2">
-          <Avatar letter={handle.replace('@', '').slice(0, 1).toUpperCase()} />
-          <div className="min-w-0">
-            <p className="truncate text-[12px] font-semibold">{creativeType === 'whitelist' ? handle : 'sample.brand'}</p>
-            {creativeType === 'whitelist' ? (
-              <p className="text-[10px] text-white/80">Paid partnership</p>
-            ) : null}
-          </div>
-          <span className="ml-auto text-[11px] text-white/70">3h</span>
-        </div>
-        {creativeType === 'flexible' ? (
-          <div className="absolute left-3 top-24 z-20">
-            <FlexibleHint />
-          </div>
-        ) : null}
-        <div className="absolute inset-x-3 bottom-[4.5rem] z-20">
-          {dots ? <div className="mb-2">{dots}</div> : null}
-          {creativeType === 'carousel' && art.headline ? (
-            <p className="text-[13px] font-semibold leading-snug">{art.headline}</p>
-          ) : null}
-          <p className="line-clamp-2 text-[12px] leading-snug">
-            {caption || <span className="text-white/60">Add a caption</span>}
-          </p>
-        </div>
-        <div aria-hidden className="absolute inset-x-3 bottom-5 z-20 truncate rounded-full border border-white/50 px-3 py-2 text-[12px] text-white/80">
-          Send message
-        </div>
-      </div>
-    );
-  } else {
-    screen = (
+  const screen = (
       <div className="absolute inset-0 text-white">
         {stage}
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-48 bg-gradient-to-t from-black/80 to-transparent" />
@@ -401,6 +312,12 @@ export default function PhonePreview({
           {creativeType === 'whitelist' ? (
             <p className="text-[10px] text-white/75">Paid partnership with {SAMPLE_BRAND}</p>
           ) : null}
+          {creativeType === 'whitelist' && creative.perpetual ? (
+            <p className="text-[10px] text-white/75">Perpetual</p>
+          ) : null}
+          {creativeType === 'whitelist' && !creative.perpetual && creative.usageEndDate ? (
+            <p className="text-[10px] text-white/75">Usage ends {formatUsageEnd(creative.usageEndDate)}</p>
+          ) : null}
           {creativeType === 'carousel' && art.headline ? (
             <p className="text-[13px] font-semibold leading-snug">{art.headline}</p>
           ) : null}
@@ -410,8 +327,7 @@ export default function PhonePreview({
         </div>
         <TabBar />
       </div>
-    );
-  }
+  );
 
   return (
     <div className="mx-auto w-full max-w-[280px]">

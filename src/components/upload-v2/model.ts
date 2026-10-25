@@ -1,5 +1,4 @@
 export type CreativeType = 'whitelist' | 'carousel' | 'flexible';
-export type Placement = 'reels' | 'stories' | 'feed';
 
 export type LocalMedia = {
   url: string;
@@ -16,13 +15,22 @@ export type CarouselCard = {
   media: LocalMedia | null;
 };
 
+export type SampleProduct = {
+  product_key: string;
+  product_label: string;
+  product_kind: 'product' | 'homepage' | 'collection' | 'shop_all' | 'none';
+};
+
 export type Creative = {
   id: string;
   name: string;
   caption: string;
-  product: string;
+  productKey: string;
+  productLabel: string;
   angle: string;
   handle: string;
+  usageEndDate: string;
+  perpetual: boolean;
   kicker: string;
   from: string;
   to: string;
@@ -30,21 +38,14 @@ export type Creative = {
   cards: CarouselCard[];
 };
 
-export const SAMPLE_PRODUCTS = [
-  'Chicken Bone Broth - Bestsellers',
-  'Homepage',
-  'Collection',
-  'Bone Broth Variety — sample',
-  'Shop All — sample',
-] as const;
-
-export const ANGLE_SUGGESTIONS = [
-  'Morning ritual',
-  'Gut health, simply',
-  'Founder taste test',
-  'Before and after week',
-  'Gift for the cook',
-] as const;
+export const SAMPLE_PRODUCTS: SampleProduct[] = [
+  { product_key: 'product:chicken-bone-broth', product_label: 'Chicken Bone Broth', product_kind: 'product' },
+  { product_key: 'product:variety-pack', product_label: 'Variety Pack', product_kind: 'product' },
+  { product_key: 'homepage', product_label: 'Homepage', product_kind: 'homepage' },
+  { product_key: 'collection:bestsellers', product_label: 'Collection: Bestsellers', product_kind: 'collection' },
+  { product_key: 'shop_all', product_label: 'Shop All', product_kind: 'shop_all' },
+  { product_key: 'none', product_label: 'No landing page', product_kind: 'none' },
+];
 
 export const SAMPLE_BRAND = 'Sample Brand';
 
@@ -63,9 +64,12 @@ export const SAMPLE_CREATIVES: Creative[] = [
     id: 'broth-pour',
     name: 'Broth pour',
     caption: 'A slow pour, a quiet morning. Sample caption for the broth creative.',
-    product: 'Chicken Bone Broth - Bestsellers',
+    productKey: 'product:chicken-bone-broth',
+    productLabel: 'Chicken Bone Broth',
     angle: 'Morning ritual',
     handle: '@sample.creator',
+    usageEndDate: '2026-12-31',
+    perpetual: false,
     kicker: 'Broth pour',
     from: '#E7C89A',
     to: '#6A4328',
@@ -80,9 +84,12 @@ export const SAMPLE_CREATIVES: Creative[] = [
     id: 'bestsellers-shelf',
     name: 'Bestsellers shelf',
     caption: 'The shelf we keep restocking. Sample caption, not a live ad.',
-    product: 'Chicken Bone Broth - Bestsellers',
+    productKey: 'collection:bestsellers',
+    productLabel: 'Collection: Bestsellers',
     angle: 'Gut health, simply',
     handle: '@sample.cook',
+    usageEndDate: '',
+    perpetual: true,
     kicker: 'Bestsellers',
     from: '#F3E6CF',
     to: '#8C7352',
@@ -97,9 +104,12 @@ export const SAMPLE_CREATIVES: Creative[] = [
     id: 'homepage-still',
     name: 'Homepage still',
     caption: 'Homepage hero, held for a beat. Placeholder copy only.',
-    product: 'Homepage',
+    productKey: 'homepage',
+    productLabel: 'Homepage',
     angle: 'Founder taste test',
     handle: '@sample.founder',
+    usageEndDate: '2027-01-15',
+    perpetual: false,
     kicker: 'Homepage',
     from: '#D9D4CC',
     to: '#4E5550',
@@ -114,9 +124,12 @@ export const SAMPLE_CREATIVES: Creative[] = [
     id: 'taste-test',
     name: 'Founder taste test',
     caption: 'First spoon, honest reaction. This creator is sample data.',
-    product: 'Chicken Bone Broth - Bestsellers',
+    productKey: 'product:chicken-bone-broth',
+    productLabel: 'Chicken Bone Broth',
     angle: 'Before and after week',
     handle: '@sample.ugc',
+    usageEndDate: '',
+    perpetual: true,
     kicker: 'Taste test',
     from: '#F2C7A5',
     to: '#7A4B45',
@@ -131,9 +144,12 @@ export const SAMPLE_CREATIVES: Creative[] = [
     id: 'collection-grid',
     name: 'Collection grid',
     caption: 'Every jar in the set, in one frame. Sample collection creative.',
-    product: 'Collection',
+    productKey: 'collection:bestsellers',
+    productLabel: 'Collection: Bestsellers',
     angle: 'Gift for the cook',
     handle: '@sample.shop',
+    usageEndDate: '2026-11-30',
+    perpetual: false,
     kicker: 'The set',
     from: '#E7B7C4',
     to: '#6A3A48',
@@ -148,9 +164,12 @@ export const SAMPLE_CREATIVES: Creative[] = [
     id: 'story-cutdown',
     name: 'Story cutdown',
     caption: 'A shorter cut for stories. Still a mock file, not a real asset.',
-    product: 'Collection',
+    productKey: 'shop_all',
+    productLabel: 'Shop All',
     angle: 'Morning ritual',
     handle: '@sample.story',
+    usageEndDate: '',
+    perpetual: true,
     kicker: 'Cutdown',
     from: '#C9D4F2',
     to: '#3A4670',
@@ -188,4 +207,14 @@ export function mediaKind(file: File): 'image' | 'video' | null {
 
 export function revokeMedia(media: LocalMedia | null) {
   if (media?.url.startsWith('blob:')) URL.revokeObjectURL(media.url);
+}
+
+export function formatUsageEnd(iso: string): string {
+  const [year, month, day] = iso.split('-').map(Number);
+  if (!year || !month || !day) return iso;
+  return new Date(year, month - 1, day).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
 }

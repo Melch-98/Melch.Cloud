@@ -11,14 +11,12 @@ import {
   type Creative,
   type CreativeType,
   type LocalMedia,
-  type Placement,
 } from '@/components/upload-v2/model';
 import PhonePreview from '@/components/upload-v2/PhonePreview';
 
 export default function UploadV2Studio() {
   const [creatives, setCreatives] = useState<Creative[]>(() => SAMPLE_CREATIVES.map(cloneCreative));
   const [creativeType, setCreativeType] = useState<CreativeType>('whitelist');
-  const [placement, setPlacement] = useState<Placement>('reels');
   const [batchOn, setBatchOn] = useState(false);
   const [index, setIndex] = useState(0);
   const [cardIndexById, setCardIndexById] = useState<Record<string, number>>({});
@@ -62,7 +60,7 @@ export default function UploadV2Studio() {
     return () => window.removeEventListener('keydown', onKey);
   }, [batchOn, creatives.length]);
 
-  function patchCreative(patch: Partial<Pick<Creative, 'caption' | 'product' | 'angle' | 'handle'>>) {
+  function patchCreative(patch: Partial<Pick<Creative, 'caption' | 'productKey' | 'productLabel' | 'angle' | 'handle' | 'usageEndDate' | 'perpetual'>>) {
     setCreatives((current) => current.map((item) => (
       item.id === creative.id ? { ...item, ...patch } : item
     )));
@@ -197,7 +195,6 @@ export default function UploadV2Studio() {
         <PhonePreview
           creative={creative}
           creativeType={creativeType}
-          placement={placement}
           cardIndex={cardIndex}
           onCardIndex={(next) => {
             setCardIndexById((current) => ({ ...current, [creative.id]: next }));
@@ -214,7 +211,6 @@ export default function UploadV2Studio() {
           batchOn={batchOn}
           creatives={creatives}
           creativeType={creativeType}
-          placement={placement}
           cardIndex={cardIndex}
           shownMedia={shownMedia}
           mediaNote={mediaNote}
@@ -222,7 +218,6 @@ export default function UploadV2Studio() {
             setCreativeType(value);
             setMediaNote(null);
           }}
-          onPlacement={setPlacement}
           onBatch={(value) => {
             setBatchOn(value);
             setMediaNote(null);

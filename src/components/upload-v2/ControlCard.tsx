@@ -3,13 +3,13 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { GalleryHorizontal, Layers, Upload, Users, type LucideIcon } from 'lucide-react';
 import {
-  ANGLE_SUGGESTIONS,
   SAMPLE_PRODUCTS,
   type Creative,
   type CreativeType,
   type LocalMedia,
-  type Placement,
+  type SampleProduct,
 } from '@/components/upload-v2/model';
+import { localToday, usageEndDateError } from '@/lib/usage-end-date';
 
 const inputClass =
   'w-full px-3.5 py-2.5 rounded-lg text-sm text-[#F5F5F8] placeholder-gray-600 focus:outline-none transition-all focus:border-[#C8B89A]/40';
@@ -27,11 +27,7 @@ const TYPE_OPTIONS: { value: CreativeType; label: string; icon: LucideIcon }[] =
   { value: 'flexible', label: 'Flexible', icon: Layers },
 ];
 
-const PLACEMENT_OPTIONS: { value: Placement; label: string }[] = [
-  { value: 'reels', label: 'Reels' },
-  { value: 'stories', label: 'Stories' },
-  { value: 'feed', label: 'Feed' },
-];
+type CreativePatch = Partial<Pick<Creative, 'caption' | 'productKey' | 'productLabel' | 'angle' | 'handle' | 'usageEndDate' | 'perpetual'>>;
 
 type ControlCardProps = {
   creative: Creative;
@@ -40,15 +36,13 @@ type ControlCardProps = {
   batchOn: boolean;
   creatives: Creative[];
   creativeType: CreativeType;
-  placement: Placement;
   cardIndex: number;
   shownMedia: LocalMedia | null;
   mediaNote: string | null;
   onCreativeType: (value: CreativeType) => void;
-  onPlacement: (value: Placement) => void;
   onBatch: (value: boolean) => void;
   onSelectCreative: (index: number) => void;
-  onPatch: (patch: Partial<Pick<Creative, 'caption' | 'product' | 'angle' | 'handle'>>) => void;
+  onPatch: (patch: CreativePatch) => void;
   onHeadline: (headline: string) => void;
   onFiles: (files: File[]) => void;
   onClearMedia: () => void;
@@ -119,37 +113,50 @@ function Segmented<T extends string>({
 }
 
 function ProductField({
-  value,
+  productKey,
+  productLabel,
   creativeId,
   onChange,
 }: {
-  value: string;
+  productKey: string;
+  productLabel: string;
   creativeId: string;
-  onChange: (value: string) => void;
+  onChange: (choice: SampleProduct) => void;
 }) {
   const inputId = useId();
   const listId = useId();
   const boxRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
-  const query = value.trim().toLowerCase();
-  const options = SAMPLE_PRODUCTS.filter((product) => product.toLowerCase().includes(query));
+  const [query, setQuery] = useState(productLabel);
 
   useEffect(() => {
+    setQuery(productLabel);
     setOpen(false);
-  }, [creativeId]);
+    setActive(0);
+  }, [creativeId, productLabel]);
 
   useEffect(() => {
     if (!open) return;
     function onPointerDown(event: PointerEvent) {
-      if (!boxRef.current?.contains(event.target as Node)) setOpen(false);
+      if (!boxRef.current?.contains(event.target as Node)) {
+        setQuery(productLabel);
+        setOpen(false);
+      }
     }
     document.addEventListener('pointerdown', onPointerDown);
     return () => document.removeEventListener('pointerdown', onPointerDown);
-  }, [open]);
+  }, [open, productLabel]);
 
-  function choose(next: string) {
-    onChange(next);
+  const trimmed = query.trim().toLowerCase();
+  const showingAll = trimmed === '' || trimmed === productLabel.trim().toLowerCase();
+  const options = showingAll
+    ? SAMPLE_PRODUCTS
+    : SAMPLE_PRODUCTS.filter((product) => product.product_label.toLowerCase().includes(trimmed));
+
+  function choose(choice: SampleProduct) {
+    onChange(choice);
+    setQuery(choice.product_label);
     setOpen(false);
   }
 
@@ -159,7 +166,7 @@ function ProductField({
       event.stopPropagation();
       if (!open) {
         setOpen(true);
-        setActive(0);
+        setActive(Math.max(0, options.findIndex((product) => product.product_key === productKey)));
         return;
       }
       if (options.length === 0) return;
@@ -171,11 +178,11 @@ function ProductField({
       event.preventDefault();
       const option = options[active];
       if (option) choose(option);
-      else setOpen(false);
       return;
     }
     if (event.key === 'Escape') {
       event.preventDefault();
+      setQuery(productLabel);
       setOpen(false);
     }
   }
@@ -192,15 +199,22 @@ function ProductField({
         aria-controls={listId}
         aria-autocomplete="list"
         aria-activedescendant={open && options[active] ? `${listId}-opt-${active}` : undefined}
-        value={value}
-        placeholder="Search sample products"
+        value={query}
+        placeholder="Search products"
         autoComplete="off"
         onChange={(event) => {
-          onChange(event.target.value);
+          setQuery(event.target.value);
           setOpen(true);
           setActive(0);
         }}
-        onFocus={() => setOpen(true)}
+        onFocus={(event) => {
+          setOpen(true);
+          event.currentTarget.select();
+        }}
+        onBlur={() => {
+          setQuery(productLabel);
+          setOpen(false);
+        }}
         onKeyDown={onKeyDown}
         className={inputClass}
         style={inputStyle}
@@ -209,29 +223,30 @@ function ProductField({
         <ul
           id={listId}
           role="listbox"
-          aria-label="Sample products"
+          aria-label="Products"
           className="absolute left-0 right-0 z-30 mt-1 max-h-52 overflow-auto rounded-lg py-1 shadow-popover"
           style={{ backgroundColor: '#1A1A1A', border: '1px solid rgba(255,255,255,0.1)' }}
         >
           {options.length === 0 ? (
-            <li className="px-3 py-2 text-sm text-gray-500">No sample matches. The typed product stays on this creative.</li>
+            <li className="px-3 py-2 text-sm text-gray-500">No matches in the sample catalog.</li>
           ) : (
             options.map((product, index) => {
-              const selected = index === active;
+              const highlighted = index === active;
+              const selected = product.product_key === productKey;
               return (
-                <li key={product} id={`${listId}-opt-${index}`} role="option" aria-selected={selected}>
+                <li key={product.product_key} id={`${listId}-opt-${index}`} role="option" aria-selected={selected}>
                   <button
                     type="button"
                     className="block w-full px-3 py-2 text-left text-sm"
                     style={{
-                      backgroundColor: selected ? 'rgba(200,184,154,0.15)' : 'transparent',
-                      color: selected ? '#C8B89A' : '#F5F5F8',
+                      backgroundColor: highlighted ? 'rgba(200,184,154,0.15)' : 'transparent',
+                      color: highlighted || selected ? '#C8B89A' : '#F5F5F8',
                     }}
                     onMouseEnter={() => setActive(index)}
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => choose(product)}
                   >
-                    {product}
+                    {product.product_label}
                   </button>
                 </li>
               );
@@ -252,12 +267,10 @@ export default function ControlCard(props: ControlCardProps) {
     batchOn,
     creatives,
     creativeType,
-    placement,
     cardIndex,
     shownMedia,
     mediaNote,
     onCreativeType,
-    onPlacement,
     onBatch,
     onSelectCreative,
     onPatch,
@@ -267,6 +280,8 @@ export default function ControlCard(props: ControlCardProps) {
   } = props;
   const switchId = useId();
   const handleId = useId();
+  const usageDateId = useId();
+  const perpetualId = useId();
   const angleId = useId();
   const captionId = useId();
   const headlineId = useId();
@@ -274,6 +289,7 @@ export default function ControlCard(props: ControlCardProps) {
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const activeCard = creative.cards[Math.min(creative.cards.length - 1, Math.max(0, cardIndex))];
+  const usageError = creative.perpetual ? null : usageEndDateError(creative.usageEndDate, localToday());
   const dropLabel = creativeType === 'carousel'
     ? `Drop media for card ${cardIndex + 1}`
     : 'Drop media for this creative';
@@ -365,28 +381,60 @@ export default function ControlCard(props: ControlCardProps) {
         </div>
 
         {creativeType === 'whitelist' ? (
-          <div>
-            <label htmlFor={handleId} className={sectionLabelClass}>
-              Creator handle
-            </label>
-            <input
-              id={handleId}
-              value={creative.handle}
-              onChange={(event) => onPatch({ handle: event.target.value })}
-              placeholder="@sample.creator"
-              autoComplete="off"
-              className={inputClass}
-              style={inputStyle}
-            />
+          <div className="space-y-4">
+            <div>
+              <label htmlFor={handleId} className={sectionLabelClass}>
+                Creator handle
+              </label>
+              <input
+                id={handleId}
+                value={creative.handle}
+                onChange={(event) => onPatch({ handle: event.target.value })}
+                placeholder="@sample.creator"
+                autoComplete="off"
+                className={inputClass}
+                style={inputStyle}
+              />
+            </div>
+            <div>
+              <label htmlFor={usageDateId} className="text-[11px] text-gray-500 mb-1 block">
+                Usage end date
+              </label>
+              <input
+                id={usageDateId}
+                type="date"
+                value={creative.perpetual ? '' : creative.usageEndDate}
+                min={localToday()}
+                disabled={creative.perpetual}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  onPatch({ usageEndDate: value, perpetual: value ? false : creative.perpetual });
+                }}
+                className={`${inputClass} disabled:cursor-not-allowed disabled:opacity-40`}
+                style={{ ...inputStyle, colorScheme: 'dark' }}
+              />
+              <label htmlFor={perpetualId} className="mt-2 flex items-center gap-2 text-sm text-[#F5F5F8]">
+                <input
+                  id={perpetualId}
+                  type="checkbox"
+                  checked={creative.perpetual}
+                  onChange={(event) => {
+                    if (event.target.checked) onPatch({ perpetual: true, usageEndDate: '' });
+                    else onPatch({ perpetual: false });
+                  }}
+                  className="h-3.5 w-3.5 accent-[#C8B89A]"
+                />
+                Perpetual
+              </label>
+              <span className="text-[10px] text-gray-600 mt-1 block">
+                Optional. When whitelist or creator usage should end.
+              </span>
+              {usageError ? (
+                <span className="text-[11px] text-red-400 mt-1 block">{usageError}</span>
+              ) : null}
+            </div>
           </div>
         ) : null}
-
-        <Segmented
-          label="Placement"
-          value={placement}
-          options={PLACEMENT_OPTIONS}
-          onChange={onPlacement}
-        />
 
         <div className="border-t border-white/5 pt-4">
           <p className={sectionLabelClass}>This creative</p>
@@ -396,9 +444,10 @@ export default function ControlCard(props: ControlCardProps) {
           </p>
           <div className="space-y-4">
             <ProductField
-              value={creative.product}
+              productKey={creative.productKey}
+              productLabel={creative.productLabel}
               creativeId={creative.id}
-              onChange={(product) => onPatch({ product })}
+              onChange={(choice) => onPatch({ productKey: choice.product_key, productLabel: choice.product_label })}
             />
             <div>
               <label htmlFor={angleId} className={sectionLabelClass}>
@@ -413,26 +462,6 @@ export default function ControlCard(props: ControlCardProps) {
                 className={inputClass}
                 style={inputStyle}
               />
-              <div role="group" aria-label="Angle suggestions" className="mt-2 flex flex-wrap gap-1.5">
-                {ANGLE_SUGGESTIONS.map((suggestion) => {
-                  const selected = creative.angle.trim().toLowerCase() === suggestion.toLowerCase();
-                  return (
-                    <button
-                      key={suggestion}
-                      type="button"
-                      onClick={() => onPatch({ angle: suggestion })}
-                      className="rounded-full px-2.5 py-1 text-[11px] font-medium"
-                      style={{
-                        backgroundColor: selected ? 'rgba(200,184,154,0.15)' : 'transparent',
-                        border: selected ? '1px solid rgba(200,184,154,0.35)' : '1px solid rgba(255,255,255,0.08)',
-                        color: selected ? '#C8B89A' : '#888',
-                      }}
-                    >
-                      {suggestion}
-                    </button>
-                  );
-                })}
-              </div>
             </div>
             <div>
               <label htmlFor={captionId} className={sectionLabelClass}>
