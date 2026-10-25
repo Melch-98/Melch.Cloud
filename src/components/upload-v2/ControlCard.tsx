@@ -94,6 +94,13 @@ type ControlCardProps = {
   onReorderCards: (from: number, to: number) => void;
   onReorderAssets: (from: number, to: number) => void;
   onReorderCreatives: (from: number, to: number) => void;
+  canSubmit: boolean;
+  submitting: boolean;
+  submitPhase: string | null;
+  submitHint: string | null;
+  submitError: string | null;
+  submitSuccess: string | null;
+  onSubmit: () => void;
 };
 
 type FileRowModel = {
@@ -520,6 +527,13 @@ export default function ControlCard(props: ControlCardProps) {
     onReorderCards,
     onReorderAssets,
     onReorderCreatives,
+    canSubmit,
+    submitting,
+    submitPhase,
+    submitHint,
+    submitError,
+    submitSuccess,
+    onSubmit,
   } = props;
   const switchId = useId();
   const handleId = useId();
@@ -1132,15 +1146,26 @@ export default function ControlCard(props: ControlCardProps) {
         ) : null}
         <button
           type="button"
-          disabled
-          className="mt-3 flex h-10 w-full cursor-not-allowed items-center justify-center rounded-lg text-sm font-semibold text-[#0A0A0A] opacity-50"
+          disabled={!canSubmit || submitting}
+          onClick={onSubmit}
+          className={`mt-3 flex h-10 w-full items-center justify-center rounded-lg text-sm font-semibold text-[#0A0A0A] ${!canSubmit || submitting ? 'cursor-not-allowed opacity-50' : ''}`}
           style={{ backgroundColor: '#C8B89A' }}
         >
-          Submit · prototype
+          {submitting ? 'Submitting…' : 'Submit'}
         </button>
-        <p className="mt-2 text-[11px] leading-4 text-gray-600">
-          Nothing is saved. This week’s folder is the same for every file.
-        </p>
+        {submitError ? (
+          <p role="alert" className="mt-2 text-[11px] leading-4 text-red-400">{submitError}</p>
+        ) : submitSuccess ? (
+          <p role="status" className="mt-2 text-[11px] leading-4 text-[#7FD48F]">{submitSuccess}</p>
+        ) : submitting && submitPhase ? (
+          <p role="status" className="mt-2 text-[11px] leading-4 text-gray-500">{submitPhase}</p>
+        ) : submitHint ? (
+          <p className="mt-2 text-[11px] leading-4 text-gray-600">{submitHint}</p>
+        ) : (
+          <p className="mt-2 text-[11px] leading-4 text-gray-600">
+            Uploads the files, then saves the batch. This week’s folder is the same for every file.
+          </p>
+        )}
         <p className="sr-only">{savePath}</p>
       </section>
     </div>

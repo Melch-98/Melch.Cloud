@@ -18,7 +18,7 @@ function toUploadBrands(rows: Array<{ id: string; name: string; slug: string; we
 }
 
 /**
- * Same session gate as /upload. The studio underneath is local state only.
+ * Same session gate as /upload. Submit uses that session for storage and row inserts.
  * `localPreview` is true only for `next dev` when UPLOAD_V2_LOCAL_PREVIEW=1.
  * Production builds fold that flag off, so the Vercel preview still requires login.
  */
