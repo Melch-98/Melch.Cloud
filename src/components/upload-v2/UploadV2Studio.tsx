@@ -27,6 +27,7 @@ import {
   type UploadBrand,
 } from '@/components/upload-v2/model';
 import PhonePreview from '@/components/upload-v2/PhonePreview';
+import { measuredFileMedia } from '@/lib/media-info';
 
 function measureMedia(url: string, kind: 'image' | 'video'): Promise<{ width: number; height: number } | null> {
   return new Promise((resolve) => {
@@ -287,13 +288,19 @@ export default function UploadV2Studio({
     const measured = await Promise.all(accepted.map(async (item) => {
       const url = URL.createObjectURL(item.file);
       const size = await measureMedia(url, item.kind);
+      const width = size?.width ?? null;
+      const height = size?.height ?? null;
+      const detected = measuredFileMedia(item.file, width, height);
       const media: LocalMedia = {
         url,
         kind: item.kind,
         name: item.file.name,
         bytes: item.file.size,
-        width: size?.width ?? null,
-        height: size?.height ?? null,
+        width,
+        height,
+        file: item.file,
+        mediaFormat: detected.mediaFormat,
+        detectedAspectRatio: detected.detectedAspectRatio,
       };
       return media;
     }));

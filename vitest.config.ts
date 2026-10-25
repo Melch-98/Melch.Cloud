@@ -13,6 +13,7 @@ export default defineConfig({
       'src/lib/meta-funnel.test.ts',
       'src/lib/ad-activity/activity.test.ts',
       'src/lib/batch-creative-type.test.ts',
+      'src/lib/media-info.test.ts',
       'src/lib/creative-type-mix.test.ts',
       'src/lib/usage-end-date.test.ts',
       'src/lib/usage-task.test.ts',

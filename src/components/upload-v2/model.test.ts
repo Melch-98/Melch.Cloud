@@ -28,6 +28,9 @@ function media(name: string, width: number, height: number): LocalMedia {
     bytes: 2_400_000,
     width,
     height,
+    file: null,
+    mediaFormat: null,
+    detectedAspectRatio: null,
   };
 }
 

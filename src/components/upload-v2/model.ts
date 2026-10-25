@@ -9,6 +9,15 @@ export type LocalMedia = {
   bytes: number;
   width: number | null;
   height: number | null;
+  /** The browser File used for storage upload. Fixtures that are not submitted use null. */
+  file: File | null;
+  /** detectFormat(file.type). Not derived from the preview crop. */
+  mediaFormat: 'VIDEO' | 'STATIC' | 'AUDIO' | 'DOCUMENT' | null;
+  /**
+   * detectAspectRatio(width, height): 1x1 | 9x16 | 4x5 | 16x9 | OTHER.
+   * This is the stored aspect_ratio. Creative.ratio is only the preview frame.
+   */
+  detectedAspectRatio: '1x1' | '9x16' | '4x5' | '16x9' | 'OTHER' | null;
 };
 
 /** One image or video inside a flexible creative. Meta allows up to 10. */

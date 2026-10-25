@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useCallback } from 'react';
 import { Upload } from 'lucide-react';
+import { detectAspectRatio, detectFormat } from '@/lib/media-info';
 
 export interface FileMediaInfo {
   format: 'VIDEO' | 'STATIC' | 'AUDIO' | 'DOCUMENT';
@@ -20,25 +21,6 @@ interface FileUploaderProps {
   accept?: string;
   /** Compact mode: slimmer drop zone for when assets are already present */
   compact?: boolean;
-}
-
-function detectFormat(mimeType: string): FileMediaInfo['format'] {
-  if (mimeType.startsWith('video/')) return 'VIDEO';
-  if (mimeType.startsWith('image/')) return 'STATIC';
-  if (mimeType.startsWith('audio/')) return 'AUDIO';
-  return 'DOCUMENT';
-}
-
-function detectAspectRatio(width: number, height: number): FileMediaInfo['aspectRatio'] {
-  if (width === 0 || height === 0) return 'OTHER';
-  const ratio = width / height;
-  const tolerance = 0.05;
-
-  if (Math.abs(ratio - 1) < tolerance) return '1x1';
-  if (Math.abs(ratio - 9 / 16) < tolerance) return '9x16';
-  if (Math.abs(ratio - 4 / 5) < tolerance) return '4x5';
-  if (Math.abs(ratio - 16 / 9) < tolerance) return '16x9';
-  return 'OTHER';
 }
 
 async function analyzeFile(file: File): Promise<FileMediaInfo> {
