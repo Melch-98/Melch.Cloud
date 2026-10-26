@@ -613,7 +613,7 @@ export default function UploadV2Studio({
   }
 
   return (
-    <div data-prototype="upload-v2" className="grid w-full grid-cols-1 items-start gap-6 lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-x-10">
+    <div className="grid w-full grid-cols-1 items-start gap-6 lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-x-10">
       <div className="order-2 lg:sticky lg:top-4 lg:col-start-1 lg:row-start-1 lg:self-start">
         <div className="mx-auto mb-3 flex h-11 w-full max-w-[280px] items-center justify-center gap-2">
           <button

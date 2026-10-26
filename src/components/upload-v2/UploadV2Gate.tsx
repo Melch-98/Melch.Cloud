@@ -18,9 +18,9 @@ function toUploadBrands(rows: Array<{ id: string; name: string; slug: string; we
 }
 
 /**
- * Same session gate as /upload. Submit uses that session for storage and row inserts.
+ * Session gate for /upload. Submit uses that session for storage and row inserts.
  * `localPreview` is true only for `next dev` when UPLOAD_V2_LOCAL_PREVIEW=1.
- * Production builds fold that flag off, so the Vercel preview still requires login.
+ * Production builds fold that flag off, so a deployed build still requires login.
  */
 export default function UploadV2Gate({ localPreview = false }: { localPreview?: boolean }) {
   const router = useRouter();
@@ -161,20 +161,12 @@ export default function UploadV2Gate({ localPreview = false }: { localPreview?: 
   return (
     <Navbar>
       <div className="mx-auto max-w-[1100px] px-4 py-4 sm:px-6 sm:py-5">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#C8B89A]">Post preview</p>
-            <h1 className="mt-1 text-xl font-bold tracking-tight text-[#F5F5F8] sm:text-2xl">Upload Creatives</h1>
-            <p className="mt-1 text-sm text-[#ABABAB]">
-              See the ad before anything is saved. This screen is a prototype.
-            </p>
-          </div>
-          <span
-            className="shrink-0 rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-wider"
-            style={{ backgroundColor: 'rgba(200,184,154,0.15)', color: '#C8B89A' }}
-          >
-            Prototype
-          </span>
+        <div className="mb-4">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#C8B89A]">Post preview</p>
+          <h1 className="mt-1 text-xl font-bold tracking-tight text-[#F5F5F8] sm:text-2xl">Upload Creatives</h1>
+          <p className="mt-1 text-sm text-[#ABABAB]">
+            Drop in files and preview the ad.
+          </p>
         </div>
         <UploadV2Studio brands={shownBrands} lockedBrandId={lockedBrandId} />
       </div>
