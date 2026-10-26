@@ -7,7 +7,18 @@ import {
   addCarouselMedia,
   addFlexibleAssets,
   appendBatchCreatives,
+  assetsFromMedia,
+  attachedMedia,
   batchFileNamePreview,
+  cardsFromMedia,
+  creativesFromMedia,
+  isOverStructureCap,
+  modeSummary,
+  nameTypeForModes,
+  showsCreativeDetails,
+  structureCapacityMessage,
+  toggleUploadMode,
+  uploadStructure,
   brandInitials,
   brandLogoUrl,
   followMove,
@@ -202,6 +213,48 @@ describe('upload-v2 file placement', () => {
     expect(followMove(1, 3, 0)).toBe(2);
     expect(formatBytes(1536)).toBe('1.5 KB');
     expect(formatBytes(2_400_000)).toBe('2.3 MB');
+  });
+
+  it('toggles optional chips and keeps files when the structure changes', () => {
+    const off = { whitelist: false, carousel: false, flexible: false };
+    expect(uploadStructure(off)).toBe('plain');
+    expect(showsCreativeDetails(off)).toBe(false);
+    expect(nameTypeForModes(off)).toBeNull();
+    expect(modeSummary(off)).toContain('up to 20');
+
+    const carousel = toggleUploadMode(off, 'carousel');
+    expect(carousel).toEqual({ whitelist: false, carousel: true, flexible: false });
+    const both = toggleUploadMode(carousel, 'flexible');
+    expect(both).toEqual({ whitelist: false, carousel: false, flexible: true });
+    const withWhitelist = toggleUploadMode(both, 'whitelist');
+    expect(withWhitelist.whitelist).toBe(true);
+    expect(uploadStructure(withWhitelist)).toBe('flexible');
+    expect(nameTypeForModes({ whitelist: true, carousel: true, flexible: true })).toBe('carousel');
+    expect(showsCreativeDetails(withWhitelist)).toBe(true);
+
+    const files = Array.from({ length: 15 }, (_, index) => media(`file-${index}.jpg`, 1080, 1350));
+    const cards = cardsFromMedia(files, [], (prefix) => prefix);
+    expect(cards).toHaveLength(15);
+    expect(cards[0].media?.name).toBe('file-0.jpg');
+    expect(isOverStructureCap('carousel', 9, cards.length)).toBe(false);
+    expect(isOverStructureCap('carousel', 10, cards.length)).toBe(true);
+    expect(structureCapacityMessage('carousel', 15)).toMatch(/5 files are over the limit/);
+    expect(structureCapacityMessage('carousel', 1)).toMatch(/at least 2/);
+    expect(structureCapacityMessage('carousel', 4)).toBeNull();
+
+    const headed = cards.map((card, index) => ({ ...card, headline: `H${index}` }));
+    const assets = assetsFromMedia(files, [], (prefix) => `${prefix}-asset`);
+    expect(assets).toHaveLength(15);
+    expect(isOverStructureCap('flexible', 10, assets.length)).toBe(true);
+    const back = cardsFromMedia(files, headed, () => 'new');
+    expect(back[3].headline).toBe('H3');
+    expect(back[3].id).toBe(headed[3].id);
+
+    const plain = creativesFromMedia(files, (prefix) => prefix);
+    expect(plain).toHaveLength(15);
+    expect(plain[14].originalName).toBe('file-14.jpg');
+    expect(plain.every((item) => item.angle === '' && item.cards.length === 0)).toBe(true);
+    expect(attachedMedia(plain)).toHaveLength(15);
   });
 
   it('uses the navbar favicon for a website and initials when there is none', () => {

@@ -6,7 +6,7 @@ import {
   v2SubmitBlocker,
   type MapV2Input,
 } from '@/components/upload-v2/map-submission';
-import type { CarouselCard, Creative, FlexibleAsset, LocalMedia } from '@/components/upload-v2/model';
+import type { CarouselCard, Creative, FlexibleAsset, LocalMedia, UploadModes } from '@/components/upload-v2/model';
 
 function file(name: string, type: string, bytes = 1200): File {
   return new File([new Uint8Array(bytes)], name, { type });
@@ -62,16 +62,19 @@ function asset(id: string, media: LocalMedia): FlexibleAsset {
   return { id, media };
 }
 
+function modes(partial: Partial<UploadModes> = {}): UploadModes {
+  return { whitelist: false, carousel: false, flexible: false, ...partial };
+}
+
 function input(partial: Partial<MapV2Input> = {}): MapV2Input {
   return {
     brandId: 'brand-1',
     userId: 'user-1',
     batchName: 'MNT_261025_0001',
     creatorName: '',
-    creativeType: 'whitelist',
-    batchOn: false,
+    modes: modes(),
     creative: creative(),
-    batchCreatives: [],
+    plainCreatives: [],
     ...partial,
   };
 }
@@ -89,6 +92,7 @@ describe('mapV2Submission', () => {
     const source = file('morning.mp4', 'video/mp4', 4000);
     const mapped = mapV2Submission(input({
       creatorName: '  Jane Doe  ',
+      modes: modes({ whitelist: true }),
       creative: creative({
         caption: '  Hold the frame  ',
         productKey: 'product:chicken-bone-broth',
@@ -98,8 +102,8 @@ describe('mapV2Submission', () => {
         usageEndDate: '2026-12-31',
         perpetual: false,
         ratio: '1:1',
-        media: local(source, 1080, 1920, '9x16'),
       }),
+      plainCreatives: [creative({ media: local(source, 1080, 1920, '9x16') })],
     }));
 
     expect(mapped.submission).toMatchObject({
@@ -139,11 +143,12 @@ describe('mapV2Submission', () => {
   it('stores a null usage date when the whitelist is perpetual', () => {
     const source = file('ever.jpg', 'image/jpeg');
     const mapped = mapV2Submission(input({
+      modes: modes({ whitelist: true }),
       creative: creative({
         perpetual: true,
         usageEndDate: '2020-01-01',
-        media: local(source, 1080, 1080, '1x1'),
       }),
+      plainCreatives: [creative({ media: local(source, 1080, 1080, '1x1') })],
     }));
     expect(mapped.submission.usage_end_date).toBeNull();
     expect(mapped.submission.creative_type).toBe('static');
@@ -154,7 +159,7 @@ describe('mapV2Submission', () => {
   it('keeps the original name when creator, product, and angle are empty', () => {
     const source = file('shelf.jpg', 'image/jpeg');
     const mapped = mapV2Submission(input({
-      creativeType: 'carousel',
+      modes: modes({ carousel: true }),
       creative: creative({
         angle: '   ',
         cards: [card('a', local(source, 1080, 1350, '4x5'), '  ')],
@@ -169,7 +174,7 @@ describe('mapV2Submission', () => {
     const files = ['a.jpg', 'b.jpg', 'c.jpg'].map((name) => file(name, 'image/jpeg'));
     const mapped = mapV2Submission(input({
       creatorName: 'Jane',
-      creativeType: 'carousel',
+      modes: modes({ carousel: true }),
       creative: creative({
         productKey: 'product:serum',
         productLabel: 'Serum',
@@ -216,7 +221,7 @@ describe('mapV2Submission', () => {
       file('three.png', 'image/png'),
     ];
     const mapped = mapV2Submission(input({
-      creativeType: 'flexible',
+      modes: modes({ flexible: true }),
       creative: creative({
         assets: [
           asset('1', local(files[0], 1080, 1080, '1x1')),
@@ -238,9 +243,9 @@ describe('mapV2Submission', () => {
     expect(mapped.files.map((item) => item.row.file_name)).toEqual(['one.jpg', 'two.mp4', 'three.png']);
   });
 
-  it('maps a batch of 4 as plain bulk creatives and dedupes original names', () => {
+  it('maps the default plain list as bulk creatives and dedupes original names', () => {
     const names = ['pour.jpg', 'shelf.jpg', 'pour.jpg', 'grid.png'];
-    const batchCreatives = names.map((name, index) => creative({
+    const plainCreatives = names.map((name, index) => creative({
       id: `b-${index}`,
       caption: 'should not land on the submission',
       productKey: 'product:ignored',
@@ -251,10 +256,16 @@ describe('mapV2Submission', () => {
       media: local(file(name, 'image/png'), 1080, 1350, '4x5'),
     }));
     const mapped = mapV2Submission(input({
-      batchOn: true,
       creatorName: 'Jane Doe',
-      creativeType: 'whitelist',
-      batchCreatives,
+      creative: creative({
+        caption: 'should not land on the submission',
+        productKey: 'product:ignored',
+        productLabel: 'Ignored',
+        angle: 'Ignored',
+        handle: '@jane',
+        usageEndDate: '2026-12-31',
+      }),
+      plainCreatives,
     }));
 
     expect(mapped.submission).toMatchObject({
@@ -276,6 +287,74 @@ describe('mapV2Submission', () => {
     ]);
     expect(mapped.files.map((item) => item.row.original_file_name)).toEqual(names);
     expect(mapped.files.every((item) => item.row.product_name === null && item.row.hook_angle === null)).toBe(true);
+  });
+
+  it('maps plain whitelist creatives with the whitelist slug and a shared usage date', () => {
+    const names = ['pour.jpg', 'shelf.jpg'];
+    const mapped = mapV2Submission(input({
+      creatorName: 'Jane',
+      modes: modes({ whitelist: true }),
+      creative: creative({
+        productKey: 'product:serum',
+        productLabel: 'Serum',
+        angle: 'Morning',
+        handle: '@jane',
+        usageEndDate: '2026-12-31',
+        caption: 'Whitelisted',
+      }),
+      plainCreatives: names.map((name, index) => creative({
+        id: `p-${index}`,
+        productKey: 'product:ignored',
+        productLabel: 'Ignored',
+        angle: 'Ignored',
+        media: local(file(name, 'image/jpeg'), 1080, 1350, '4x5'),
+      })),
+    }));
+    expect(mapped.submission).toMatchObject({
+      creative_type: 'static',
+      creator_name: 'Jane',
+      creator_social_handle: '@jane',
+      copy_body: 'Whitelisted',
+      is_carousel: false,
+      is_flexible: false,
+      is_whitelist: true,
+      usage_end_date: '2026-12-31',
+      file_count: 2,
+    });
+    expect(mapped.files.map((item) => item.row.file_name)).toEqual([
+      'jane_whitelist_serum_morning.jpg',
+      'jane_whitelist_serum_morning-2.jpg',
+    ]);
+    expect(mapped.files.every((item) => item.row.product_name === 'Serum' && item.row.hook_angle === 'Morning')).toBe(true);
+  });
+
+  it('lets whitelist sit on a carousel and drops flexible when both structure chips are set', () => {
+    const source = file('card.jpg', 'image/jpeg');
+    const mapped = mapV2Submission(input({
+      creatorName: 'Jane',
+      modes: modes({ whitelist: true, carousel: true, flexible: true }),
+      creative: creative({
+        handle: '@jane',
+        usageEndDate: '2026-12-31',
+        productKey: 'product:serum',
+        productLabel: 'Serum',
+        angle: 'Morning',
+        cards: [card('1', local(source, 1080, 1350, '4x5'), 'Open')],
+        assets: [asset('x', local(file('asset.jpg', 'image/jpeg'), 1080, 1080, '1x1'))],
+      }),
+    }));
+    expect(mapped.submission).toMatchObject({
+      creative_type: 'carousel',
+      creator_name: 'Jane',
+      creator_social_handle: '@jane',
+      is_carousel: true,
+      is_flexible: false,
+      is_whitelist: true,
+      usage_end_date: '2026-12-31',
+      file_count: 1,
+    });
+    expect(mapped.files[0].row.file_name).toBe('jane_carousel_serum_morning.jpg');
+    expect(mapped.files[0].row.copy_headline).toBe('Open');
   });
 
   it('does not treat homepage or a missing file as a product upload', () => {
@@ -301,10 +380,9 @@ describe('v2SubmitBlocker', () => {
 
   it('requires a brand, a file, and a usable whitelist date', () => {
     const base = {
-      creativeType: 'whitelist' as const,
-      batchOn: false,
+      modes: modes({ whitelist: true }),
       creative: creative(),
-      batchCreatives: [],
+      plainCreatives: [],
       today,
     };
     expect(v2SubmitBlocker(base)).toBe('Choose a brand');
@@ -316,6 +394,7 @@ describe('v2SubmitBlocker', () => {
         usageEndDate: '2026-10-01',
         media: local(file('a.jpg', 'image/jpeg'), 1080, 1080, '1x1'),
       }),
+      plainCreatives: [creative({ media: local(file('a.jpg', 'image/jpeg'), 1080, 1080, '1x1') })],
     })).toBe('Usage end date must be today or later');
     expect(v2SubmitBlocker({
       ...base,
@@ -325,6 +404,7 @@ describe('v2SubmitBlocker', () => {
         usageEndDate: '2020-01-01',
         media: local(file('a.jpg', 'image/jpeg'), 1080, 1080, '1x1'),
       }),
+      plainCreatives: [creative({ media: local(file('a.jpg', 'image/jpeg'), 1080, 1080, '1x1') })],
     })).toBeNull();
     expect(v2SubmitBlocker({
       ...base,
@@ -333,17 +413,49 @@ describe('v2SubmitBlocker', () => {
         usageEndDate: '',
         media: local(file('a.jpg', 'image/jpeg'), 1080, 1080, '1x1'),
       }),
+      plainCreatives: [creative({ media: local(file('a.jpg', 'image/jpeg'), 1080, 1080, '1x1') })],
     })).toBeNull();
   });
 
-  it('does not apply the whitelist date rule to a batch', () => {
+  it('does not apply the whitelist date rule to the default plain list', () => {
     expect(v2SubmitBlocker({
       brandId: 'brand-1',
-      creativeType: 'whitelist',
-      batchOn: true,
+      modes: modes(),
       creative: creative({ usageEndDate: '1999-01-01' }),
-      batchCreatives: [creative({ media: local(file('a.jpg', 'image/jpeg'), 1080, 1080, '1x1') })],
+      plainCreatives: [creative({ media: local(file('a.jpg', 'image/jpeg'), 1080, 1080, '1x1') })],
       today,
     })).toBeNull();
+  });
+
+  it('blocks a carousel that is under 2 cards or over 10', () => {
+    const one = [creative({ media: local(file('a.jpg', 'image/jpeg'), 1080, 1080, '1x1') })];
+    const cards = (count: number) => Array.from({ length: count }, (_, index) => (
+      card(String(index), local(file(`c-${index}.jpg`, 'image/jpeg'), 1080, 1080, '1x1'))
+    ));
+    expect(v2SubmitBlocker({
+      brandId: 'brand-1',
+      modes: modes({ carousel: true }),
+      creative: creative({ cards: cards(1) }),
+      plainCreatives: one,
+      today,
+    })).toBe('A carousel needs at least 2 cards.');
+    expect(v2SubmitBlocker({
+      brandId: 'brand-1',
+      modes: modes({ carousel: true }),
+      creative: creative({ cards: cards(15) }),
+      plainCreatives: [],
+      today,
+    })).toBe('Carousel holds 10 cards. 5 files are over the limit. Remove them or turn Carousel off.');
+    expect(v2SubmitBlocker({
+      brandId: 'brand-1',
+      modes: modes({ flexible: true }),
+      creative: creative({
+        assets: Array.from({ length: 12 }, (_, index) => (
+          asset(String(index), local(file(`a-${index}.jpg`, 'image/jpeg'), 1080, 1080, '1x1'))
+        )),
+      }),
+      plainCreatives: [],
+      today,
+    })).toBe('A flexible creative holds 10 assets. 2 files are over the limit. Remove them or turn Flexible off.');
   });
 });

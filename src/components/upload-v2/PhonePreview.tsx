@@ -18,18 +18,17 @@ import {
 } from 'lucide-react';
 import {
   brandInitials,
-  displayHandle,
   formatUsageEnd,
   isCatalogProductKey,
   type Creative,
-  type CreativeType,
   type LocalMedia,
+  type UploadStructure,
 } from '@/components/upload-v2/model';
 
 type PhonePreviewProps = {
   creative: Creative;
-  creativeType: CreativeType;
-  batchOn: boolean;
+  structure: UploadStructure;
+  whitelist: boolean;
   cardIndex: number;
   assetIndex: number;
   brandName: string;
@@ -207,8 +206,8 @@ function FlexibleHint({ count, className = '' }: { count: number; className?: st
 
 export default function PhonePreview({
   creative,
-  creativeType,
-  batchOn,
+  structure,
+  whitelist,
   cardIndex,
   assetIndex,
   brandName,
@@ -222,32 +221,34 @@ export default function PhonePreview({
   const safeAsset = Math.min(Math.max(0, assets.length - 1), Math.max(0, assetIndex));
   const activeCard = cards[safeIndex];
   const activeAsset = assets[safeAsset];
-  const productTitle = !batchOn && isCatalogProductKey(creative.productKey) ? creative.productLabel.trim() : '';
-  const art = batchOn
-    ? { from: creative.from, to: creative.to, kicker: '', media: creative.media, headline: '' }
-    : creativeType === 'carousel' && activeCard
-      ? { from: activeCard.from, to: activeCard.to, kicker: productTitle || activeCard.kicker, media: activeCard.media, headline: activeCard.headline }
-      : creativeType === 'flexible' && activeAsset
-        ? { from: creative.from, to: creative.to, kicker: productTitle || creative.kicker, media: activeAsset.media, headline: '' }
-        : { from: creative.from, to: creative.to, kicker: productTitle || creative.kicker, media: creative.media, headline: '' };
-  const handle = displayHandle(creative.handle);
+  const plainLook = structure === 'plain' && !whitelist;
+  const productTitle = plainLook || !isCatalogProductKey(creative.productKey) ? '' : creative.productLabel.trim();
+  const art = structure === 'carousel' && activeCard
+    ? { from: activeCard.from, to: activeCard.to, kicker: productTitle || activeCard.kicker, media: activeCard.media, headline: activeCard.headline }
+    : structure === 'flexible' && activeAsset
+      ? { from: creative.from, to: creative.to, kicker: productTitle || creative.kicker, media: activeAsset.media, headline: '' }
+      : { from: creative.from, to: creative.to, kicker: plainLook ? '' : (productTitle || creative.kicker), media: creative.media, headline: '' };
+  const trimmedHandle = creative.handle.trim();
+  const handle = trimmedHandle
+    ? (trimmedHandle.startsWith('@') ? trimmedHandle : `@${trimmedHandle}`)
+    : '';
   const caption = creative.caption.trim();
   const ratio = creative.ratio;
   const feed = ratio !== '9:16';
   const accountName = brandName.trim();
-  const partnership = !batchOn && creativeType === 'whitelist';
+  const partnership = whitelist;
   const previewLabel = [
-    batchOn ? 'Creative preview' : partnership ? 'Whitelist ad preview' : creativeType === 'carousel' ? 'Carousel ad preview' : 'Flexible ad preview',
+    partnership ? 'Whitelist ad preview' : structure === 'carousel' ? 'Carousel ad preview' : structure === 'flexible' ? 'Flexible ad preview' : 'Creative preview',
     ratio,
-    batchOn ? (creative.media?.name || 'No file yet') : creative.name,
-    batchOn ? 'Plain creative' : (caption || 'No caption yet'),
+    plainLook ? (creative.media?.name || 'No file yet') : (creative.name || creative.media?.name || 'No file yet'),
+    plainLook ? 'Plain creative' : (caption || 'No caption yet'),
   ].join(', ');
 
-  const stageKey = batchOn
-    ? creative.media?.url ?? creative.id
-    : creativeType === 'carousel'
-      ? activeCard?.id ?? creative.id
-      : activeAsset?.id ?? creative.id;
+  const stageKey = structure === 'carousel'
+    ? activeCard?.id ?? creative.id
+    : structure === 'flexible'
+      ? activeAsset?.id ?? creative.id
+      : creative.media?.url ?? creative.id;
 
   const stage = (
     <div className="absolute inset-0">
@@ -257,7 +258,9 @@ export default function PhonePreview({
           from={art.from}
           to={art.to}
           kicker={art.kicker}
-          emptyLabel={batchOn && !art.media ? 'Drop creatives to preview them' : undefined}
+          emptyLabel={!art.media ? (
+            structure === 'carousel' ? 'Drop cards to preview them' : structure === 'flexible' ? 'Drop assets to preview them' : 'Drop creatives to preview them'
+          ) : undefined}
         />
       </div>
     </div>
@@ -283,7 +286,7 @@ export default function PhonePreview({
       )}
       <Rail />
       <div className="absolute inset-x-0 bottom-[52px] z-20 flex flex-col gap-2 px-3 pb-3 pr-16">
-        {!batchOn && creativeType === 'flexible' ? <FlexibleHint count={assets.length} /> : null}
+        {structure === 'flexible' ? <FlexibleHint count={assets.length} /> : null}
         <div className="flex items-center gap-2">
           <BrandMark name={accountName} logoUrl={brandLogoUrl} ink="white" />
           <span className="truncate text-[13px] font-semibold">{accountName}</span>
@@ -295,10 +298,10 @@ export default function PhonePreview({
           <p className="text-[10px] text-white/75">{handle}</p>
         ) : null}
         {usageLine ? <p className="text-[10px] text-white/75">{usageLine}</p> : null}
-        {!batchOn && creativeType === 'carousel' && art.headline ? (
+        {structure === 'carousel' && art.headline ? (
           <p className="text-[13px] font-semibold leading-snug">{art.headline}</p>
         ) : null}
-        {batchOn ? null : (
+        {plainLook ? null : (
           <p className="line-clamp-3 text-[12px] leading-snug">
             {caption || <span className="text-white/55">Add a caption</span>}
           </p>
@@ -332,11 +335,11 @@ export default function PhonePreview({
       </div>
       <div className="min-h-0 flex-1 overflow-hidden px-3 pb-5">
         <p className="text-[12px] font-semibold">128 likes</p>
-        {!batchOn && creativeType === 'flexible' ? <FlexibleHint count={assets.length} className="mt-1.5" /> : null}
-        {!batchOn && creativeType === 'carousel' && art.headline ? (
+        {structure === 'flexible' ? <FlexibleHint count={assets.length} className="mt-1.5" /> : null}
+        {structure === 'carousel' && art.headline ? (
           <p className="mt-1 text-[12px] font-semibold leading-snug">{art.headline}</p>
         ) : null}
-        {batchOn ? null : (
+        {plainLook ? null : (
           <p className="mt-1 line-clamp-2 text-[12px] leading-snug">
             <span className="font-semibold">{accountName} </span>
             {caption || <span className="text-[#8e8e8e]">Add a caption</span>}

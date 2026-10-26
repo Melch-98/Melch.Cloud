@@ -31,6 +31,119 @@ export const CAROUSEL_MAX_CARDS = 10;
 export const FLEXIBLE_MAX_ASSETS = 10;
 export const BATCH_MAX_CREATIVES = 20;
 
+/**
+ * Optional chips. All false is the default: each file is a plain creative.
+ * Carousel and flexible cannot both be on. Whitelist is a flag and may sit on any of the three.
+ */
+export type UploadModes = {
+  whitelist: boolean;
+  carousel: boolean;
+  flexible: boolean;
+};
+
+export type UploadStructure = 'plain' | 'carousel' | 'flexible';
+
+export const EMPTY_UPLOAD_MODES: UploadModes = {
+  whitelist: false,
+  carousel: false,
+  flexible: false,
+};
+
+/** Carousel wins if both structure flags are set. The chips never produce that pair. */
+export function normalizeUploadModes(modes: UploadModes): UploadModes {
+  const carousel = Boolean(modes.carousel);
+  const flexible = Boolean(modes.flexible) && !carousel;
+  return {
+    whitelist: Boolean(modes.whitelist),
+    carousel,
+    flexible,
+  };
+}
+
+export function uploadStructure(modes: UploadModes): UploadStructure {
+  const normalized = normalizeUploadModes(modes);
+  if (normalized.carousel) return 'carousel';
+  if (normalized.flexible) return 'flexible';
+  return 'plain';
+}
+
+export function toggleUploadMode(modes: UploadModes, key: keyof UploadModes): UploadModes {
+  const current = normalizeUploadModes(modes);
+  const next = { ...current, [key]: !current[key] };
+  if (key === 'carousel' && next.carousel) next.flexible = false;
+  if (key === 'flexible' && next.flexible) next.carousel = false;
+  return next;
+}
+
+/** Slug used in a renamed file. Null in the default plain state, which keeps the uploaded name. */
+export function nameTypeForModes(modes: UploadModes): CreativeType | null {
+  const normalized = normalizeUploadModes(modes);
+  if (normalized.carousel) return 'carousel';
+  if (normalized.flexible) return 'flexible';
+  if (normalized.whitelist) return 'whitelist';
+  return null;
+}
+
+/** Creator, product, and angle stay hidden until a chip is on. */
+export function showsCreativeDetails(modes: UploadModes): boolean {
+  const normalized = normalizeUploadModes(modes);
+  return normalized.whitelist || normalized.carousel || normalized.flexible;
+}
+
+export function modeSummary(modes: UploadModes): string {
+  const normalized = normalizeUploadModes(modes);
+  const structure = uploadStructure(normalized);
+  const lead = structure === 'carousel'
+    ? 'One carousel, 2–10 cards.'
+    : structure === 'flexible'
+      ? 'One flexible creative, up to 10 assets.'
+      : `Each file is its own creative, up to ${BATCH_MAX_CREATIVES}. Original names are kept.`;
+  if (!normalized.whitelist) return lead;
+  return `${lead} Whitelist adds a usage end date.`;
+}
+
+export function structureCap(structure: UploadStructure): number {
+  if (structure === 'carousel') return CAROUSEL_MAX_CARDS;
+  if (structure === 'flexible') return FLEXIBLE_MAX_ASSETS;
+  return BATCH_MAX_CREATIVES;
+}
+
+/** True when this row is past the structure cap. The file stays in the list. */
+export function isOverStructureCap(structure: UploadStructure, index: number, total: number): boolean {
+  const cap = structureCap(structure);
+  return total > cap && index >= cap;
+}
+
+/**
+ * Why a carousel or flexible list cannot submit.
+ * A count of 0 is left to the "add a file" check.
+ */
+export function structureCapacityMessage(structure: UploadStructure, fileCount: number): string | null {
+  if (structure === 'carousel') {
+    if (fileCount > CAROUSEL_MAX_CARDS) {
+      const extra = fileCount - CAROUSEL_MAX_CARDS;
+      const noun = extra === 1 ? 'file is' : 'files are';
+      const pronoun = extra === 1 ? 'it' : 'them';
+      return `Carousel holds ${CAROUSEL_MAX_CARDS} cards. ${extra} ${noun} over the limit. Remove ${pronoun} or turn Carousel off.`;
+    }
+    if (fileCount > 0 && fileCount < CAROUSEL_MIN_CARDS) {
+      return `A carousel needs at least ${CAROUSEL_MIN_CARDS} cards.`;
+    }
+  }
+  if (structure === 'flexible' && fileCount > FLEXIBLE_MAX_ASSETS) {
+    const extra = fileCount - FLEXIBLE_MAX_ASSETS;
+    const noun = extra === 1 ? 'file is' : 'files are';
+    const pronoun = extra === 1 ? 'it' : 'them';
+    return `A flexible creative holds ${FLEXIBLE_MAX_ASSETS} assets. ${extra} ${noun} over the limit. Remove ${pronoun} or turn Flexible off.`;
+  }
+  if (structure === 'plain' && fileCount > BATCH_MAX_CREATIVES) {
+    const extra = fileCount - BATCH_MAX_CREATIVES;
+    const noun = extra === 1 ? 'file is' : 'files are';
+    return `Up to ${BATCH_MAX_CREATIVES} creatives. ${extra} ${noun} over the limit.`;
+  }
+  return null;
+}
+
 export type ReplaceTarget =
   | { kind: 'media'; creativeIndex: number }
   | { kind: 'card'; index: number }
@@ -646,10 +759,78 @@ export function appendBatchCreatives(
   };
 }
 
-export function displayHandle(handle: string): string {
-  const trimmed = handle.trim();
-  if (!trimmed) return '@sample.creator';
-  return trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
+/** Plain creatives from files already on the card. Used when a structure chip is turned off. */
+export function creativesFromMedia(
+  media: readonly LocalMedia[],
+  makeId: (prefix: string) => string,
+): Creative[] {
+  return media.map((item, index) => plainCreativeFromMedia(item, index, makeId));
+}
+
+/** Every file becomes a card, including files past the 10-card cap. */
+export function cardsFromMedia(
+  media: readonly LocalMedia[],
+  previous: readonly CarouselCard[],
+  makeId: (prefix: string) => string,
+): CarouselCard[] {
+  const byUrl = new Map<string, CarouselCard>();
+  for (const card of previous) {
+    if (card.media?.url && !byUrl.has(card.media.url)) byUrl.set(card.media.url, card);
+  }
+  return media.map((item, index) => {
+    const prev = byUrl.get(item.url);
+    const tone = CARD_TONES[index % CARD_TONES.length];
+    return {
+      id: prev?.id ?? makeId('card'),
+      headline: prev?.headline ?? '',
+      kicker: prev?.kicker || fileStem(item.name),
+      from: prev?.from ?? tone[0],
+      to: prev?.to ?? tone[1],
+      media: item,
+    };
+  });
+}
+
+/** Every file becomes an asset, including files past the 10-asset cap. */
+export function assetsFromMedia(
+  media: readonly LocalMedia[],
+  previous: readonly FlexibleAsset[],
+  makeId: (prefix: string) => string,
+): FlexibleAsset[] {
+  const byUrl = new Map<string, FlexibleAsset>();
+  for (const asset of previous) {
+    if (asset.media.url && !byUrl.has(asset.media.url)) byUrl.set(asset.media.url, asset);
+  }
+  return media.map((item) => {
+    const prev = byUrl.get(item.url);
+    return { id: prev?.id ?? makeId('asset'), media: item };
+  });
+}
+
+export function attachedMedia(items: readonly { media: LocalMedia | null }[]): LocalMedia[] {
+  return items.flatMap((item) => (item.media ? [item.media] : []));
+}
+
+export function emptyCreative(ratio: AspectRatio = '9:16'): Creative {
+  return {
+    id: 'empty',
+    name: '',
+    originalName: '',
+    caption: '',
+    productKey: '',
+    productLabel: '',
+    angle: '',
+    handle: '',
+    usageEndDate: '',
+    perpetual: false,
+    ratio,
+    kicker: '',
+    from: '#2C2C2C',
+    to: '#141414',
+    media: null,
+    assets: [],
+    cards: [],
+  };
 }
 
 export function mediaKind(file: File): 'image' | 'video' | null {
@@ -761,7 +942,7 @@ type NameDraft = {
 };
 
 /**
- * Upload type is always selected, so it does not by itself replace the original name.
+ * The type word is the selected structure, or whitelist when that chip is the only one on.
  * A new name is built only when creator, product, or angle has a usable part.
  */
 function nameDraft(

@@ -153,6 +153,11 @@ export default function UploadV2Gate({ localPreview = false }: { localPreview?: 
     );
   }
 
+  // Local preview with no signed-in brands still needs a name on the phone. Not a live client.
+  const shownBrands = localPreview && brands.length === 0
+    ? [{ id: 'preview-brand', name: 'Sample Brand', slug: 'sample-brand', websiteUrl: null }]
+    : brands;
+
   return (
     <Navbar>
       <div className="mx-auto max-w-[1100px] px-4 py-4 sm:px-6 sm:py-5">
@@ -171,7 +176,7 @@ export default function UploadV2Gate({ localPreview = false }: { localPreview?: 
             Prototype
           </span>
         </div>
-        <UploadV2Studio brands={brands} lockedBrandId={lockedBrandId} />
+        <UploadV2Studio brands={shownBrands} lockedBrandId={lockedBrandId} />
       </div>
     </Navbar>
   );

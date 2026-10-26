@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CarouselCard, Creative, FlexibleAsset, LocalMedia } from '@/components/upload-v2/model';
+import type { CarouselCard, Creative, FlexibleAsset, LocalMedia, UploadModes } from '@/components/upload-v2/model';
 import { submitUploadV2, type V2SubmitClient } from '@/components/upload-v2/submit-upload';
 
 type Call =
@@ -30,6 +30,10 @@ function local(
     mediaFormat: source.type.startsWith('video/') ? 'VIDEO' : 'STATIC',
     detectedAspectRatio: detected,
   };
+}
+
+function modes(partial: Partial<UploadModes> = {}): UploadModes {
+  return { whitelist: false, carousel: false, flexible: false, ...partial };
 }
 
 function creative(partial: Partial<Creative> = {}): Creative {
@@ -180,10 +184,9 @@ describe('submitUploadV2 sequence', () => {
     }, {
       brandId: 'brand-1',
       creatorName: '  Jane Doe  ',
-      creativeType: 'whitelist',
-      batchOn: false,
+      modes: modes({ whitelist: true }),
       today: '2026-10-25',
-      batchCreatives: [],
+      plainCreatives: [creative({ media: local(source, 1080, 1920, '9x16') })],
       creative: creative({
         caption: '  Hold the frame  ',
         productKey: 'product:chicken-bone-broth',
@@ -192,7 +195,6 @@ describe('submitUploadV2 sequence', () => {
         handle: ' @jane ',
         usageEndDate: '2026-12-31',
         ratio: '1:1',
-        media: local(source, 1080, 1920, '9x16'),
       }),
     });
 
@@ -293,10 +295,9 @@ describe('submitUploadV2 sequence', () => {
     const result = await submitUploadV2({ supabase: harness.supabase, fetch: harness.fetchMock }, {
       brandId: 'brand-1',
       creatorName: 'Jane',
-      creativeType: 'carousel',
-      batchOn: false,
+      modes: modes({ carousel: true }),
       today: '2026-10-25',
-      batchCreatives: [],
+      plainCreatives: [],
       creative: creative({
         productKey: 'product:serum',
         productLabel: 'Serum',
@@ -361,10 +362,9 @@ describe('submitUploadV2 sequence', () => {
     const result = await submitUploadV2({ supabase: harness.supabase, fetch: harness.fetchMock }, {
       brandId: 'brand-1',
       creatorName: '',
-      creativeType: 'flexible',
-      batchOn: false,
+      modes: modes({ flexible: true }),
       today: '2026-10-25',
-      batchCreatives: [],
+      plainCreatives: [],
       creative: creative({
         assets: [
           asset('1', local(files[0], 1080, 1080, '1x1')),
@@ -406,11 +406,10 @@ describe('submitUploadV2 sequence', () => {
     const result = await submitUploadV2({ supabase: harness.supabase, fetch: harness.fetchMock }, {
       brandId: 'brand-1',
       creatorName: 'Jane Doe',
-      creativeType: 'whitelist',
-      batchOn: true,
+      modes: modes(),
       today: '2026-10-25',
       creative: creative({ usageEndDate: '2026-12-31', handle: '@jane' }),
-      batchCreatives: names.map((name, index) => creative({
+      plainCreatives: names.map((name, index) => creative({
         id: `b-${index}`,
         productKey: 'product:ignored',
         productLabel: 'Ignored',
@@ -446,11 +445,10 @@ describe('submitUploadV2 sequence', () => {
     const result = await submitUploadV2({ supabase: harness.supabase, fetch: harness.fetchMock }, {
       brandId: 'brand-1',
       creatorName: '',
-      creativeType: 'whitelist',
-      batchOn: false,
+      modes: modes({ whitelist: true }),
       today: '2026-10-25',
-      batchCreatives: [],
-      creative: creative({ media: local(sourceFile('a.jpg', 'image/jpeg'), 1080, 1080, '1x1') }),
+      plainCreatives: [creative({ media: local(sourceFile('a.jpg', 'image/jpeg'), 1080, 1080, '1x1') })],
+      creative: creative(),
     });
     expect(result).toEqual({ ok: false, error: 'File upload failed for "a.jpg": bucket missing' });
     expect(harness.calls.some((call) => call.op === 'insert')).toBe(false);
@@ -461,11 +459,10 @@ describe('submitUploadV2 sequence', () => {
     const result = await submitUploadV2({ supabase: harness.supabase, fetch: harness.fetchMock }, {
       brandId: 'brand-1',
       creatorName: '',
-      creativeType: 'whitelist',
-      batchOn: false,
+      modes: modes({ whitelist: true }),
       today: '2026-10-25',
-      batchCreatives: [],
-      creative: creative({ media: local(sourceFile('a.jpg', 'image/jpeg'), 1080, 1080, '1x1') }),
+      plainCreatives: [creative({ media: local(sourceFile('a.jpg', 'image/jpeg'), 1080, 1080, '1x1') })],
+      creative: creative(),
     });
     expect(result.ok).toBe(true);
     await settle();
@@ -484,13 +481,11 @@ describe('submitUploadV2 sequence', () => {
       const result = await submitUploadV2({ supabase: harness.supabase, fetch: harness.fetchMock }, {
         brandId: 'brand-1',
         creatorName: '',
-        creativeType: 'whitelist',
-        batchOn: false,
+        modes: modes({ whitelist: true }),
         today: '2026-10-25',
-        batchCreatives: [],
+        plainCreatives: [creative({ media: local(sourceFile('a.jpg', 'image/jpeg'), 1080, 1080, '1x1') })],
         creative: creative({
           usageEndDate: '2026-12-31',
-          media: local(sourceFile('a.jpg', 'image/jpeg'), 1080, 1080, '1x1'),
         }),
       });
       expect(result).toMatchObject({ ok: true, fileCount: 1 });
