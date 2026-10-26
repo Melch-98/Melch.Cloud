@@ -3,10 +3,15 @@ import { usageEndDateError } from '@/lib/usage-end-date';
 import {
   batchFileNamePreview,
   fileExtension,
+  nameTypeForModes,
+  normalizeUploadModes,
   previewCreativeFileName,
+  structureCapacityMessage,
+  uploadStructure,
   type Creative,
-  type CreativeType,
   type LocalMedia,
+  type UploadModes,
+  type UploadStructure,
 } from '@/components/upload-v2/model';
 
 export type SubmissionInsertRow = {
@@ -61,11 +66,11 @@ export type MapV2Input = {
   userId: string;
   batchName: string;
   creatorName: string;
-  creativeType: CreativeType;
-  batchOn: boolean;
-  /** The creative on screen when Batch is off. */
+  modes: UploadModes;
+  /** Details, plus cards or assets when carousel or flexible is on. */
   creative: Creative;
-  batchCreatives: readonly Creative[];
+  /** One plain creative per file. Used when neither carousel nor flexible is on. */
+  plainCreatives: readonly Creative[];
 };
 
 type Piece = {
@@ -80,18 +85,13 @@ function withFile(media: LocalMedia | null | undefined): { file: File; media: Lo
   return { file: media.file, media };
 }
 
-/** Files that belong on this submit. Batch is its own list. Single modes use the active creative. */
-export function collectUploadPieces(input: Pick<MapV2Input, 'creativeType' | 'batchOn' | 'creative' | 'batchCreatives'>): Piece[] {
-  if (input.batchOn) {
-    return input.batchCreatives.flatMap((creative) => {
-      const attached = withFile(creative.media);
-      if (!attached) return [];
-      return [{ ...attached, creative, cardHeadline: null }];
-    });
-  }
-
+/** Files that belong on this submit. Plain mode is one creative per file. */
+export function collectUploadPieces(input: Pick<MapV2Input, 'modes' | 'creative' | 'plainCreatives'>): Piece[] {
+  const modes = normalizeUploadModes(input.modes);
+  const structure = uploadStructure(modes);
   const { creative } = input;
-  if (input.creativeType === 'carousel') {
+
+  if (structure === 'carousel') {
     return creative.cards.flatMap((card) => {
       const attached = withFile(card.media);
       if (!attached) return [];
@@ -99,7 +99,7 @@ export function collectUploadPieces(input: Pick<MapV2Input, 'creativeType' | 'ba
     });
   }
 
-  if (input.creativeType === 'flexible') {
+  if (structure === 'flexible') {
     return creative.assets.flatMap((asset) => {
       const attached = withFile(asset.media);
       if (!attached) return [];
@@ -107,9 +107,11 @@ export function collectUploadPieces(input: Pick<MapV2Input, 'creativeType' | 'ba
     });
   }
 
-  const attached = withFile(creative.media);
-  if (!attached) return [];
-  return [{ ...attached, creative, cardHeadline: null }];
+  return input.plainCreatives.flatMap((item) => {
+    const attached = withFile(item.media);
+    if (!attached) return [];
+    return [{ ...attached, creative: item, cardHeadline: null }];
+  });
 }
 
 /** First file keeps its name. Later collisions become name-2, name-3, before the extension. */
@@ -153,29 +155,40 @@ export function productColumns(productKey: string, productLabel: string): {
   return { product_id: null, product_name: label };
 }
 
-function storedName(input: MapV2Input, piece: Piece): string {
-  if (input.batchOn) return batchFileNamePreview(piece.creative).fileName;
-  return previewCreativeFileName(
-    piece.creative,
-    input.creatorName,
-    input.creativeType,
-    piece.file.name,
-  ).fileName;
+function detailCreative(input: MapV2Input, piece: Piece, structure: UploadStructure): Creative {
+  if (structure !== 'plain') return piece.creative;
+  return {
+    ...piece.creative,
+    productKey: input.creative.productKey,
+    productLabel: input.creative.productLabel,
+    angle: input.creative.angle,
+    caption: input.creative.caption,
+    handle: input.creative.handle,
+  };
+}
+
+function storedName(input: MapV2Input, piece: Piece, structure: UploadStructure): string {
+  const named = detailCreative(input, piece, structure);
+  const typeWord = nameTypeForModes(input.modes);
+  if (!typeWord) return batchFileNamePreview(named).fileName;
+  return previewCreativeFileName(named, input.creatorName, typeWord, piece.file.name).fileName;
 }
 
 /**
- * One submission for the active creative, or one submission for the whole batch.
- * Batch mode is a plain bulk upload: creator_name '', and no whitelist, carousel, or flexible flags.
+ * One submission for every file on the card.
+ * Default plain bulk: creator_name '', no whitelist, carousel, or flexible flags.
  * creative_type is never the word whitelist.
  */
 export function mapV2Submission(input: MapV2Input): MappedSubmission {
-  const pieces = collectUploadPieces(input);
-  const names = dedupeStoredFileNames(pieces.map((piece) => storedName(input, piece)));
-  const batch = input.batchOn;
-  const isCarousel = !batch && input.creativeType === 'carousel';
-  const isFlexible = !batch && input.creativeType === 'flexible';
-  const isWhitelist = !batch && input.creativeType === 'whitelist';
+  const modes = normalizeUploadModes(input.modes);
+  const structure = uploadStructure(modes);
+  const pieces = collectUploadPieces({ ...input, modes });
+  const names = dedupeStoredFileNames(pieces.map((piece) => storedName({ ...input, modes }, piece, structure)));
+  const isCarousel = modes.carousel;
+  const isFlexible = modes.flexible;
+  const isWhitelist = modes.whitelist;
   const creative = input.creative;
+  const detailed = isWhitelist || isCarousel || isFlexible;
 
   const usageEndDate = isWhitelist && !creative.perpetual
     ? creative.usageEndDate.trim() || null
@@ -190,12 +203,12 @@ export function mapV2Submission(input: MapV2Input): MappedSubmission {
       pieces.map((piece) => ({ type: piece.file.type, name: piece.file.name })),
       { isCarousel, isFlexible },
     ),
-    creator_name: batch ? '' : input.creatorName.trim(),
+    creator_name: detailed ? input.creatorName.trim() : '',
     creator_social_handle: isWhitelist ? creative.handle.trim() || null : null,
     landing_page_url: '',
     copy_title: '',
     copy_headline: null,
-    copy_body: batch ? '' : creative.caption.trim(),
+    copy_body: detailed ? creative.caption.trim() : '',
     copy_cta: null,
     notes: '',
     is_carousel: isCarousel,
@@ -206,10 +219,11 @@ export function mapV2Submission(input: MapV2Input): MappedSubmission {
   };
 
   const files: MappedUploadFile[] = pieces.map((piece, index) => {
-    const product = batch
-      ? { product_id: null, product_name: null }
-      : productColumns(piece.creative.productKey, piece.creative.productLabel);
-    const angle = batch ? '' : piece.creative.angle.trim();
+    const source = detailCreative({ ...input, modes }, piece, structure);
+    const product = detailed
+      ? productColumns(source.productKey, source.productLabel)
+      : { product_id: null, product_name: null };
+    const angle = detailed ? source.angle.trim() : '';
     return {
       file: piece.file,
       row: {
@@ -236,16 +250,18 @@ export function mapV2Submission(input: MapV2Input): MappedSubmission {
 /** Why Submit stays disabled. Null means the form can submit. */
 export function v2SubmitBlocker(input: {
   brandId?: string;
-  creativeType: CreativeType;
-  batchOn: boolean;
+  modes: UploadModes;
   creative: Creative;
-  batchCreatives: readonly Creative[];
+  plainCreatives: readonly Creative[];
   today: string;
 }): string | null {
   if (!input.brandId?.trim()) return 'Choose a brand';
-  const count = collectUploadPieces(input).length;
+  const modes = normalizeUploadModes(input.modes);
+  const count = collectUploadPieces({ ...input, modes }).length;
   if (count < 1) return 'Add at least one file';
-  if (!input.batchOn && input.creativeType === 'whitelist' && !input.creative.perpetual) {
+  const capacity = structureCapacityMessage(uploadStructure(modes), count);
+  if (capacity) return capacity;
+  if (modes.whitelist && !input.creative.perpetual) {
     return usageEndDateError(input.creative.usageEndDate, input.today);
   }
   return null;

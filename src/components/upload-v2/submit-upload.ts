@@ -1,6 +1,6 @@
 import { mapV2Submission, v2SubmitBlocker } from '@/components/upload-v2/map-submission';
 import { weekFolderInsert } from '@/components/upload-v2/submit-flags';
-import type { Creative, CreativeType } from '@/components/upload-v2/model';
+import type { Creative, UploadModes } from '@/components/upload-v2/model';
 
 type InsertResult = {
   data: { id?: string; usage_end_date?: string | null } | null;
@@ -35,10 +35,9 @@ export type V2SubmitClient = {
 export type SubmitV2Input = {
   brandId: string;
   creatorName: string;
-  creativeType: CreativeType;
-  batchOn: boolean;
+  modes: UploadModes;
   creative: Creative;
-  batchCreatives: readonly Creative[];
+  plainCreatives: readonly Creative[];
   today: string;
 };
 
@@ -87,10 +86,9 @@ export async function submitUploadV2(
     userId: '',
     batchName,
     creatorName: input.creatorName,
-    creativeType: input.creativeType,
-    batchOn: input.batchOn,
+    modes: input.modes,
     creative: input.creative,
-    batchCreatives: input.batchCreatives,
+    plainCreatives: input.plainCreatives,
   });
   if (mapped.files.length < 1) return { ok: false, error: 'Add at least one file' };
 
