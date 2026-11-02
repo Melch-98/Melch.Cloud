@@ -137,6 +137,8 @@ export default function UploadV2Studio({
   );
   const [weekLabel, setWeekLabel] = useState('Week');
   const [creatorName, setCreatorName] = useState('');
+  const [landingPageUrl, setLandingPageUrl] = useState('');
+  const [notes, setNotes] = useState('');
   const [modes, setModes] = useState<UploadModes>(EMPTY_UPLOAD_MODES);
   const [details, setDetails] = useState<CreativeDetails>(EMPTY_DETAILS);
   const [plainCreatives, setPlainCreatives] = useState<Creative[]>([]);
@@ -523,6 +525,7 @@ export default function UploadV2Studio({
     creative: submitCreative,
     plainCreatives,
     today,
+    landingPageUrl,
   });
 
   function resetAfterSubmit() {
@@ -536,6 +539,8 @@ export default function UploadV2Studio({
     setAssetIndex(0);
     setModes(EMPTY_UPLOAD_MODES);
     setCreatorName('');
+    setLandingPageUrl('');
+    setNotes('');
     setDetails(EMPTY_DETAILS);
     setMediaNote(null);
   }
@@ -552,6 +557,7 @@ export default function UploadV2Studio({
       creative,
       plainCreatives,
       today: localToday(),
+      landingPageUrl,
     });
     if (blocker || !brandId) {
       setSubmitMessage({ type: 'error', text: blocker || 'Choose a brand' });
@@ -579,6 +585,8 @@ export default function UploadV2Studio({
         creative,
         plainCreatives,
         today: localToday(),
+        landingPageUrl,
+        notes,
       });
       if (!result.ok) {
         setSubmitMessage({ type: 'error', text: result.error });
@@ -693,6 +701,10 @@ export default function UploadV2Studio({
           onReorderCards={reorderCards}
           onReorderAssets={reorderAssets}
           onReorderCreatives={reorderCreatives}
+          landingPageUrl={landingPageUrl}
+          notes={notes}
+          onLandingPageUrl={setLandingPageUrl}
+          onNotes={setNotes}
           canSubmit={!submitBlocker}
           submitting={submitting}
           submitPhase={submitPhase}

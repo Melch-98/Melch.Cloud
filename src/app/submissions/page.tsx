@@ -13,11 +13,12 @@ import {
   ChevronUp,
   Package,
   FileText,
-  ExternalLink,
   ArrowRight,
   Play,
 } from 'lucide-react';
 import Navbar from '@/components/Navbar';
+import { BatchNotes, FileContext, LandingPageLink } from '@/components/queue-context';
+import { landingPageHref } from '@/lib/landing-page-url';
 import { createClient } from '@/lib/supabase';
 
 interface BatchFile {
@@ -27,6 +28,8 @@ interface BatchFile {
   file_type: string | null;
   media_format: string | null;
   aspect_ratio: string | null;
+  landing_page_url?: string | null;
+  notes?: string | null;
 }
 
 interface BatchSubmission {
@@ -35,6 +38,7 @@ interface BatchSubmission {
   creative_type: string;
   creator_name: string;
   landing_page_url: string;
+  notes?: string | null;
   copy_title: string;
   is_carousel: boolean;
   is_flexible: boolean;
@@ -202,6 +206,7 @@ function FileThumbnail({ file }: { file: BatchFile }) {
             <span className="text-[9px] text-amber-600">{file.aspect_ratio}</span>
           )}
         </div>
+        <FileContext landingPageUrl={file.landing_page_url} notes={file.notes} />
       </div>
     </div>
   );
@@ -271,20 +276,12 @@ function BatchCard({ batch }: { batch: BatchSubmission }) {
         <div className="border-t border-white/5 p-4 space-y-4">
           {/* Context info */}
           <div className="flex flex-wrap gap-4 text-xs">
-            {batch.landing_page_url && (
-              <div>
+            {landingPageHref(batch.landing_page_url) ? (
+              <div className="min-w-0 max-w-full">
                 <span className="text-gray-500 block mb-0.5">Landing Page</span>
-                <a
-                  href={batch.landing_page_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-amber-400 hover:underline flex items-center gap-1"
-                >
-                  {batch.landing_page_url.replace(/^https?:\/\//, '').slice(0, 40)}
-                  <ExternalLink className="w-3 h-3" />
-                </a>
+                <LandingPageLink url={batch.landing_page_url} />
               </div>
-            )}
+            ) : null}
             {batch.copy_title && (
               <div>
                 <span className="text-gray-500 block mb-0.5">Copy Template</span>
@@ -298,6 +295,7 @@ function BatchCard({ batch }: { batch: BatchSubmission }) {
               </div>
             )}
           </div>
+          <BatchNotes notes={batch.notes} />
 
           {/* File thumbnails grid */}
           {batch.files.length > 0 && (
@@ -459,11 +457,12 @@ export default function SubmissionsPage() {
       let query = supabase
         .from('submissions')
         .select(`
-          id, batch_name, creative_type, creator_name, landing_page_url,
+          id, batch_name, creative_type, creator_name, landing_page_url, notes,
           copy_title, is_carousel, is_flexible, is_whitelist,
           batch_status, launched_at, created_at, file_count,
           submission_files (
-            id, file_name, file_url, file_type, media_format, aspect_ratio
+            id, file_name, file_url, file_type, media_format, aspect_ratio,
+            landing_page_url, notes
           )
         `)
         .order('created_at', { ascending: false });

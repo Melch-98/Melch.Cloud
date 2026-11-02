@@ -373,6 +373,58 @@ describe('mapV2Submission', () => {
     expect(mapped.files).toHaveLength(0);
     expect(mapped.submission.file_count).toBe(0);
   });
+
+  it('stores a landing page and notes on the submission and leaves file columns unset', () => {
+    const source = file('pour.jpg', 'image/jpeg');
+    const mapped = mapV2Submission(input({
+      landingPageUrl: ' mintier.com/products/serum ',
+      notes: '  Buyer note https://mintier.com/products/serum  ',
+      plainCreatives: [creative({ media: local(source, 1080, 1350, '4x5') })],
+    }));
+    expect(mapped.submission.landing_page_url).toBe('https://mintier.com/products/serum');
+    expect(mapped.submission.notes).toBe('Buyer note https://mintier.com/products/serum');
+    expect(mapped.files[0].row).not.toHaveProperty('landing_page_url');
+    expect(mapped.files[0].row).not.toHaveProperty('notes');
+  });
+
+  it('keeps a blank landing page and notes empty for the queue', () => {
+    const mapped = mapV2Submission(input({
+      landingPageUrl: '   ',
+      notes: ' \n ',
+      modes: modes({ carousel: true }),
+      creative: creative({
+        cards: [
+          card('a', local(file('a.jpg', 'image/jpeg'), 1080, 1350, '4x5')),
+          card('b', local(file('b.jpg', 'image/jpeg'), 1080, 1350, '4x5')),
+        ],
+      }),
+    }));
+    expect(mapped.submission.landing_page_url).toBe('');
+    expect(mapped.submission.notes).toBe('');
+    expect(mapped.files.every((item) => !('landing_page_url' in item.row) && !('notes' in item.row))).toBe(true);
+  });
+
+  it('normalizes an http landing page to https in whitelist and flexible', () => {
+    const source = file('clip.mp4', 'video/mp4');
+    const whitelist = mapV2Submission(input({
+      landingPageUrl: 'http://mintier.com/products/serum',
+      notes: 'whitelist',
+      modes: modes({ whitelist: true }),
+      plainCreatives: [creative({ media: local(source, 1080, 1920, '9x16') })],
+    }));
+    const flexible = mapV2Submission(input({
+      landingPageUrl: 'HTTPS://mintier.com/products/serum',
+      notes: '',
+      modes: modes({ flexible: true }),
+      creative: creative({
+        assets: [asset('a', local(source, 1080, 1920, '9x16'))],
+      }),
+    }));
+    expect(whitelist.submission.landing_page_url).toBe('https://mintier.com/products/serum');
+    expect(whitelist.submission.notes).toBe('whitelist');
+    expect(flexible.submission.landing_page_url).toBe('https://mintier.com/products/serum');
+    expect(flexible.submission.notes).toBe('');
+  });
 });
 
 describe('v2SubmitBlocker', () => {
@@ -457,5 +509,18 @@ describe('v2SubmitBlocker', () => {
       plainCreatives: [],
       today,
     })).toBe('A flexible creative holds 10 assets. 2 files are over the limit. Remove them or turn Flexible off.');
+  });
+
+  it('blocks a landing page that is not a web address and allows a blank one', () => {
+    const ready = {
+      brandId: 'brand-1',
+      modes: modes(),
+      creative: creative(),
+      plainCreatives: [creative({ media: local(file('a.jpg', 'image/jpeg'), 1080, 1080, '1x1') })],
+      today,
+    };
+    expect(v2SubmitBlocker({ ...ready, landingPageUrl: 'not a url' })).toBe('Enter a landing page URL, or leave it blank');
+    expect(v2SubmitBlocker({ ...ready, landingPageUrl: '' })).toBeNull();
+    expect(v2SubmitBlocker({ ...ready, landingPageUrl: 'mintier.com/products/serum' })).toBeNull();
   });
 });

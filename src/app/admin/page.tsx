@@ -24,6 +24,8 @@ import {
   Play,
 } from 'lucide-react';
 import Navbar from '@/components/Navbar';
+import { BatchNotes, FileContext, LandingPageLink } from '@/components/queue-context';
+import { landingPageHref } from '@/lib/landing-page-url';
 import { createClient } from '@/lib/supabase';
 import { localToday, usageEndDateError } from '@/lib/usage-end-date';
 
@@ -40,6 +42,7 @@ interface BatchSubmission {
   is_carousel: boolean;
   is_flexible: boolean;
   is_whitelist: boolean;
+  notes?: string | null;
   usage_end_date?: string | null;
   notion_page_id?: string | null;
   notion_page_url?: string | null;
@@ -62,6 +65,8 @@ interface BatchFile {
   aspect_ratio: string | null;
   copy_headline: string | null;
   copy_body: string | null;
+  landing_page_url?: string | null;
+  notes?: string | null;
 }
 
 const statusConfig = {
@@ -427,20 +432,12 @@ function BatchCard({
         <div className="border-t border-white/5 p-4 space-y-4">
           {/* Batch context */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-            {batch.landing_page_url && (
-              <div>
+            {landingPageHref(batch.landing_page_url) ? (
+              <div className="min-w-0">
                 <span className="text-gray-500 block mb-0.5">Landing Page</span>
-                <a
-                  href={batch.landing_page_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-amber-400 hover:underline flex items-center gap-1 truncate"
-                >
-                  {batch.landing_page_url.replace(/^https?:\/\//, '').slice(0, 30)}
-                  <ExternalLink className="w-3 h-3 flex-shrink-0" />
-                </a>
+                <LandingPageLink url={batch.landing_page_url} />
               </div>
-            )}
+            ) : null}
             {batch.copy_title && (
               <div>
                 <span className="text-gray-500 block mb-0.5">Copy Template</span>
@@ -495,6 +492,8 @@ function BatchCard({
               </div>
             )}
           </div>
+
+          <BatchNotes notes={batch.notes} />
 
           {/* Files grid */}
           <div>
@@ -575,6 +574,7 @@ function BatchCard({
                           <span className="text-[9px] text-amber-600">{file.aspect_ratio}</span>
                         )}
                       </div>
+                      <FileContext landingPageUrl={file.landing_page_url} notes={file.notes} />
                     </div>
                   </div>
                 );
@@ -797,6 +797,8 @@ export default function AdminPage() {
             aspect_ratio,
             copy_headline,
             copy_body,
+            landing_page_url,
+            notes,
             dropbox_path
           )
         `)
