@@ -40,6 +40,7 @@ import {
   type UploadBrand,
   type UploadModes,
 } from '@/components/upload-v2/model';
+import { normalizeLandingPageUrl } from '@/lib/landing-page-url';
 import { createClient } from '@/lib/supabase';
 import { localToday, usageEndDateError } from '@/lib/usage-end-date';
 
@@ -98,6 +99,10 @@ type ControlCardProps = {
   onReorderCards: (from: number, to: number) => void;
   onReorderAssets: (from: number, to: number) => void;
   onReorderCreatives: (from: number, to: number) => void;
+  landingPageUrl: string;
+  notes: string;
+  onLandingPageUrl: (value: string) => void;
+  onNotes: (value: string) => void;
   canSubmit: boolean;
   submitting: boolean;
   submitPhase: string | null;
@@ -496,6 +501,10 @@ export default function ControlCard(props: ControlCardProps) {
     onReorderCards,
     onReorderAssets,
     onReorderCreatives,
+    landingPageUrl,
+    notes,
+    onLandingPageUrl,
+    onNotes,
     canSubmit,
     submitting,
     submitPhase,
@@ -510,6 +519,8 @@ export default function ControlCard(props: ControlCardProps) {
   const angleId = useId();
   const captionId = useId();
   const headlineId = useId();
+  const landingId = useId();
+  const notesId = useId();
   const fileRef = useRef<HTMLInputElement>(null);
   const replaceTarget = useRef<ReplaceTarget | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -517,6 +528,7 @@ export default function ControlCard(props: ControlCardProps) {
 
   const activeCard = creative.cards[Math.min(creative.cards.length - 1, Math.max(0, cardIndex))];
   const usageError = creative.perpetual ? null : usageEndDateError(creative.usageEndDate, localToday());
+  const landingError = normalizeLandingPageUrl(landingPageUrl).error;
   const cropNote = shownMedia?.width && shownMedia.height
     ? aspectCropNote(shownMedia.width, shownMedia.height, creative.ratio)
     : null;
@@ -924,6 +936,49 @@ export default function ControlCard(props: ControlCardProps) {
               {structure === 'plain' ? 'Each file snaps this to the nearest ratio.' : 'A file snaps this to the nearest ratio.'}
             </p>
           )}
+        </div>
+        <div className="mt-3 space-y-3">
+          <div>
+            <label htmlFor={landingId} className={fieldLabelClass}>
+              Landing page URL
+            </label>
+            <input
+              id={landingId}
+              type="text"
+              inputMode="url"
+              data-field="landing-page"
+              value={landingPageUrl}
+              placeholder="https://brand.com/product"
+              autoComplete="off"
+              onChange={(event) => onLandingPageUrl(event.target.value)}
+              onBlur={() => {
+                const normalized = normalizeLandingPageUrl(landingPageUrl);
+                if (!normalized.error && normalized.value !== landingPageUrl) onLandingPageUrl(normalized.value);
+              }}
+              className={inputClass}
+              style={inputStyle}
+            />
+            {landingError ? (
+              <p className="mt-1 text-[11px] leading-4 text-red-400">{landingError}</p>
+            ) : (
+              <p className="mt-1 text-[11px] leading-4 text-gray-600">Optional. https:// is added if you leave it off.</p>
+            )}
+          </div>
+          <div>
+            <label htmlFor={notesId} className={fieldLabelClass}>
+              Notes
+            </label>
+            <textarea
+              id={notesId}
+              data-field="notes"
+              value={notes}
+              rows={2}
+              placeholder="Note for the media buyer"
+              onChange={(event) => onNotes(event.target.value)}
+              className={`${inputClass} h-auto resize-none py-2`}
+              style={inputStyle}
+            />
+          </div>
         </div>
       </section>
 

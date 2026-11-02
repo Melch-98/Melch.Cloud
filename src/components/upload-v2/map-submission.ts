@@ -1,4 +1,5 @@
 import { deriveBatchCreativeType } from '@/lib/batch-creative-type';
+import { normalizeLandingPageUrl } from '@/lib/landing-page-url';
 import { usageEndDateError } from '@/lib/usage-end-date';
 import {
   batchFileNamePreview,
@@ -71,6 +72,10 @@ export type MapV2Input = {
   creative: Creative;
   /** One plain creative per file. Used when neither carousel nor flexible is on. */
   plainCreatives: readonly Creative[];
+  /** Batch landing page. Blank stays ''. A bare host is stored as https://. */
+  landingPageUrl?: string;
+  /** Batch note. Blank stays ''. Same column legacy SubmissionForm writes. */
+  notes?: string;
 };
 
 type Piece = {
@@ -193,6 +198,7 @@ export function mapV2Submission(input: MapV2Input): MappedSubmission {
   const usageEndDate = isWhitelist && !creative.perpetual
     ? creative.usageEndDate.trim() || null
     : null;
+  const landing = normalizeLandingPageUrl(input.landingPageUrl ?? '');
 
   const submission: SubmissionInsertRow = {
     brand_id: input.brandId,
@@ -205,12 +211,12 @@ export function mapV2Submission(input: MapV2Input): MappedSubmission {
     ),
     creator_name: detailed ? input.creatorName.trim() : '',
     creator_social_handle: isWhitelist ? creative.handle.trim() || null : null,
-    landing_page_url: '',
+    landing_page_url: landing.error ? '' : landing.value,
     copy_title: '',
     copy_headline: null,
     copy_body: detailed ? creative.caption.trim() : '',
     copy_cta: null,
-    notes: '',
+    notes: (input.notes ?? '').trim(),
     is_carousel: isCarousel,
     is_flexible: isFlexible,
     is_whitelist: isWhitelist,
@@ -254,6 +260,7 @@ export function v2SubmitBlocker(input: {
   creative: Creative;
   plainCreatives: readonly Creative[];
   today: string;
+  landingPageUrl?: string;
 }): string | null {
   if (!input.brandId?.trim()) return 'Choose a brand';
   const modes = normalizeUploadModes(input.modes);
@@ -262,7 +269,8 @@ export function v2SubmitBlocker(input: {
   const capacity = structureCapacityMessage(uploadStructure(modes), count);
   if (capacity) return capacity;
   if (modes.whitelist && !input.creative.perpetual) {
-    return usageEndDateError(input.creative.usageEndDate, input.today);
+    const usageError = usageEndDateError(input.creative.usageEndDate, input.today);
+    if (usageError) return usageError;
   }
-  return null;
+  return normalizeLandingPageUrl(input.landingPageUrl ?? '').error;
 }

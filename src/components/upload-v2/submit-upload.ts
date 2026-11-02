@@ -39,6 +39,8 @@ export type SubmitV2Input = {
   creative: Creative;
   plainCreatives: readonly Creative[];
   today: string;
+  landingPageUrl?: string;
+  notes?: string;
 };
 
 export type SubmitV2Result =
@@ -54,7 +56,14 @@ export async function submitUploadV2(
   },
   input: SubmitV2Input,
 ): Promise<SubmitV2Result> {
-  const blocker = v2SubmitBlocker(input);
+  const blocker = v2SubmitBlocker({
+    brandId: input.brandId,
+    modes: input.modes,
+    creative: input.creative,
+    plainCreatives: input.plainCreatives,
+    today: input.today,
+    landingPageUrl: input.landingPageUrl,
+  });
   if (blocker) return { ok: false, error: blocker };
 
   const { data: { session } } = await deps.supabase.auth.getSession();
@@ -89,6 +98,8 @@ export async function submitUploadV2(
     modes: input.modes,
     creative: input.creative,
     plainCreatives: input.plainCreatives,
+    landingPageUrl: input.landingPageUrl,
+    notes: input.notes,
   });
   if (mapped.files.length < 1) return { ok: false, error: 'Add at least one file' };
 
