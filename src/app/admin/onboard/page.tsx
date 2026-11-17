@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
+import { BRAND_PUBLIC_COLUMNS } from '@/lib/brand-public-columns';
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -191,17 +192,16 @@ export default function OnboardPage() {
       }
       setUserRole(profile.role);
 
-      // Load active + archived brands
       const { data: active } = await supabase
         .from('brands')
-        .select('*')
+        .select(BRAND_PUBLIC_COLUMNS)
         .is('archived_at', null)
         .order('name');
       setBrands(active || []);
 
       const { data: archived } = await supabase
         .from('brands')
-        .select('*')
+        .select(BRAND_PUBLIC_COLUMNS)
         .not('archived_at', 'is', null)
         .order('name');
       setArchivedBrands(archived || []);

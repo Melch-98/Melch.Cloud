@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { BRAND_PUBLIC_COLUMNS } from '@/lib/brand-public-columns';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,7 +49,7 @@ export async function POST(request: NextRequest) {
       .from('brands')
       .update(update)
       .eq('slug', brandSlug)
-      .select()
+      .select(BRAND_PUBLIC_COLUMNS)
       .single();
 
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
@@ -90,7 +91,7 @@ export async function POST(request: NextRequest) {
       .from('brands')
       .update({ [field]: value })
       .eq('id', brandId)
-      .select();
+      .select(BRAND_PUBLIC_COLUMNS);
 
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
     results.push({ action: 'set_field', data });
@@ -115,7 +116,7 @@ export async function POST(request: NextRequest) {
       .from('brands')
       .update(update)
       .ilike('name', brandName)
-      .select();
+      .select(BRAND_PUBLIC_COLUMNS);
 
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
     results.push({ action: 'set_fields', data });
