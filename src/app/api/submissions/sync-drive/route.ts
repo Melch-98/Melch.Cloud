@@ -29,6 +29,17 @@ export const maxDuration = 300;
  * the destination is now Dropbox (not Google Drive).
  */
 export async function POST(req: NextRequest) {
+  const cronSecret = process.env.CRON_SECRET;
+  const authHeader = req.headers.get('authorization');
+  const cronOk = Boolean(cronSecret) && authHeader === `Bearer ${cronSecret}`;
+  const authResult = cronOk ? null : await authenticateRequest(req);
+  if (!cronOk && !authResult?.auth) {
+    return NextResponse.json(
+      { error: authResult?.error || 'Unauthorized' },
+      { status: authResult?.status || 401 }
+    );
+  }
+
   let body: { submission_id?: string; notify?: boolean };
   try {
     body = await req.json();
@@ -39,17 +50,6 @@ export async function POST(req: NextRequest) {
   const submissionId = body.submission_id;
   if (!submissionId) {
     return NextResponse.json({ error: 'submission_id required' }, { status: 400 });
-  }
-
-  const cronSecret = process.env.CRON_SECRET;
-  const authHeader = req.headers.get('authorization');
-  const cronOk = Boolean(cronSecret) && authHeader === `Bearer ${cronSecret}`;
-  const authResult = cronOk ? null : await authenticateRequest(req);
-  if (!cronOk && !authResult?.auth) {
-    return NextResponse.json(
-      { error: authResult?.error || 'Unauthorized' },
-      { status: authResult?.status || 401 }
-    );
   }
 
   const supabase = createServiceClient();

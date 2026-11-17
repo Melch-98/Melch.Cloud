@@ -28,6 +28,7 @@ import {
 import Link from 'next/link';
 import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
+import { BRAND_PUBLIC_COLUMNS } from '@/lib/brand-public-columns';
 
 /* ─── Types ──────────────────────────────────────────────────── */
 
@@ -772,7 +773,7 @@ function TeamCard({
                     type="text"
                     value={shopifyClientId}
                     onChange={(e) => setShopifyClientId(e.target.value)}
-                    placeholder="Shopify app Client ID"
+                    placeholder="Enter a new client id to replace the saved one"
                     className="flex-1 px-3 py-1.5 rounded-lg text-xs outline-none"
                     style={{
                       backgroundColor: 'rgba(255,255,255,0.04)',
@@ -781,7 +782,11 @@ function TeamCard({
                     }}
                   />
                   <button
-                    onClick={() => onUpdateBrand(brand.id, 'shopify_client_id', shopifyClientId)}
+                    onClick={() => {
+                      const next = shopifyClientId.trim();
+                      if (!next) return;
+                      onUpdateBrand(brand.id, 'shopify_client_id', next);
+                    }}
                     className="px-2 py-1 rounded-lg"
                     style={{ backgroundColor: 'rgba(150,191,72,0.15)', color: '#96BF48' }}
                   >
@@ -799,7 +804,7 @@ function TeamCard({
                       type={showShopifySecret ? 'text' : 'password'}
                       value={shopifyClientSecret}
                       onChange={(e) => setShopifyClientSecret(e.target.value)}
-                      placeholder="Shopify app Client Secret"
+                      placeholder="Enter a new client secret to replace the saved one"
                       className="w-full px-3 py-1.5 rounded-lg text-xs outline-none pr-8"
                       style={{
                         backgroundColor: 'rgba(255,255,255,0.04)',
@@ -817,7 +822,11 @@ function TeamCard({
                     </button>
                   </div>
                   <button
-                    onClick={() => onUpdateBrand(brand.id, 'shopify_client_secret', shopifyClientSecret)}
+                    onClick={() => {
+                      const next = shopifyClientSecret.trim();
+                      if (!next) return;
+                      onUpdateBrand(brand.id, 'shopify_client_secret', next);
+                    }}
                     className="px-2 py-1 rounded-lg"
                     style={{ backgroundColor: 'rgba(150,191,72,0.15)', color: '#96BF48' }}
                   >
@@ -1682,7 +1691,7 @@ export default function TeamPage() {
       // Fetch brands
       const { data: allBrands } = await supabase
         .from('brands')
-        .select('id, name, slug, website_url, meta_ad_account_id, google_ads_customer_id, shopify_store_domain, shopify_client_id, shopify_client_secret, gross_margin_pct, target_roas, roas_floor, nc_share_pct, ltv_3m_mult, ltv_6m_mult, ltv_12m_mult, payment_processing_pct, returns_rate_pct, shipping_cost_per_order, creative_cost_static, creative_cost_video')
+        .select(BRAND_PUBLIC_COLUMNS)
         .is('archived_at', null)
         .order('name');
       setBrands(allBrands || []);
@@ -2013,7 +2022,7 @@ export default function TeamPage() {
       const { data, error: err } = await supabase
         .from('brands')
         .insert(insertData)
-        .select()
+        .select(BRAND_PUBLIC_COLUMNS)
         .single();
 
       if (err) {

@@ -62,7 +62,7 @@ export async function dispatchShopifyWebhook(args: {
   }
 
   if (topic === 'refunds/create') {
-    console.log('[shopify-refund]', shop, payload);
+    console.log('[shopify-refund]', topic, shop);
     return { ok: true as const };
   }
 
@@ -71,7 +71,7 @@ export async function dispatchShopifyWebhook(args: {
   }
 
   if (topic === 'customers/data_request' || topic === 'customers/redact' || topic === 'shop/redact') {
-    console.log(`[shopify-gdpr] ${topic} from ${shop}`, payload);
+    console.log('[shopify-gdpr]', topic, shop);
     return { ok: true as const };
   }
 

@@ -1,4 +1,5 @@
 import { withSentryConfig } from '@sentry/nextjs';
+import { securityHeaders } from './src/lib/security-headers.mjs';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -20,17 +21,7 @@ const nextConfig = {
     ];
   },
   async headers() {
-    const csp = "frame-ancestors https://*.myshopify.com https://admin.shopify.com";
-    return [
-      {
-        source: '/app',
-        headers: [{ key: 'Content-Security-Policy', value: csp }],
-      },
-      {
-        source: '/app/:path*',
-        headers: [{ key: 'Content-Security-Policy', value: csp }],
-      },
-    ];
+    return securityHeaders();
   },
 };
 
