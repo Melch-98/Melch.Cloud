@@ -192,7 +192,6 @@ export default function OnboardPage() {
       }
       setUserRole(profile.role);
 
-      // Load active + archived brands
       const { data: active } = await supabase
         .from('brands')
         .select(BRAND_PUBLIC_COLUMNS)

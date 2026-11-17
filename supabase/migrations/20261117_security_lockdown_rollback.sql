@@ -1,7 +1,3 @@
--- Rollback for 20261117_security_lockdown.sql.
--- Do not apply this in the same pass as the forward file.
--- Restores the previous grants and policies. Does not remove tables, columns, or rows.
-
 DROP POLICY IF EXISTS creatives_select ON storage.objects;
 DROP POLICY IF EXISTS creatives_insert ON storage.objects;
 DROP POLICY IF EXISTS creatives_update ON storage.objects;

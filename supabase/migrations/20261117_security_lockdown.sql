@@ -1,8 +1,3 @@
--- Forward migration. Apply this file on its own.
--- Roll back with supabase/migrations/20261117_security_lockdown_rollback.sql.
--- Does not remove tables, columns, buckets, or rows. The creatives bucket stays public.
-
--- Anon keeps SELECT. New tables should not inherit anon writes.
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
   REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLES FROM anon;
 

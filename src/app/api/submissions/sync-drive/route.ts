@@ -24,9 +24,6 @@ export const maxDuration = 300;
  * **Resumable**: each file is tracked individually via `submission_files.dropbox_path`.
  * Files that already have a dropbox_path are skipped. If the function times out
  * mid-batch, a retry will pick up where it left off.
- *
- * Route name kept for compatibility with existing SubmissionForm calls, but
- * the destination is now Dropbox (not Google Drive).
  */
 export async function POST(req: NextRequest) {
   const cronSecret = process.env.CRON_SECRET;

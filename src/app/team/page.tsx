@@ -1688,7 +1688,6 @@ export default function TeamPage() {
         return;
       }
 
-      // Fetch brands
       const { data: allBrands } = await supabase
         .from('brands')
         .select(BRAND_PUBLIC_COLUMNS)
