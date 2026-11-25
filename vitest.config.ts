@@ -38,6 +38,7 @@ export default defineConfig({
       'src/app/api/sync-products/**/*.test.ts',
       'src/app/api/triplewhale-sync/**/*.test.ts',
       'src/lib/shopify/run-triplewhale-brand-sync.test.ts',
+      'src/lib/shopify/bfcm-order-backfill.test.ts',
       'src/lib/shopify/brand-webhooks.test.ts',
       'src/lib/security-headers.test.ts',
       'src/lib/security-lockdown-sql.test.ts',

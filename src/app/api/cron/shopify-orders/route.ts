@@ -4,6 +4,7 @@ import { ensureCustomAppOrderWebhooks } from '@/lib/shopify/ensure-order-webhook
 import { syncConnectedBrandOrders } from '@/lib/shopify/order-sync';
 import { checkDailyPnlIntegrity } from '@/lib/shopify/pnl-integrity';
 import { PNL_BUDGET_MS, refreshDailyPnl } from '@/lib/shopify/refresh-daily-pnl';
+import { runLastYearBfcmBackfill } from '@/lib/shopify/run-bfcm-order-backfill';
 import { pnlIntegrityBudgetRemains, pnlIntegrityDeadline } from '@/lib/shopify/shop-time';
 
 export const dynamic = 'force-dynamic';
@@ -25,7 +26,12 @@ export const maxDuration = 300;
  *    cap). A longer gap is the oldest 10 days, then the next run continues.
  *    Each Shopify Admin brand logs access_scopes.json handles once. The line
  *    is handles only.
- * 4. Compare daily_pnl.gross_sales to shopify_orders gross for Shopify Admin
+ * 4. For each active Shopify Admin brand whose token scopes include
+ *    read_all_orders and which has no shopify_orders in last year's
+ *    Nov 15–Dec 5 (shop timezone), backfill that range and rebuild daily_pnl.
+ *    A range that already has orders is skipped. A truncated pull resumes on
+ *    the next run. The step stops before the integrity check's time budget.
+ * 5. Compare daily_pnl.gross_sales to shopify_orders gross for Shopify Admin
  *    brands over the last 14 complete shop-local days. Triple Whale-only
  *    brands are skipped. The check is skipped when under 20s remain before
  *    this route's 300s limit. Mismatches over 2% are stored on app_settings
@@ -51,6 +57,22 @@ async function runSync() {
     const pnl = await refreshDailyPnl(supabase, new Date(), started + PNL_BUDGET_MS);
     const orders = await syncConnectedBrandOrders(supabase, started + 270_000);
     const integrityDeadline = pnlIntegrityDeadline(started);
+    const backfillDeadline = integrityDeadline - 5_000;
+    let lastYearBfcm:
+      | Awaited<ReturnType<typeof runLastYearBfcmBackfill>>
+      | { skipped: true; reason: 'time_budget'; error?: string };
+    if (Date.now() >= backfillDeadline) {
+      console.log('[bfcm-backfill] deferred; not enough time before the integrity check');
+      lastYearBfcm = { skipped: true, reason: 'time_budget' };
+    } else {
+      try {
+        lastYearBfcm = await runLastYearBfcmBackfill(supabase, new Date(), backfillDeadline);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Last year BFCM backfill failed';
+        console.error(`[bfcm-backfill] ${message}`);
+        lastYearBfcm = { skipped: true, reason: 'time_budget', error: message };
+      }
+    }
     let integrity:
       | Awaited<ReturnType<typeof checkDailyPnlIntegrity>>
       | { skipped: true; reason: 'time_budget' }
@@ -74,6 +96,7 @@ async function runSync() {
       webhooks,
       pnl,
       orders,
+      lastYearBfcm,
       integrity,
       synced_at: new Date().toISOString(),
     });

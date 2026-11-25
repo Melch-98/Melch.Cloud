@@ -170,7 +170,11 @@ describe('order feed label', () => {
   it('names real-time, the 2-hour cron, and Triple Whale', () => {
     expect(orderFeed({ connection: 'shopify_admin', webhooksOk: true }).feed).toBe('realtime');
     expect(orderFeed({ connection: 'shopify_admin', webhooksOk: false }).feed).toBe('cron_2h');
-    expect(orderFeed({ connection: 'triple_whale', webhooksOk: false }).feed).toBe('triple_whale');
+    expect(orderFeed({ connection: 'triple_whale', webhooksOk: false })).toEqual({
+      feed: 'triple_whale',
+      label: 'delayed (Triple Whale)',
+    });
+    expect(orderFeed({ connection: 'none', webhooksOk: false }).label).toBe('No Shopify connected');
   });
 });
 
