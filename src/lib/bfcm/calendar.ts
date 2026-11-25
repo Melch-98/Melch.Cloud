@@ -214,9 +214,9 @@ export function orderFeed(input: {
   webhooksOk: boolean;
 }): { feed: OrderFeed; label: string } {
   if (input.connection === 'triple_whale') {
-    return { feed: 'triple_whale', label: 'Triple Whale (~5h lag)' };
+    return { feed: 'triple_whale', label: 'delayed (Triple Whale)' };
   }
-  if (input.connection === 'none') return { feed: 'none', label: 'No order feed' };
+  if (input.connection === 'none') return { feed: 'none', label: 'No Shopify connected' };
   if (input.webhooksOk) return { feed: 'realtime', label: 'Real-time webhooks' };
   return { feed: 'cron_2h', label: '2-hour sync' };
 }

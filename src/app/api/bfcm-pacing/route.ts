@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { currencyFromShopInfo, getFxRates } from '@/lib/currency';
+import { currencyFromShopInfo, getFxRates, toReportingCurrency } from '@/lib/currency';
 import {
   alignLastYear,
   bfcmWindow,
-  lastYearSalesStatus,
   orderFeed,
   shopDayRangeIso,
   shopTodayAndL7,
@@ -50,7 +49,13 @@ import {
   type HourSales,
 } from '@/lib/bfcm/shopify-sales';
 import { fetchGoogleAdsCustomer, gaqlQueryStrict, resolvePipeboardToken } from '@/lib/pipeboard-google';
-import { shopLocalDay, ymdInTimeZone } from '@/lib/shopify/shop-time';
+import { addCalendarDays, shopLocalDay, ymdInTimeZone } from '@/lib/shopify/shop-time';
+import {
+  buildShopifyWindow,
+  resolveShopifyDay,
+  type PnlDaySnapshot,
+  type ShopifyActual,
+} from '@/lib/bfcm/window-sales';
 import { resolveShopIanaTimeZone } from '@/lib/shopify/shop-timezone';
 import { resolveOrderConnection } from '@/lib/shopify/order-connection';
 import { webhookStatusKey, type StoredWebhookStatus } from '@/lib/shopify/webhook-status';
@@ -95,6 +100,12 @@ interface HistorySlice {
   shopifyL7Hourly: HourSales[];
   shopifyL7DailyAvg: number;
   shopifyLastYear: DaySales | null;
+  thisYearSales: Map<string, DaySales>;
+  lastYearSales: Map<string, DaySales>;
+  thisYearPnl: PnlDaySnapshot[];
+  lastYearPnl: PnlDaySnapshot[];
+  windowOrderCount: number;
+  lastYearOrderCount: number;
   earliestOrderDay: string | null;
   pnl: { ncRev: number; meta: number; google: number; other: number; hasData: boolean };
   lastYearBfcmPnl: LastYearBfcmPnl;
@@ -141,6 +152,46 @@ function roundHours(hours: HourSales[]): HourSales[] {
     ncRevenue: r2(hour.ncRevenue),
     rcRevenue: r2(hour.rcRevenue),
   }));
+}
+
+function num(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function pnlSnapshots(
+  rows: Array<Record<string, unknown>> | null | undefined,
+  reportingCurrency: string,
+  fxRates: Record<string, number>
+): PnlDaySnapshot[] {
+  return (rows || [])
+    .map((row) => {
+      const date = String(row.date || '').slice(0, 10);
+      const from = typeof row.currency === 'string' && row.currency ? row.currency : reportingCurrency;
+      const convert = (amount: unknown) => toReportingCurrency(num(amount), from, reportingCurrency, fxRates);
+      const ncOrders = num(row.nc_orders);
+      const rcOrders = num(row.rc_orders);
+      return {
+        date,
+        gross: convert(row.gross_sales),
+        orders: ncOrders + rcOrders,
+        ncOrders,
+        rcOrders,
+        ncRevenue: convert(row.nc_revenue),
+        rcRevenue: convert(row.rc_revenue),
+      };
+    })
+    .filter((row) => row.date);
+}
+
+function roundActual(actual: ShopifyActual | null): ShopifyActual | null {
+  if (!actual) return null;
+  return {
+    ...actual,
+    gross: r2(actual.gross),
+    ncRevenue: actual.ncRevenue == null ? null : r2(actual.ncRevenue),
+    rcRevenue: actual.rcRevenue == null ? null : r2(actual.rcRevenue),
+  };
 }
 
 function roundDay(day: DaySales): DaySales {
@@ -326,8 +377,13 @@ export async function GET(request: NextRequest) {
   const alignment = alignLastYear(clock.today);
   const historyKey = `bfcm:hist:${brandId}:${year}:${clock.today}:${metaClock.today}:${baseCurrency}:${timezone}:${accountTimeZone}`;
   const liveKey = `bfcm:live:${brandId}:${clock.today}:${metaClock.today}:${baseCurrency}:${timezone}:${accountTimeZone}`;
+  const started = Date.now();
+  let historyMs = 0;
+  let liveMs = 0;
   let history = readCache(historyCache, historyKey, HISTORY_TTL, bypassCache);
   let live = readCache(liveCache, liveKey, TODAY_TTL, bypassCache);
+  const historyCached = !!history;
+  const liveCached = !!live;
 
   const fxRates = await getFxRates();
 
@@ -349,6 +405,7 @@ export async function GET(request: NextRequest) {
     const feed = orderFeed({ connection: connection.connection, webhooksOk });
 
     if (!history) {
+      const historyStarted = Date.now();
       history = await loadHistory({
         supabase,
         brand,
@@ -364,12 +421,15 @@ export async function GET(request: NextRequest) {
         reportingCurrency,
         fxRates,
         connection,
+        shopConnected: connection.connection !== 'none',
       });
+      historyMs = Date.now() - historyStarted;
       if (!history.warnings.some((warning) => warning.includes('cannot be in the future'))) {
         historyCache.set(historyKey, { data: history, ts: Date.now() });
       }
     }
     if (!live) {
+      const liveStarted = Date.now();
       live = await loadLive({
         supabase,
         brand,
@@ -386,6 +446,7 @@ export async function GET(request: NextRequest) {
         campaignL7: history.campaignL7,
         feed,
       });
+      liveMs = Date.now() - liveStarted;
       if (!live.warnings.some((warning) => warning.startsWith('Shopify orders failed'))) {
         liveCache.set(liveKey, { data: live, ts: Date.now() });
       }
@@ -393,6 +454,16 @@ export async function GET(request: NextRequest) {
   }
 
   if (!history || !live) {
+    console.log(JSON.stringify({
+      source: 'bfcm-pacing',
+      brandId,
+      totalMs: Date.now() - started,
+      historyMs,
+      liveMs,
+      historyCached,
+      liveCached,
+      failed: true,
+    }));
     return NextResponse.json({ error: 'Failed to fetch BFCM pacing data' }, { status: 500 });
   }
   const historyWarnings = history.warnings || [];
@@ -420,14 +491,40 @@ export async function GET(request: NextRequest) {
     amerOtherSpend: 0,
   });
   const revenueReporting = inStore.todayRevenue;
-  const ncReporting = inStore.todayNcRevenue;
+  const customerSplit = live.feed.feed === 'realtime' || live.feed.feed === 'cron_2h';
+  const shopifyConnected = live.feed.feed !== 'none';
+  const ncReporting = customerSplit ? inStore.todayNcRevenue : 0;
   const metaSpendReporting = inStore.metaSpend;
   const googleSpendReporting = inStore.googleSpend;
   const spendForMer = (metaConfigured && !metaOk) || (live.google.configured && !googleOk)
     ? null
     : metaSpendReporting + googleSpendReporting;
-  const mer = spendForMer == null ? null : merRatio(revenueReporting, spendForMer);
-  const amer = spendForMer == null ? null : merRatio(ncReporting, spendForMer);
+  const mer = !shopifyConnected || spendForMer == null ? null : merRatio(revenueReporting, spendForMer);
+  const amer = !customerSplit || spendForMer == null ? null : merRatio(ncReporting, spendForMer);
+  const lyPnl = history.lastYearPnl.find((row) => row.date === alignment.date) ?? null;
+  const lyOrders = history.lastYearSales.get(alignment.date) ?? null;
+  const lyResolved = shopifyConnected
+    ? resolveShopifyDay({
+        orders: lyOrders,
+        pnl: lyPnl,
+        customerSplit: false,
+        emptyIsZero: false,
+        trustOrderSplit: false,
+      })
+    : 'no data';
+  const lyStatus = lyResolved === 'no data' ? 'no_last_year_data' : 'ok';
+  const shopifyWindow = buildShopifyWindow({
+    windowDays: window.days,
+    today: clock.today,
+    timeZone: timezone,
+    thisYearSales: history.thisYearSales,
+    todaySales: live.shopifyToday,
+    lastYearSales: history.lastYearSales,
+    thisYearPnl: history.thisYearPnl,
+    lastYearPnl: history.lastYearPnl,
+    connected: shopifyConnected,
+    customerSplit,
+  });
   const googleSpend = live.google.spend ?? 0;
   const acquisitionSpend = live.totalSpendSoFar + googleSpend;
 
@@ -495,16 +592,24 @@ export async function GET(request: NextRequest) {
     google: live.google,
     shopify: {
       currency: shopifyCurrency,
+      connected: shopifyConnected,
+      customerSplit,
       today: roundDay(live.shopifyToday),
       l7HourlyAvg: roundHours(history.shopifyL7Hourly),
       l7DailyAvgRevenue: r2(history.shopifyL7DailyAvg),
+      window: shopifyWindow.days.map((day) => ({
+        ...day,
+        actual: roundActual(day.actual),
+        lastYear: day.lastYear === 'no data' ? day.lastYear : roundActual(day.lastYear),
+      })),
       lastYear: {
-        status: lastYearSalesStatus(alignment.date, history.earliestOrderDay),
+        status: lyStatus,
         date: alignment.date,
         dayLabel: alignment.dayLabel,
         rule: alignment.rule,
         earliestOrderDay: history.earliestOrderDay,
-        sales: history.shopifyLastYear ? roundDay(history.shopifyLastYear) : null,
+        revenue: lyResolved === 'no data' ? null : r2(lyResolved.gross),
+        sales: lyOrders && lyOrders.orders > 0 ? roundDay(lyOrders) : null,
       },
       mer: mer == null ? null : r2(mer),
       amer: amer == null ? null : r2(amer),
@@ -518,6 +623,18 @@ export async function GET(request: NextRequest) {
       },
     },
   };
+
+  console.log(JSON.stringify({
+    source: 'bfcm-pacing',
+    brandId,
+    totalMs: Date.now() - started,
+    historyMs,
+    liveMs,
+    historyCached,
+    liveCached,
+    windowOrders: history.windowOrderCount,
+    lastYearOrders: history.lastYearOrderCount,
+  }));
 
   return NextResponse.json(response);
 }
@@ -537,6 +654,7 @@ async function loadHistory(input: {
   reportingCurrency: string;
   fxRates: Record<string, number>;
   connection: { domain: string | null; token: string | null };
+  shopConnected: boolean;
 }): Promise<HistorySlice> {
   const warnings: string[] = [];
   const lastWindow = bfcmWindow(Number(input.clock.today.slice(0, 4)) - 1);
@@ -563,6 +681,12 @@ async function loadHistory(input: {
     shopifyL7Hourly: emptyDaySales().hourly,
     shopifyL7DailyAvg: 0,
     shopifyLastYear: null,
+    thisYearSales: new Map(),
+    lastYearSales: new Map(),
+    thisYearPnl: [],
+    lastYearPnl: [],
+    windowOrderCount: 0,
+    lastYearOrderCount: 0,
     earliestOrderDay: null,
     pnl: { ncRev: 0, meta: 0, google: 0, other: 0, hasData: false },
     lastYearBfcmPnl: buildLastYearBfcmPnl({
@@ -585,11 +709,10 @@ async function loadHistory(input: {
     warnings.push(`Shopify freshness failed: ${err instanceof Error ? err.message : 'query failed'}`);
   }
 
-  const lyStatus = lastYearSalesStatus(input.alignment.date, slice.earliestOrderDay);
   const l7Range = shopDayRangeIso(input.clock.l7[0], input.clock.l7[input.clock.l7.length - 1], input.timezone);
-  const lyRange = lyStatus === 'ok' ? shopDayRangeIso(input.alignment.date, input.alignment.date, input.timezone) : null;
 
   const shopifyL7 = (async () => {
+    if (!input.shopConnected) return;
     const orders = await loadOrdersBetween(input.supabase, input.brandId, l7Range.min, l7Range.max);
     await enrichOrders(input.connection.domain, input.connection.token, orders);
     const byDay = salesByDay(orders, input.timezone);
@@ -600,16 +723,65 @@ async function loadHistory(input: {
     warnings.push(`Shopify L7 failed: ${err instanceof Error ? err.message : 'query failed'}`);
   });
 
-  const shopifyLy = (async () => {
-    if (!lyRange || lyStatus !== 'ok') {
-      slice.shopifyLastYear = null;
-      return;
+  const shopifyWindow = (async () => {
+    if (!input.shopConnected) return;
+    // One bounded range per side of the window. Closed days are not enriched:
+    // their new vs returning split comes from daily_pnl, and today is enriched
+    // in the live slice.
+    const year = Number(input.window.start.slice(0, 4));
+    const lastWindowDays = bfcmWindow(year - 1);
+    const pastEnd = addCalendarDays(input.clock.today, -1);
+    const thisEnd = pastEnd < input.window.end ? pastEnd : input.window.end;
+    const alignmentOutside =
+      input.alignment.date < lastWindowDays.start || input.alignment.date > lastWindowDays.end;
+    const tasks: Promise<void>[] = [];
+    if (input.window.start <= thisEnd) {
+      tasks.push((async () => {
+        const range = shopDayRangeIso(input.window.start, thisEnd, input.timezone);
+        const orders = await loadOrdersBetween(input.supabase, input.brandId, range.min, range.max);
+        slice.windowOrderCount += orders.length;
+        slice.thisYearSales = salesByDay(orders, input.timezone);
+      })());
     }
-    const orders = await loadOrdersBetween(input.supabase, input.brandId, lyRange.min, lyRange.max);
-    await enrichOrders(input.connection.domain, input.connection.token, orders);
-    slice.shopifyLastYear = daySalesOrEmpty(salesByDay(orders, input.timezone), input.alignment.date);
+    tasks.push((async () => {
+      const range = shopDayRangeIso(lastWindowDays.start, lastWindowDays.end, input.timezone);
+      const extraRange = alignmentOutside
+        ? shopDayRangeIso(input.alignment.date, input.alignment.date, input.timezone)
+        : null;
+      const [orders, extra] = await Promise.all([
+        loadOrdersBetween(input.supabase, input.brandId, range.min, range.max),
+        extraRange
+          ? loadOrdersBetween(input.supabase, input.brandId, extraRange.min, extraRange.max)
+          : Promise.resolve([]),
+      ]);
+      slice.lastYearOrderCount = orders.length + extra.length;
+      const byDay = salesByDay(orders, input.timezone);
+      for (const [date, sales] of Array.from(salesByDay(extra, input.timezone).entries())) {
+        byDay.set(date, sales);
+      }
+      slice.lastYearSales = byDay;
+    })());
+    const pnlEnd = input.clock.today < input.window.end ? input.clock.today : input.window.end;
+    if (input.window.start <= pnlEnd) {
+      tasks.push((async () => {
+        const { data, error } = await input.supabase
+          .from('daily_pnl')
+          .select('date, gross_sales, nc_orders, rc_orders, nc_revenue, rc_revenue, currency')
+          .eq('brand_id', input.brandId)
+          .gte('date', input.window.start)
+          .lte('date', pnlEnd);
+        if (error) {
+          warnings.push(`Shopify window P&L failed: ${error.message}`);
+          return;
+        }
+        slice.thisYearPnl = pnlSnapshots(data as Array<Record<string, unknown>> | null, input.reportingCurrency, input.fxRates);
+      })());
+    }
+    await Promise.all(tasks);
+    const sameDay = slice.lastYearSales.get(input.alignment.date);
+    slice.shopifyLastYear = sameDay && sameDay.orders > 0 ? sameDay : null;
   })().catch((err) => {
-    warnings.push(`Shopify last year failed: ${err instanceof Error ? err.message : 'query failed'}`);
+    warnings.push(`Shopify window failed: ${err instanceof Error ? err.message : 'query failed'}`);
   });
 
   const pnl = (async () => {
@@ -640,7 +812,7 @@ async function loadHistory(input: {
   const lastYearPnl = (async () => {
     const { data, error } = await input.supabase
       .from('daily_pnl')
-      .select('date, nc_orders, rc_orders, nc_revenue, gross_sales, discounts, refunds, meta_spend, google_spend, currency')
+      .select('date, nc_orders, rc_orders, nc_revenue, rc_revenue, gross_sales, discounts, refunds, meta_spend, google_spend, currency')
       .eq('brand_id', input.brandId)
       .gte('date', lastYearRange.start)
       .lte('date', lastYearRange.end);
@@ -757,7 +929,8 @@ async function loadHistory(input: {
     warnings.push(`Meta history failed: ${err instanceof Error ? err.message : 'request failed'}`);
   });
 
-  await Promise.all([shopifyL7, shopifyLy, pnl, lastYearPnl, meta]);
+  await Promise.all([shopifyL7, shopifyWindow, pnl, lastYearPnl, meta]);
+  slice.lastYearPnl = pnlSnapshots(lastYearRows as unknown as Array<Record<string, unknown>>, input.reportingCurrency, input.fxRates);
   slice.lastYearBfcmPnl = buildLastYearBfcmPnl({
     year: viewedYear,
     rows: lastYearRows,
@@ -813,6 +986,7 @@ async function loadLive(input: {
 
   const todayRange = shopDayRangeIso(input.today, input.today, input.timezone);
   const shopify = (async () => {
+    if (input.connection.connection === 'none') return;
     const [orders, freshness] = await Promise.all([
       loadOrdersBetween(input.supabase, input.brandId, todayRange.min, todayRange.max),
       loadOrderFreshness(input.supabase, input.brandId),

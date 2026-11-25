@@ -30,7 +30,7 @@ import Navbar from '@/components/Navbar';
 import { createClient } from '@/lib/supabase';
 import { lastYearFigure, lastYearTotal, zonedClock } from '@/lib/bfcm/calendar';
 import { pacingDisplayFigures } from '@/lib/bfcm/store-currency';
-import { paceSnapshot, vsBaselinePct, type PaceTone } from '@/lib/bfcm/pacing';
+import { paceSnapshot, revenuePaceTone, vsBaselinePct, type PaceTone } from '@/lib/bfcm/pacing';
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -64,6 +64,24 @@ interface DaySales {
   ncRevenue: number;
   rcRevenue: number;
   hourly: HourSales[];
+}
+
+interface ShopifyActual {
+  gross: number;
+  orders: number;
+  ncOrders: number | null;
+  rcOrders: number | null;
+  ncRevenue: number | null;
+  rcRevenue: number | null;
+  source: 'shopify_orders' | 'daily_pnl';
+}
+
+interface ShopifyWindowDay {
+  date: string;
+  dayLabel: string;
+  alignedDate: string;
+  actual: ShopifyActual | null;
+  lastYear: ShopifyActual | 'no data';
 }
 
 interface GoalRow {
@@ -210,15 +228,19 @@ interface BfcmPacingData {
   };
   shopify?: {
     currency: string;
+    connected?: boolean;
+    customerSplit?: boolean;
     today: DaySales;
     l7HourlyAvg: HourSales[];
     l7DailyAvgRevenue: number;
+    window?: ShopifyWindowDay[];
     lastYear: {
       status: 'ok' | 'no_last_year_data';
       date: string;
       dayLabel: string;
       rule: string;
       earliestOrderDay: string | null;
+      revenue?: number | null;
       sales: DaySales | null;
     };
     mer: number | null;
@@ -413,6 +435,8 @@ function HourlySalesChart({
           <span className="flex items-center gap-1.5"><span className="w-3 h-0.5 rounded" style={{ backgroundColor: '#666' }} />L7 avg</span>
           {showLy ? (
             <span className="flex items-center gap-1.5"><span className="w-3 h-0.5 rounded" style={{ backgroundColor: '#888' }} />Last year</span>
+          ) : lastYearStatus === 'ok' ? (
+            <span>Last year has no hourly split</span>
           ) : (
             <span>no data</span>
           )}
@@ -705,6 +729,69 @@ function shortDay(dayLabel: string): string {
   if (dayLabel === 'Black Friday') return 'Fri BF';
   if (dayLabel === 'Cyber Monday') return 'Mon CM';
   return dayLabel.slice(0, 3);
+}
+
+function ShopifyRevenueChart({
+  days,
+  currency,
+  factor = 1,
+  delayed = false,
+}: {
+  days: ShopifyWindowDay[];
+  currency: string;
+  factor?: number;
+  delayed?: boolean;
+}) {
+  const s = sym(currency);
+  const chart = days.map((day) => ({
+    shortLabel: shortDay(day.dayLabel),
+    thisYear: day.actual ? Math.round(day.actual.gross * factor * 100) / 100 : null,
+    lastYear: day.lastYear === 'no data' ? null : Math.round(day.lastYear.gross * factor * 100) / 100,
+  }));
+  const thisTotal = days.reduce((sum, day) => sum + (day.actual?.gross || 0), 0);
+  const lastKnown = days.some((day) => day.lastYear !== 'no data');
+  const lastTotal = days.reduce((sum, day) => sum + (day.lastYear === 'no data' ? 0 : day.lastYear.gross), 0);
+  return (
+    <div className="rounded-xl p-6" style={{ backgroundColor: '#111111' }}>
+      <div className="flex items-center justify-between mb-4 gap-3">
+        <h3 className="text-sm font-semibold" style={{ color: '#F5F5F8' }}>
+          BFCM Window — Shopify revenue
+        </h3>
+        {delayed && (
+          <span className="text-xs" style={{ color: '#F59E0B' }}>delayed (Triple Whale)</span>
+        )}
+      </div>
+      <ResponsiveContainer width="100%" height={280}>
+        <BarChart data={chart} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+          <CartesianGrid stroke="rgba(255,255,255,0.04)" strokeDasharray="3 3" />
+          <XAxis dataKey="shortLabel" stroke="#555" tick={{ fontSize: 11, fill: '#555' }} tickLine={false} />
+          <YAxis
+            stroke="#555"
+            tick={{ fontSize: 11, fill: '#555' }}
+            tickLine={false}
+            tickFormatter={(v: number) => `${s}${v >= 1000 ? (v / 1000).toFixed(0) + 'K' : v.toFixed(0)}`}
+          />
+          <Tooltip
+            contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#F5F5F8' }}
+            formatter={(value: unknown, name: unknown) => [
+              value == null ? 'no data' : `${s}${Number(value).toLocaleString()}`,
+              String(name),
+            ]}
+          />
+          <Bar dataKey="thisYear" fill="#C8B89A" name="This year" maxBarSize={32} />
+          <Bar dataKey="lastYear" fill="#444444" name="Last year" maxBarSize={32} />
+        </BarChart>
+      </ResponsiveContainer>
+      <div className="flex flex-wrap gap-6 mt-4 pt-4 text-xs" style={{ borderTop: '1px solid rgba(255,255,255,0.06)', color: '#888' }}>
+        <span>
+          This year: <span style={{ color: '#F5F5F8', fontWeight: 600 }}>{fmtMoney(thisTotal * factor, currency)}</span>
+        </span>
+        <span>
+          Last year: <span style={{ color: '#F5F5F8', fontWeight: 600 }}>{lastKnown ? fmtMoney(lastTotal * factor, currency) : 'no data'}</span>
+        </span>
+      </div>
+    </div>
+  );
 }
 
 function fmtPnlMoney(figure: PnlFigure, currency: string, convert: (amount: number) => number): string {
@@ -1056,6 +1143,7 @@ export default function BfcmPacingPage() {
   const [data, setData] = useState<BfcmPacingData | null>(null);
   const [fetchingData, setFetchingData] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [goalMap, setGoalMap] = useState<Record<string, GoalRow>>({});
   const [goalAccess, setGoalAccess] = useState<'read' | 'write'>('read');
   const [goalsError, setGoalsError] = useState<string | null>(null);
@@ -1112,10 +1200,10 @@ export default function BfcmPacingPage() {
     fetchBrands();
   }, [userRole, supabase]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const loadPacing = async (refresh: boolean) => {
+  const loadPacing = async (refresh: boolean, background = false) => {
     if (!authToken || !selectedBrandId) return;
     const requestId = ++requestRef.current;
-    setFetchingData(true);
+    if (!background) setFetchingData(true);
     try {
       const params = new URLSearchParams({ brandId: selectedBrandId, baseCurrency });
       if (refresh) params.set('refresh', '1');
@@ -1127,20 +1215,24 @@ export default function BfcmPacingPage() {
       if (requestId !== requestRef.current) return;
       if (!res.ok) {
         setFetchError(json.error || `Failed to load BFCM pacing (${res.status})`);
-        if (!refresh) setData(null);
+        if (!refresh && !background) setData(null);
         return;
       }
       setData(json);
+      setLastUpdated(new Date());
       setFetchError(null);
       if (baseCurrency === 'AUTO' && json.baseCurrency) setBaseCurrency(json.baseCurrency);
     } catch (err: any) {
       if (requestId !== requestRef.current) return;
       setFetchError(err.message || 'Failed to load BFCM pacing data');
-      if (!refresh) setData(null);
+      if (!refresh && !background) setData(null);
     } finally {
-      if (requestId === requestRef.current) setFetchingData(false);
+      if (!background && requestId === requestRef.current) setFetchingData(false);
     }
   };
+
+  const loadPacingRef = useRef(loadPacing);
+  loadPacingRef.current = loadPacing;
 
   useEffect(() => {
     if (!authToken || !selectedBrandId) return;
@@ -1148,10 +1240,28 @@ export default function BfcmPacingPage() {
       loadedBrandRef.current = selectedBrandId;
       setData(null);
       setFetchError(null);
+      setLastUpdated(null);
       setGoalMap({});
     }
     loadPacing(false);
   }, [authToken, selectedBrandId, baseCurrency]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!authToken || !selectedBrandId) return;
+    const tick = () => {
+      if (document.visibilityState !== 'visible') return;
+      loadPacingRef.current(false, true);
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') tick();
+    };
+    const id = window.setInterval(tick, 60_000);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [authToken, selectedBrandId, baseCurrency]);
 
   useEffect(() => {
     if (!authToken || !selectedBrandId || !data?.bfcmWindow) return;
@@ -1220,7 +1330,7 @@ export default function BfcmPacingPage() {
         todayRevenue: data.shopify?.today.revenue ?? 0,
         todayNcRevenue: data.shopify?.today.ncRevenue ?? 0,
         l7Revenue: data.shopify?.l7DailyAvgRevenue ?? 0,
-        sameDayRevenue: data.shopify?.lastYear.sales?.revenue ?? 0,
+        sameDayRevenue: data.shopify?.lastYear.revenue ?? data.shopify?.lastYear.sales?.revenue ?? 0,
         metaSpend: data.today.totalSpendSoFar,
         googleSpend: data.today.googleSpend,
         amerNcRevenue: data.aMer.l7NcRevenue,
@@ -1338,12 +1448,24 @@ export default function BfcmPacingPage() {
               Live Shopify sales, spend, MER and aMER — shop timezone
               {data?.timezone ? ` · ${data.timezone}` : ''}
             </p>
-            {data?.shopify?.freshness && (
+            {data?.shopify?.connected === false ? (
+              <p className="text-xs mt-1" style={{ color: '#888' }}>No Shopify connected</p>
+            ) : data?.shopify?.freshness && (
               <p className="text-xs mt-1" style={{ color: '#888' }}>
                 Data as of {data.shopify.freshness.asOf
                   ? new Date(data.shopify.freshness.asOf).toLocaleString('en-US', { timeZone: data.timezone, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
                   : 'no orders stored'}
                 {' · '}{data.shopify.freshness.label}
+              </p>
+            )}
+            {lastUpdated && (
+              <p className="text-xs mt-1" style={{ color: '#666' }}>
+                Last updated {lastUpdated.toLocaleTimeString('en-US', {
+                  hour: 'numeric',
+                  minute: '2-digit',
+                  second: '2-digit',
+                  timeZone: data?.timezone,
+                })}
               </p>
             )}
           </div>
@@ -1519,18 +1641,26 @@ export default function BfcmPacingPage() {
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
               <KpiCard
                 label={`Shopify gross (${base})`}
-                value={data.shopify && shown ? fmtMoney(shown.todayRevenue, base) : '—'}
+                value={data.shopify?.connected === false ? '—' : data.shopify && shown ? fmtMoney(shown.todayRevenue, base) : '—'}
                 accent="gold"
-                sub={data.shopify
-                  ? `${fmtNum(data.shopify.today.orders)} orders · AOV ${fmtMoney(convert(data.shopify.today.aov, data.shopify.currency), base)}`
-                  : 'no Shopify orders'}
+                sub={data.shopify?.connected === false
+                  ? 'No Shopify connected'
+                  : data.shopify
+                    ? `${fmtNum(data.shopify.today.orders)} orders · AOV ${fmtMoney(convert(data.shopify.today.aov, data.shopify.currency), base)}`
+                    : 'no Shopify orders'}
               />
               <KpiCard
                 label="New vs returning"
-                value={data.shopify ? `${fmtNum(data.shopify.today.ncOrders)} / ${fmtNum(data.shopify.today.rcOrders)}` : '—'}
-                sub={data.shopify
-                  ? `NC ${fmtMoney(convert(data.shopify.today.ncRevenue, data.shopify.currency), base)} · RC ${fmtMoney(convert(data.shopify.today.rcRevenue, data.shopify.currency), base)}`
-                  : undefined}
+                value={data.shopify?.connected === false || data.shopify?.customerSplit === false
+                  ? '—'
+                  : data.shopify ? `${fmtNum(data.shopify.today.ncOrders)} / ${fmtNum(data.shopify.today.rcOrders)}` : '—'}
+                sub={data.shopify?.connected === false
+                  ? 'No Shopify connected'
+                  : data.shopify?.customerSplit === false
+                    ? 'delayed (Triple Whale)'
+                    : data.shopify
+                      ? `NC ${fmtMoney(convert(data.shopify.today.ncRevenue, data.shopify.currency), base)} · RC ${fmtMoney(convert(data.shopify.today.rcRevenue, data.shopify.currency), base)}`
+                      : undefined}
               />
               <KpiCard
                 label="MER today"
@@ -1541,7 +1671,7 @@ export default function BfcmPacingPage() {
                 label="aMER today"
                 value={data.shopify?.amer != null ? fmtRoas(data.shopify.amer) : '—'}
                 accent={pace ? (pace.amerTone === 'neutral' ? 'default' : pace.amerTone) : 'default'}
-                sub={todayGoal?.amerTarget != null ? `target ${fmtRoas(todayGoal.amerTarget)}` : 'NC gross ÷ Meta + Google'}
+                sub={todayGoal?.amerTarget != null ? `target ${fmtRoas(todayGoal.amerTarget)}` : data.shopify?.customerSplit === false ? 'New vs returning unavailable' : 'NC gross ÷ Meta + Google'}
               />
               <KpiCard
                 label={`Acquisition spend (${base})`}
@@ -1572,17 +1702,20 @@ export default function BfcmPacingPage() {
               />
               <KpiCard
                 label="vs last year sales"
-                value={data.shopify?.lastYear.status === 'no_last_year_data'
+                value={data.shopify?.connected === false
+                  ? '—'
+                  : data.shopify?.lastYear.status === 'no_last_year_data'
                   ? 'no data'
                   : (() => {
-                      const pct = vsBaselinePct(data.shopify?.today.revenue || 0, data.shopify?.lastYear.sales?.revenue || 0, data.shopify?.lastYear.status || 'no_last_year_data');
+                      const baseline = data.shopify?.lastYear.revenue ?? data.shopify?.lastYear.sales?.revenue ?? 0;
+                      const pct = vsBaselinePct(data.shopify?.today.revenue || 0, baseline, data.shopify?.lastYear.status || 'no_last_year_data');
                       return pct == null ? '—' : fmtPct(pct);
                     })()}
-                sub={data.shopify?.lastYear.status === 'ok'
+                sub={data.shopify?.connected === false
+                  ? 'No Shopify connected'
+                  : data.shopify?.lastYear.status === 'ok'
                   ? `${data.shopify.lastYear.dayLabel} ${data.shopify.lastYear.date} · ${fmtMoney(shown?.sameDayRevenue || 0, base)}`
-                  : data.shopify?.lastYear.earliestOrderDay
-                    ? `Orders stored from ${data.shopify.lastYear.earliestOrderDay}`
-                    : 'No stored orders'}
+                  : 'No orders or Daily P&L for that day'}
               />
               <KpiCard
                 label="vs last year Meta spend"
@@ -1606,7 +1739,12 @@ export default function BfcmPacingPage() {
               </div>
             )}
 
-            {data.shopify && (
+            {data.shopify?.connected === false ? (
+              <div className="rounded-xl p-6 mb-6" style={{ backgroundColor: '#111111' }}>
+                <h3 className="text-sm font-semibold" style={{ color: '#F5F5F8' }}>Shopify</h3>
+                <p className="text-sm mt-2" style={{ color: '#888' }}>No Shopify connected</p>
+              </div>
+            ) : data.shopify && (
               <div className="mb-6">
                 <HourlySalesChart
                   today={data.shopify.today}
@@ -1655,6 +1793,9 @@ export default function BfcmPacingPage() {
                     <thead>
                       <tr style={{ color: '#555' }}>
                         <th className="text-left py-2 pr-3 font-medium">Day</th>
+                        <th className="text-left py-2 pr-3 font-medium">Actual</th>
+                        <th className="text-left py-2 pr-3 font-medium">vs goal</th>
+                        <th className="text-left py-2 pr-3 font-medium">vs last year</th>
                         <th className="text-left py-2 pr-3 font-medium">Revenue</th>
                         <th className="text-left py-2 pr-3 font-medium">Spend</th>
                         <th className="text-left py-2 font-medium">aMER</th>
@@ -1666,15 +1807,51 @@ export default function BfcmPacingPage() {
                         : data.bfcmWindow.days
                       ).map((day) => {
                         const goal = goalMap[day.date];
+                        const shopifyOff = data.shopify?.connected === false;
+                        const actualDay = data.shopify?.window?.find((item) => item.date === day.date);
+                        const actual = shopifyOff ? null : actualDay?.actual ?? null;
+                        const lastYearActual = actualDay?.lastYear ?? 'no data';
+                        const elapsed = day.date < data.today.date ? 24 : day.date === data.today.date ? currentHour + currentMinute / 60 : 0;
+                        const paceText = actual && goal?.revenueGoal && goal.revenueGoal > 0
+                          ? `${Math.round((actual.gross / goal.revenueGoal) * 100)}%`
+                          : '—';
+                        const paceTone = actual && goal?.revenueGoal
+                          ? revenuePaceTone(actual.gross, goal.revenueGoal, elapsed)
+                          : 'neutral';
+                        const vsLast = !actual
+                          ? '—'
+                          : lastYearActual === 'no data'
+                            ? 'no data'
+                            : (() => {
+                                const pct = vsBaselinePct(actual.gross, lastYearActual.gross, 'ok');
+                                return pct == null ? '—' : fmtPct(pct);
+                              })();
                         return (
                           <tr key={day.date} style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
                             <td className="py-2 pr-3" style={{ color: day.date === data.today.date ? '#C8B89A' : '#F5F5F8' }}>
                               {day.dayLabel}<div style={{ color: '#555' }}>{day.date}</div>
-                              {(() => {
-                                const ly = data.lastYearBfcmPnl?.days.find((item) => item.alignedDate === day.date);
-                                if (!ly) return null;
-                                return <div style={{ color: '#777' }}>vs last year {lastYearMoney(ly.gross)}</div>;
-                              })()}
+                            </td>
+                            <td className="py-2 pr-3" style={{ color: '#F5F5F8' }}>
+                              {shopifyOff ? (
+                                <span style={{ color: '#888' }}>No Shopify connected</span>
+                              ) : actual ? (
+                                <>
+                                  <div className="tabular-nums">{fmtMoney(convert(actual.gross, data.shopify?.currency), base)}</div>
+                                  <div style={{ color: '#777' }}>{fmtNum(actual.orders)} orders</div>
+                                  {data.shopify?.customerSplit !== false && actual.ncOrders != null && actual.rcOrders != null && (
+                                    <div style={{ color: '#777' }}>{fmtNum(actual.ncOrders)} new · {fmtNum(actual.rcOrders)} returning</div>
+                                  )}
+                                </>
+                              ) : (
+                                <span style={{ color: '#555' }}>—</span>
+                              )}
+                            </td>
+                            <td className="py-2 pr-3 tabular-nums" style={{ color: TONE_COLOR[paceTone] }}>{paceText}</td>
+                            <td className="py-2 pr-3" style={{ color: '#F5F5F8' }}>
+                              <div className="tabular-nums">{vsLast}</div>
+                              {lastYearActual !== 'no data' && (
+                                <div style={{ color: '#777' }}>{fmtMoney(convert(lastYearActual.gross, data.shopify?.currency), base)}</div>
+                              )}
                             </td>
                             <td className="py-2 pr-3"><GoalField compact label="" value={goal?.revenueGoal ?? null} disabled={goalAccess !== 'write'} onCommit={(value) => saveGoal(day.date, { revenueGoal: value })} /></td>
                             <td className="py-2 pr-3"><GoalField compact label="" value={goal?.spendBudget ?? null} disabled={goalAccess !== 'write'} onCommit={(value) => saveGoal(day.date, { spendBudget: value })} /></td>
@@ -1721,6 +1898,16 @@ export default function BfcmPacingPage() {
             </div>
 
             {/* BFCM window */}
+            {data.shopify?.connected !== false && data.shopify?.window && data.shopify.window.length > 0 && (
+              <div className="mb-6">
+                <ShopifyRevenueChart
+                  days={data.shopify.window}
+                  currency={base}
+                  factor={convert(1, data.shopify.currency)}
+                  delayed={data.shopify.customerSplit === false}
+                />
+              </div>
+            )}
             <div className="mb-6">
               <BfcmWindowChart
                 thisYear={data.thisYearBfcm.fullWindow}
@@ -1738,7 +1925,7 @@ export default function BfcmPacingPage() {
             {/* Footer */}
             <div className="mt-6 rounded-xl p-4 flex items-center gap-2 text-xs" style={{ backgroundColor: '#111111', color: '#555' }}>
               <Info size={14} />
-              BFCM window {data.bfcmWindow.start} — {data.bfcmWindow.end} · {data.timezoneSource === 'ad_account' ? 'ad account' : 'shop'} timezone {data.timezone} · today cached 60s, history 15 min
+              BFCM window {data.bfcmWindow.start} — {data.bfcmWindow.end} · {data.timezoneSource === 'ad_account' ? 'ad account' : 'shop'} timezone {data.timezone} · refreshes every 60s while this tab is open · today cached 60s, history 15 min
             </div>
           </>
         )}

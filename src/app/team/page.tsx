@@ -1644,6 +1644,157 @@ function InviteMemberModal({
 
 /* ─── Main Page ──────────────────────────────────────────────── */
 
+function OrderBackfillPanel({ brands }: { brands: Brand[] }) {
+  const supabase = createClient();
+  const year = new Date().getUTCFullYear() - 1;
+  const [brandId, setBrandId] = useState(brands[0]?.id || '');
+  const [startDate, setStartDate] = useState(`${year}-11-15`);
+  const [endDate, setEndDate] = useState(`${year}-12-05`);
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [ok, setOk] = useState(true);
+
+  useEffect(() => {
+    if (!brandId && brands[0]) setBrandId(brands[0].id);
+  }, [brandId, brands]);
+
+  const run = async () => {
+    if (!brandId || !startDate || !endDate || endDate < startDate) {
+      setOk(false);
+      setResult('Choose a brand and a start date on or before the end date.');
+      return;
+    }
+    setRunning(true);
+    setResult(null);
+    setOk(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        setOk(false);
+        setResult('Not signed in');
+        setRunning(false);
+        return;
+      }
+      const headers = {
+        Authorization: `Bearer ${session.access_token}`,
+        'Content-Type': 'application/json',
+      };
+      const body = { brand_id: brandId, start_date: startDate, end_date: endDate };
+      const lines: string[] = [];
+      let truncated = true;
+      let guard = 0;
+      while (truncated && guard < 30) {
+        const res = await fetch('/api/admin/shopify-order-backfill', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+        });
+        const last = await res.json().catch(() => ({}));
+        lines.push(
+          `Pull ${guard + 1}: ${res.status} · fetched ${last.fetched ?? 0} · upserted ${last.upserted ?? 0}` +
+          `${last.truncated ? ' · truncated' : ''}` +
+          `${last.warning ? ` · ${last.warning}` : ''}` +
+          `${last.error ? ` · ${last.error}` : ''}`
+        );
+        if (!res.ok && !last.truncated) {
+          setOk(false);
+          setResult(lines.join('\n'));
+          setRunning(false);
+          return;
+        }
+        truncated = last.truncated === true;
+        guard += 1;
+      }
+      if (truncated) {
+        setOk(false);
+        setResult(`${lines.join('\n')}\nStill truncated. Run it again to continue.`);
+        setRunning(false);
+        return;
+      }
+      const rebuildRes = await fetch('/api/admin/rebuild-daily-pnl', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      });
+      const rebuild = await rebuildRes.json().catch(() => ({}));
+      if (!rebuildRes.ok) {
+        setOk(false);
+        lines.push(`P&L rebuild failed: ${rebuild.error || rebuildRes.status}`);
+      } else {
+        lines.push(`P&L rebuilt · ${rebuild.days_written ?? 0} days · ${rebuild.orders_read ?? 0} orders`);
+      }
+      setResult(lines.join('\n'));
+    } catch (err) {
+      setOk(false);
+      setResult(err instanceof Error ? err.message : 'Backfill failed');
+    }
+    setRunning(false);
+  };
+
+  return (
+    <div
+      className="mb-6 rounded-xl p-4"
+      style={{ backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}
+    >
+      <h2 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#888' }}>
+        Backfill orders + rebuild P&L
+      </h2>
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="text-xs" style={{ color: '#777' }}>
+          Brand
+          <select
+            value={brandId}
+            onChange={(event) => setBrandId(event.target.value)}
+            className="mt-1 block rounded-lg px-2 py-1.5 text-sm"
+            style={{ backgroundColor: '#0A0A0A', color: '#F5F5F8', border: '1px solid rgba(255,255,255,0.08)' }}
+          >
+            {brands.map((brand) => (
+              <option key={brand.id} value={brand.id}>{brand.name}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-xs" style={{ color: '#777' }}>
+          Start
+          <input
+            type="date"
+            value={startDate}
+            onChange={(event) => setStartDate(event.target.value)}
+            className="mt-1 block rounded-lg px-2 py-1.5 text-sm"
+            style={{ backgroundColor: '#0A0A0A', color: '#F5F5F8', border: '1px solid rgba(255,255,255,0.08)' }}
+          />
+        </label>
+        <label className="text-xs" style={{ color: '#777' }}>
+          End
+          <input
+            type="date"
+            value={endDate}
+            onChange={(event) => setEndDate(event.target.value)}
+            className="mt-1 block rounded-lg px-2 py-1.5 text-sm"
+            style={{ backgroundColor: '#0A0A0A', color: '#F5F5F8', border: '1px solid rgba(255,255,255,0.08)' }}
+          />
+        </label>
+        <button
+          type="button"
+          onClick={run}
+          disabled={running || !brandId}
+          className="rounded-lg px-3 py-2 text-sm font-medium"
+          style={{ backgroundColor: '#C8B89A', color: '#0A0A0A', opacity: running ? 0.6 : 1 }}
+        >
+          {running ? 'Running…' : 'Backfill orders + rebuild P&L'}
+        </button>
+      </div>
+      {result && (
+        <pre
+          className="mt-3 whitespace-pre-wrap text-xs"
+          style={{ color: ok ? '#F5F5F8' : '#fca5a5' }}
+        >
+          {result}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 export default function TeamPage() {
   const router = useRouter();
   const supabase = createClient();
@@ -2120,6 +2271,8 @@ export default function TeamPage() {
             </button>
           </div>
         </div>
+
+        <OrderBackfillPanel brands={brands.filter((brand) => brand.name !== 'Test Brand')} />
 
         {resendNotice && (
           <div
