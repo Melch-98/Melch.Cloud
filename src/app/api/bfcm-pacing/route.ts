@@ -121,8 +121,10 @@ interface LiveSlice {
   campaignsError: string | null;
   shopifyToday: DaySales;
   newestOrderAt: string | null;
+  shopifyOrdersLoaded: boolean;
   google: {
     configured: boolean;
+    available: boolean;
     spend: number | null;
     conversionValue: number | null;
     conversions: number | null;
@@ -130,6 +132,7 @@ interface LiveSlice {
     currency: string | null;
     valueLabel: 'conversion value' | 'unavailable';
     error: string | null;
+    hourly: HourlySpend[] | null;
   };
   metaOk: boolean;
   metaCurrency: string | null;
@@ -589,7 +592,10 @@ export async function GET(request: NextRequest) {
     thisYearBfcm: { fullWindow: clock.today < window.start ? [] : history.tyWindow },
     campaigns: live.campaigns,
     campaignsError: live.campaignsError,
-    google: live.google,
+    google: {
+      ...live.google,
+      hourly: live.google.hourly?.map((point) => ({ hour: point.hour, spend: r2(point.spend) })) ?? null,
+    },
     shopify: {
       currency: shopifyCurrency,
       connected: shopifyConnected,
@@ -616,6 +622,7 @@ export async function GET(request: NextRequest) {
       revenueReporting: r2(revenueReporting),
       ncRevenueReporting: r2(ncReporting),
       spendReporting: spendForMer == null ? null : r2(spendForMer),
+      ordersLoaded: live.shopifyOrdersLoaded,
       freshness: {
         asOf: live.newestOrderAt,
         feed: live.feed.feed,
@@ -968,8 +975,10 @@ async function loadLive(input: {
     campaignsError: null,
     shopifyToday: emptyDaySales(),
     newestOrderAt: null,
+    shopifyOrdersLoaded: false,
     google: {
       configured: !!(input.brand.google_ads_customer_id && String(input.brand.google_ads_customer_id).trim()),
+      available: false,
       spend: null,
       conversionValue: null,
       conversions: null,
@@ -977,6 +986,7 @@ async function loadLive(input: {
       currency: null,
       valueLabel: 'unavailable',
       error: null,
+      hourly: null,
     },
     metaOk: false,
     metaCurrency: null,
@@ -994,6 +1004,7 @@ async function loadLive(input: {
     await enrichOrders(input.connection.domain, input.connection.token, orders);
     slice.shopifyToday = daySalesOrEmpty(salesByDay(orders, input.timezone), input.today);
     slice.newestOrderAt = freshness.newestAt;
+    slice.shopifyOrdersLoaded = true;
   })().catch((err) => {
     warnings.push(`Shopify orders failed: ${err instanceof Error ? err.message : 'query failed'}`);
   });
@@ -1080,6 +1091,8 @@ async function loadLive(input: {
       slice.google.conversions = 0;
       slice.google.roas = null;
       slice.google.valueLabel = 'conversion value';
+      slice.google.hourly = emptyHourlySpend();
+      slice.google.available = true;
       return;
     }
     const rows = await gaqlQueryStrict(
@@ -1098,6 +1111,8 @@ async function loadLive(input: {
     slice.google.conversions = storeDay.conversions;
     slice.google.roas = storeDay.spend > 0 ? storeDay.conversionValue / storeDay.spend : null;
     slice.google.valueLabel = 'conversion value';
+    slice.google.hourly = storeDay.hourly;
+    slice.google.available = true;
   })().catch((err) => {
     slice.google.error = err instanceof Error ? err.message : 'Google request failed';
     slice.google.valueLabel = 'unavailable';
