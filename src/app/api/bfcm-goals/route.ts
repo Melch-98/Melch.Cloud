@@ -6,11 +6,19 @@ export const dynamic = 'force-dynamic';
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
+const BASE_COLUMNS = 'date, revenue_goal, spend_budget, amer_target, updated_at';
+const PLAN_COLUMNS = 'meta_spend_budget, google_spend_budget, blended_roas_target, meta_roas_target, google_roas_target';
+
 type GoalRow = {
   date: string;
   revenue_goal: number | string | null;
   spend_budget: number | string | null;
   amer_target: number | string | null;
+  meta_spend_budget?: number | string | null;
+  google_spend_budget?: number | string | null;
+  blended_roas_target?: number | string | null;
+  meta_roas_target?: number | string | null;
+  google_roas_target?: number | string | null;
   updated_at: string | null;
 };
 
@@ -20,12 +28,21 @@ function numOrNull(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function missingPlanColumn(message: string): boolean {
+  return /meta_spend_budget|google_spend_budget|blended_roas_target|meta_roas_target|google_roas_target/i.test(message);
+}
+
 function goalJson(row: GoalRow) {
   return {
     date: row.date,
     revenueGoal: numOrNull(row.revenue_goal),
     spendBudget: numOrNull(row.spend_budget),
     amerTarget: numOrNull(row.amer_target),
+    metaSpendBudget: numOrNull(row.meta_spend_budget),
+    googleSpendBudget: numOrNull(row.google_spend_budget),
+    blendedRoasTarget: numOrNull(row.blended_roas_target),
+    metaRoasTarget: numOrNull(row.meta_roas_target),
+    googleRoasTarget: numOrNull(row.google_roas_target),
     updatedAt: row.updated_at,
   };
 }
@@ -70,13 +87,21 @@ export async function GET(request: NextRequest) {
   if (goalAccess(role, userBrandId, brandId) === 'none') {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
-  const { data, error } = await supabase
+  const query = (columns: string) => supabase
     .from('bfcm_goals')
-    .select('date, revenue_goal, spend_budget, amer_target, updated_at')
+    .select(columns)
     .eq('brand_id', brandId)
     .gte('date', from)
     .lte('date', to)
     .order('date', { ascending: true });
+  let { data, error } = await query(`${BASE_COLUMNS}, ${PLAN_COLUMNS}`);
+  let planColumns = true;
+  if (error && missingPlanColumn(error.message)) {
+    planColumns = false;
+    const fallback = await query(BASE_COLUMNS);
+    data = fallback.data;
+    error = fallback.error;
+  }
   if (error) {
     const missing = /bfcm_goals/i.test(error.message);
     return NextResponse.json(
@@ -85,8 +110,9 @@ export async function GET(request: NextRequest) {
     );
   }
   return NextResponse.json({
-    goals: ((data || []) as GoalRow[]).map(goalJson),
+    goals: ((data || []) as unknown as GoalRow[]).map(goalJson),
     access: goalAccess(role, userBrandId, brandId),
+    planColumns,
   });
 }
 
@@ -103,6 +129,16 @@ export async function PUT(request: NextRequest) {
     revenue_goal?: unknown;
     spend_budget?: unknown;
     amer_target?: unknown;
+    metaSpendBudget?: unknown;
+    googleSpendBudget?: unknown;
+    blendedRoasTarget?: unknown;
+    metaRoasTarget?: unknown;
+    googleRoasTarget?: unknown;
+    meta_spend_budget?: unknown;
+    google_spend_budget?: unknown;
+    blended_roas_target?: unknown;
+    meta_roas_target?: unknown;
+    google_roas_target?: unknown;
   } = {};
   try {
     body = await request.json();
@@ -120,34 +156,63 @@ export async function PUT(request: NextRequest) {
   const revenueGoal = numOrNull(body.revenueGoal ?? body.revenue_goal);
   const spendBudget = numOrNull(body.spendBudget ?? body.spend_budget);
   const amerTarget = numOrNull(body.amerTarget ?? body.amer_target);
-  const invalid = [body.revenueGoal ?? body.revenue_goal, body.spendBudget ?? body.spend_budget, body.amerTarget ?? body.amer_target]
-    .filter((value) => value != null && value !== '')
-    .some((value) => !Number.isFinite(Number(value)) || Number(value) < 0);
-  if (invalid || (revenueGoal != null && revenueGoal < 0) || (spendBudget != null && spendBudget < 0) || (amerTarget != null && amerTarget < 0)) {
+  const channelFields = [
+    ['metaSpendBudget', 'meta_spend_budget', 'meta_spend_budget'],
+    ['googleSpendBudget', 'google_spend_budget', 'google_spend_budget'],
+    ['blendedRoasTarget', 'blended_roas_target', 'blended_roas_target'],
+    ['metaRoasTarget', 'meta_roas_target', 'meta_roas_target'],
+    ['googleRoasTarget', 'google_roas_target', 'google_roas_target'],
+  ] as const;
+  const channelTouched = channelFields.some(([camel, snake]) => camel in body || snake in body);
+  if (channelTouched && role !== 'admin') {
+    return NextResponse.json({ error: 'Channel plans are admin-only.' }, { status: 403 });
+  }
+  const provided = [
+    body.revenueGoal ?? body.revenue_goal,
+    body.spendBudget ?? body.spend_budget,
+    body.amerTarget ?? body.amer_target,
+    ...channelFields.map(([camel, snake]) => (camel in body || snake in body ? body[camel] ?? body[snake] : undefined)),
+  ];
+  const invalid = provided
+    .filter((item) => item != null && item !== '')
+    .some((item) => !Number.isFinite(Number(item)) || Number(item) < 0);
+  if (invalid) {
     return NextResponse.json({ error: 'Goals must be blank or a number that is zero or greater' }, { status: 400 });
   }
-  const { data, error } = await supabase
+  const row: Record<string, unknown> = {
+    brand_id: brandId,
+    date,
+    revenue_goal: revenueGoal,
+    spend_budget: spendBudget,
+    amer_target: amerTarget,
+    created_by: userId,
+    updated_at: new Date().toISOString(),
+  };
+  for (const [camel, snake, column] of channelFields) {
+    if (camel in body || snake in body) row[column] = numOrNull(body[camel] ?? body[snake]);
+  }
+  const written = await supabase
     .from('bfcm_goals')
-    .upsert(
-      {
-        brand_id: brandId,
-        date,
-        revenue_goal: revenueGoal,
-        spend_budget: spendBudget,
-        amer_target: amerTarget,
-        created_by: userId,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'brand_id,date' }
-    )
-    .select('date, revenue_goal, spend_budget, amer_target, updated_at')
+    .upsert(row, { onConflict: 'brand_id,date' })
+    .select(`${BASE_COLUMNS}, ${PLAN_COLUMNS}`)
     .single();
+  let data = written.data as unknown as GoalRow | null;
+  let error = written.error;
+  if (error && missingPlanColumn(error.message) && !channelTouched) {
+    const fallback = await supabase
+      .from('bfcm_goals')
+      .upsert(row, { onConflict: 'brand_id,date' })
+      .select(BASE_COLUMNS)
+      .single();
+    data = fallback.data as unknown as GoalRow | null;
+    error = fallback.error;
+  }
   if (error) {
-    const missing = /bfcm_goals/i.test(error.message);
+    const missing = /bfcm_goals/i.test(error.message) || missingPlanColumn(error.message);
     return NextResponse.json(
-      { error: missing ? 'bfcm_goals is not applied yet' : error.message },
+      { error: missing ? 'bfcm_goals plan columns are not applied yet' : error.message },
       { status: missing ? 503 : 500 }
     );
   }
-  return NextResponse.json({ goal: goalJson(data as GoalRow) });
+  return NextResponse.json({ goal: goalJson((data || {}) as GoalRow) });
 }

@@ -132,6 +132,29 @@ describe('GET/PUT /api/bfcm-goals', () => {
     expect(res.status).toBe(200);
   });
 
+  it('lets an admin save a channel plan and refuses that write from a founder', async () => {
+    state.profile = { role: 'admin', brand_id: null };
+    const admin = await call('PUT', 'http://localhost/api/bfcm-goals', {
+      brandId: 'brand-9',
+      date: '2026-11-27',
+      revenueGoal: 5000,
+      spendBudget: 2000,
+      amerTarget: 2,
+      metaSpendBudget: 1500,
+      blendedRoasTarget: 5.4,
+    });
+    expect(admin.status).toBe(200);
+
+    state.profile = { role: 'founder', brand_id: 'brand-1' };
+    const founder = await call('PUT', 'http://localhost/api/bfcm-goals', {
+      brandId: 'brand-1',
+      date: '2026-11-27',
+      revenueGoal: 5000,
+      metaSpendBudget: 1500,
+    });
+    expect(founder.status).toBe(403);
+  });
+
   it('refuses a negative goal', async () => {
     const res = await call('PUT', 'http://localhost/api/bfcm-goals', {
       brandId: 'brand-1',

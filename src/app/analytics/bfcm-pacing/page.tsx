@@ -27,10 +27,13 @@ import {
   ReferenceLine,
 } from 'recharts';
 import Navbar from '@/components/Navbar';
+import SurfPlan, { type PlanDay } from '@/components/bfcm/surf-plan';
+import SurfTracker from '@/components/bfcm/surf-tracker';
 import { createClient } from '@/lib/supabase';
 import { lastYearFigure, lastYearTotal, zonedClock } from '@/lib/bfcm/calendar';
 import { pacingDisplayFigures } from '@/lib/bfcm/store-currency';
 import { paceSnapshot, revenuePaceTone, vsBaselinePct, type PaceTone } from '@/lib/bfcm/pacing';
+import { buildSurf, saleToDate, type ChannelState, type DayPlan, type SurfHourInput } from '@/lib/bfcm/surf';
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -89,6 +92,11 @@ interface GoalRow {
   revenueGoal: number | null;
   spendBudget: number | null;
   amerTarget: number | null;
+  metaSpendBudget?: number | null;
+  googleSpendBudget?: number | null;
+  blendedRoasTarget?: number | null;
+  metaRoasTarget?: number | null;
+  googleRoasTarget?: number | null;
 }
 
 interface DailyPoint {
@@ -219,17 +227,20 @@ interface BfcmPacingData {
   comparison?: { date: string; rule: string; dayLabel: string; inWindow: boolean };
   google?: {
     configured: boolean;
+    available?: boolean;
     spend: number | null;
     conversionValue: number | null;
     roas: number | null;
     currency: string | null;
     valueLabel: 'conversion value' | 'unavailable';
     error: string | null;
+    hourly?: { hour: number; spend: number }[] | null;
   };
   shopify?: {
     currency: string;
     connected?: boolean;
     customerSplit?: boolean;
+    ordersLoaded?: boolean;
     today: DaySales;
     l7HourlyAvg: HourSales[];
     l7DailyAvgRevenue: number;
@@ -1148,6 +1159,9 @@ export default function BfcmPacingPage() {
   const [goalAccess, setGoalAccess] = useState<'read' | 'write'>('read');
   const [goalsError, setGoalsError] = useState<string | null>(null);
   const [extraGoalDate, setExtraGoalDate] = useState('');
+  const [tab, setTab] = useState<'tracker' | 'plan' | 'history'>('tracker');
+  const [planColumns, setPlanColumns] = useState(true);
+  const [hourNotes, setHourNotes] = useState<{ status: 'ready'; byHour: Record<number, string> } | { status: 'unavailable'; reason: string }>({ status: 'ready', byHour: {} });
   const requestRef = useRef(0);
   const loadedBrandRef = useRef('');
   // AUTO → store currency from daily_pnl (CAD for Tallow Twins, USD for Mintier).
@@ -1280,6 +1294,7 @@ export default function BfcmPacingPage() {
         for (const goal of json.goals || []) next[goal.date] = goal;
         setGoalMap(next);
         setGoalAccess(json.access === 'write' ? 'write' : 'read');
+        setPlanColumns(json.planColumns !== false);
         setGoalsError(null);
       })
       .catch((err) => {
@@ -1287,6 +1302,32 @@ export default function BfcmPacingPage() {
       });
     return () => { cancelled = true; };
   }, [authToken, selectedBrandId, data?.bfcmWindow.start, data?.bfcmWindow.end]);
+
+  useEffect(() => {
+    if (!authToken || !selectedBrandId || !data?.today.date) return;
+    let cancelled = false;
+    fetch(`/api/bfcm-hour-notes?brandId=${selectedBrandId}&date=${data.today.date}`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+      cache: 'no-store',
+    })
+      .then(async (res) => {
+        const json = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok) {
+          setHourNotes({ status: 'unavailable', reason: json.error || 'Hour notes are unavailable.' });
+          return;
+        }
+        const byHour: Record<number, string> = {};
+        for (const row of json.notes || []) {
+          if (typeof row.hour === 'number' && typeof row.note === 'string' && row.note) byHour[row.hour] = row.note;
+        }
+        setHourNotes({ status: 'ready', byHour });
+      })
+      .catch(() => {
+        if (!cancelled) setHourNotes({ status: 'unavailable', reason: 'Hour notes are unavailable.' });
+      });
+    return () => { cancelled = true; };
+  }, [authToken, selectedBrandId, data?.today.date]);
 
   const breakevenRoas = useMemo(() => {
     if (!data || data.grossMarginPct == null || data.grossMarginPct <= 0) return null;
@@ -1394,21 +1435,31 @@ export default function BfcmPacingPage() {
     return list.slice(0, 6);
   }, [data, effTargetRoas, breakevenRoas, pace, todayGoal, base]);
 
-  const saveGoal = async (date: string, patch: Partial<GoalRow>) => {
-    if (!authToken || !selectedBrandId || goalAccess !== 'write') return;
+  const saveGoal = async (date: string, patch: Partial<GoalRow>, includePlan = false) => {
+    if (!authToken || !selectedBrandId) return;
+    if (!includePlan && goalAccess !== 'write') return;
+    if (includePlan && userRole !== 'admin') return;
     const current = goalMap[date] || { date, revenueGoal: null, spendBudget: null, amerTarget: null };
     const next = { ...current, ...patch, date };
     setGoalMap((prev) => ({ ...prev, [date]: next }));
+    const body: Record<string, unknown> = {
+      brandId: selectedBrandId,
+      date,
+      revenueGoal: next.revenueGoal,
+      spendBudget: next.spendBudget,
+      amerTarget: next.amerTarget,
+    };
+    if (includePlan && planColumns) {
+      body.metaSpendBudget = next.metaSpendBudget ?? null;
+      body.googleSpendBudget = next.googleSpendBudget ?? null;
+      body.blendedRoasTarget = next.blendedRoasTarget ?? null;
+      body.metaRoasTarget = next.metaRoasTarget ?? null;
+      body.googleRoasTarget = next.googleRoasTarget ?? null;
+    }
     const res = await fetch('/api/bfcm-goals', {
       method: 'PUT',
       headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        brandId: selectedBrandId,
-        date,
-        revenueGoal: next.revenueGoal,
-        spendBudget: next.spendBudget,
-        amerTarget: next.amerTarget,
-      }),
+      body: JSON.stringify(body),
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -1418,6 +1469,132 @@ export default function BfcmPacingPage() {
       setGoalsError(null);
     }
   };
+
+  const saveNote = async (hour: number, note: string) => {
+    if (!authToken || !selectedBrandId || !data?.today.date || hourNotes.status !== 'ready') return;
+    const previous = hourNotes.byHour;
+    const byHour = { ...previous };
+    if (note) byHour[hour] = note;
+    else delete byHour[hour];
+    setHourNotes({ status: 'ready', byHour });
+    const res = await fetch('/api/bfcm-hour-notes', {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ brandId: selectedBrandId, date: data.today.date, hour, note }),
+    });
+    if (!res.ok) {
+      const json = await res.json().catch(() => ({}));
+      setHourNotes({ status: 'unavailable', reason: json.error || 'Hour notes are unavailable.' });
+    }
+  };
+
+  const displayCurrency = baseCurrency === 'AUTO' ? (data?.baseCurrency || data?.reportingCurrency || 'USD') : baseCurrency;
+  const surf = useMemo(() => {
+    if (!data) return null;
+    const display = baseCurrency === 'AUTO' ? (data.baseCurrency || data.reportingCurrency || 'USD') : baseCurrency;
+    const rates = data.fxRates || {};
+    const money = (amount: number, from: string) => toBase(amount, from, rates, display);
+    const metaState: ChannelState = data.meta?.available ? 'ready' : data.meta?.configured === false ? 'absent' : 'unavailable';
+    const googleState: ChannelState = data.google?.available && data.google.hourly
+      ? 'ready'
+      : data.google?.configured === false
+        ? 'absent'
+        : 'unavailable';
+    const shopConnected = data.shopify?.connected !== false;
+    const salesReady = shopConnected && data.shopify?.ordersLoaded === true;
+    const salesReason = !shopConnected
+      ? 'No Shopify connected'
+      : 'Shopify orders failed this refresh.';
+    const goal = goalMap[data.today.date];
+    const planCurrency = data.reportingCurrency || display;
+    const planNumber = (amount: number | null | undefined) => amount == null ? null : money(amount, planCurrency);
+    const dayPlan: DayPlan = {
+      spendBudget: planNumber(goal?.spendBudget),
+      metaSpendBudget: planNumber(goal?.metaSpendBudget),
+      googleSpendBudget: planNumber(goal?.googleSpendBudget),
+      revenueGoal: planNumber(goal?.revenueGoal),
+      blendedRoasTarget: goal?.blendedRoasTarget ?? null,
+      metaRoasTarget: goal?.metaRoasTarget ?? null,
+      googleRoasTarget: goal?.googleRoasTarget ?? null,
+    };
+    const hours: SurfHourInput[] = Array.from({ length: 24 }, (_, hour) => {
+      const sale = data.shopify?.today.hourly[hour];
+      const metaPoint = data.today.hourlySpend[hour];
+      const googlePoint = data.google?.hourly?.[hour];
+      return {
+        hour,
+        metaSpend: metaState === 'ready' ? money(metaPoint?.spend || 0, data.currencies?.meta || data.currency) : null,
+        googleSpend: googleState === 'ready' ? money(googlePoint?.spend || 0, data.currencies?.google || data.google?.currency || data.currency) : null,
+        sales: salesReady ? money(sale?.revenue || 0, data.shopify?.currency || display) : null,
+        orders: salesReady ? sale?.orders || 0 : null,
+        newOrders: salesReady && data.shopify?.customerSplit !== false ? sale?.ncOrders || 0 : null,
+      };
+    });
+    return buildSurf({
+      nowHour: currentHour,
+      nowMinute: currentMinute,
+      metaState,
+      googleState,
+      salesState: salesReady ? 'ready' : 'unavailable',
+      salesReason,
+      metaReason: data.meta?.reason || (metaState === 'absent' ? 'No Meta ad account configured.' : 'Meta data is unavailable for this refresh.'),
+      googleReason: data.google?.error || (googleState === 'absent' ? 'No Google Ads account.' : 'Google data is unavailable for this refresh.'),
+      customerSplit: data.shopify?.customerSplit !== false && shopConnected,
+      hours,
+      plan: goal ? dayPlan : null,
+    });
+  }, [data, goalMap, baseCurrency, currentHour, currentMinute]);
+
+  const toDate = useMemo(() => {
+    if (!data?.shopify?.window || !data.today) return null;
+    const display = baseCurrency === 'AUTO' ? (data.baseCurrency || data.reportingCurrency || 'USD') : baseCurrency;
+    const rates = data.fxRates || {};
+    const money = (amount: number, from: string) => toBase(amount, from, rates, display);
+    const planCurrency = data.reportingCurrency || display;
+    return saleToDate({
+      today: data.today.date,
+      days: data.shopify.window.map((day) => {
+        const goal = goalMap[day.date];
+        return {
+          date: day.date,
+          sales: day.actual ? money(day.actual.gross, data.shopify?.currency || display) : null,
+          salesPlan: goal?.revenueGoal == null ? null : money(goal.revenueGoal, planCurrency),
+          spendPlan: goal?.spendBudget == null ? null : money(goal.spendBudget, planCurrency),
+        };
+      }),
+    });
+  }, [data, goalMap, baseCurrency]);
+
+  const planDays: PlanDay[] = data?.bfcmWindow.days?.map((day) => {
+    const goal = goalMap[day.date];
+    const shopifyOff = data.shopify?.connected === false;
+    const actualDay = data.shopify?.window?.find((item) => item.date === day.date);
+    const actual = shopifyOff ? null : actualDay?.actual ?? null;
+    const lastYearActual = actualDay?.lastYear ?? 'no data';
+    const display = displayCurrency;
+    return {
+      date: day.date,
+      dayLabel: day.dayLabel,
+      actual: shopifyOff ? 'No Shopify connected' : actual ? fmtMoney(convert(actual.gross, data.shopify?.currency), display) : '—',
+      orders: actual ? fmtNum(actual.orders) : '—',
+      vsLastYear: !actual
+        ? '—'
+        : lastYearActual === 'no data'
+          ? 'no data'
+          : (() => {
+              const pct = vsBaselinePct(actual.gross, lastYearActual.gross, 'ok');
+              return pct == null ? '—' : fmtPct(pct);
+            })(),
+      revenueGoal: goal?.revenueGoal ?? null,
+      spendBudget: goal?.spendBudget ?? null,
+      metaSpendBudget: goal?.metaSpendBudget ?? null,
+      googleSpendBudget: goal?.googleSpendBudget ?? null,
+      blendedRoasTarget: goal?.blendedRoasTarget ?? null,
+      metaRoasTarget: goal?.metaRoasTarget ?? null,
+      googleRoasTarget: goal?.googleRoasTarget ?? null,
+      amerTarget: goal?.amerTarget ?? null,
+    };
+  }) || [];
 
   const saveBaseCurrency = (c: string) => {
     setBaseCurrency(c);
@@ -1569,6 +1746,51 @@ export default function BfcmPacingPage() {
             {goalsError && (
               <div className="text-xs mb-4" style={{ color: '#F59E0B' }}>{goalsError}</div>
             )}
+            <div className="flex gap-2 mb-5">
+              {(['tracker', 'plan', 'history'] as const).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => setTab(item)}
+                  className="rounded-full px-4 py-1.5 text-sm"
+                  style={{
+                    backgroundColor: tab === item ? '#3DDC84' : '#101814',
+                    color: tab === item ? '#0A0A0A' : '#E7F6EC',
+                    border: '1px solid rgba(61,220,132,0.22)',
+                  }}
+                >
+                  {item === 'tracker' ? 'Tracker' : item === 'plan' ? 'Plan' : 'History'}
+                </button>
+              ))}
+            </div>
+            {tab === 'tracker' && surf && (
+              <SurfTracker
+                currency={displayCurrency}
+                timezone={data.timezone}
+                date={data.today.date}
+                windowStart={data.bfcmWindow.start}
+                windowEnd={data.bfcmWindow.end}
+                feedLabel={data.shopify?.connected === false ? 'No Shopify connected' : (data.shopify?.freshness.label || 'Live')}
+                refreshedAt={lastUpdated}
+                view={surf}
+                toDate={toDate}
+                notes={hourNotes}
+                canEditNotes={goalAccess === 'write' && hourNotes.status === 'ready'}
+                onSaveNote={saveNote}
+                onRefresh={() => loadPacing(true)}
+                onChangeBudgets={() => setTab('plan')}
+              />
+            )}
+            {tab === 'plan' && (
+              <SurfPlan
+                days={planDays}
+                currency={data.reportingCurrency || displayCurrency}
+                canEdit={userRole === 'admin'}
+                planColumns={planColumns}
+                onSave={(date, patch) => saveGoal(date, patch, true)}
+              />
+            )}
+            {tab === 'history' && <>
             <div className="flex flex-wrap items-end gap-4 mb-3">
               <GoalField
                 label={`Revenue goal (${reportingCurrency})`}
@@ -1925,8 +2147,9 @@ export default function BfcmPacingPage() {
             {/* Footer */}
             <div className="mt-6 rounded-xl p-4 flex items-center gap-2 text-xs" style={{ backgroundColor: '#111111', color: '#555' }}>
               <Info size={14} />
-              BFCM window {data.bfcmWindow.start} — {data.bfcmWindow.end} · {data.timezoneSource === 'ad_account' ? 'ad account' : 'shop'} timezone {data.timezone} · refreshes every 60s while this tab is open · today cached 60s, history 15 min
+              BFCM window {data.bfcmWindow.start} — {data.bfcmWindow.end} · {data.timezoneSource === 'ad_account' ? 'ad account' : 'shop'} timezone {data.timezone} · refreshes every 60s while this tab is open · today cached 60s, history 15 min. Last year, the goals table, and Campaign Command are on this History tab.
             </div>
+            </>}
           </>
         )}
       </div>
