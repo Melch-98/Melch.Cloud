@@ -63,7 +63,7 @@ function FieldInput({
         if (Number.isFinite(parsed) && parsed >= 0) onCommit(parsed);
       }}
       className="w-24 rounded px-2 py-1 text-xs tabular-nums"
-      style={{ backgroundColor: '#0A0A0A', border: '1px solid rgba(61,220,132,0.18)', color: disabled ? '#8A978E' : '#E7F6EC' }}
+      style={{ backgroundColor: '#0A0A0A', border: '1px solid rgba(255,255,255,0.08)', color: disabled ? '#888888' : '#F5F5F8' }}
     />
   );
 }
@@ -82,25 +82,25 @@ export default function SurfPlan({
   onSave: (date: string, patch: Partial<PlanDay>) => void;
 }) {
   return (
-    <div className="rounded-2xl p-4" style={{ backgroundColor: '#101814', border: '1px solid rgba(61,220,132,0.22)' }}>
+    <div className="rounded-2xl p-4" style={{ backgroundColor: '#111111', border: '1px solid rgba(255,255,255,0.08)' }}>
       <div className="flex flex-wrap items-end justify-between gap-3 mb-3">
         <div>
-          <h2 className="text-sm font-semibold" style={{ color: '#E7F6EC' }}>Day plan</h2>
-          <p className="text-xs mt-1" style={{ color: '#8A978E' }}>
+          <h2 className="text-sm font-semibold" style={{ color: '#F5F5F8' }}>Day plan</h2>
+          <p className="text-xs mt-1" style={{ color: '#ABABAB' }}>
             Saved in {currency}. The tracker splits spend and sales evenly across the 24 shop hours. Channel spend and ROAS targets are admin edits.
             {canEdit ? '' : ' View only.'}
           </p>
         </div>
       </div>
       {!planColumns && (
-        <p className="text-xs mb-3" style={{ color: '#C6A15B' }}>
+        <p className="text-xs mb-3" style={{ color: '#C8B89A' }}>
           Channel plan columns are not on this database yet. Revenue, spend, and aMER still save. Apply supabase/migrations/add_bfcm_surf_plan.sql.
         </p>
       )}
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead>
-            <tr style={{ color: '#8A978E' }}>
+            <tr style={{ color: '#ABABAB' }}>
               <th className="text-left py-2 pr-3 font-medium">Day</th>
               <th className="text-left py-2 pr-3 font-medium">Actual gross</th>
               <th className="text-left py-2 pr-3 font-medium">Orders</th>
@@ -113,13 +113,13 @@ export default function SurfPlan({
           <tbody>
             {days.map((day) => (
               <tr key={day.date} style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
-                <td className="py-2 pr-3 whitespace-nowrap" style={{ color: '#E7F6EC' }}>
+                <td className="py-2 pr-3 whitespace-nowrap" style={{ color: '#F5F5F8' }}>
                   {day.dayLabel}
-                  <div style={{ color: '#556055' }}>{day.date}</div>
+                  <div style={{ color: '#888888' }}>{day.date}</div>
                 </td>
-                <td className="py-2 pr-3 tabular-nums" style={{ color: '#E7F6EC' }}>{day.actual}</td>
-                <td className="py-2 pr-3 tabular-nums" style={{ color: '#E7F6EC' }}>{day.orders}</td>
-                <td className="py-2 pr-3 tabular-nums" style={{ color: '#E7F6EC' }}>{day.vsLastYear}</td>
+                <td className="py-2 pr-3 tabular-nums" style={{ color: '#F5F5F8' }}>{day.actual}</td>
+                <td className="py-2 pr-3 tabular-nums" style={{ color: '#F5F5F8' }}>{day.orders}</td>
+                <td className="py-2 pr-3 tabular-nums" style={{ color: '#F5F5F8' }}>{day.vsLastYear}</td>
                 {FIELDS.map((field) => {
                   const channel = field.key !== 'revenueGoal' && field.key !== 'spendBudget' && field.key !== 'amerTarget';
                   const disabled = !canEdit || (channel && !planColumns);

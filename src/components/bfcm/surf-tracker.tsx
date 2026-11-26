@@ -12,13 +12,20 @@ import {
 } from 'recharts';
 import { saleToDate, type Figure, type HourRow, type SurfView } from '@/lib/bfcm/surf';
 
-const GREEN = '#3DDC84';
-const RED = '#F07167';
-const GOLD = '#C6A15B';
-const TEXT = '#E7F6EC';
-const MUTED = '#8A978E';
-const CARD = '#101814';
-const LINE_COLOR = 'rgba(61,220,132,0.22)';
+// Melch.Cloud tokens, the same values the dashboard and the other analytics
+// pages use (tailwind brand / surface / text / success / error / warning).
+const TEXT = '#F5F5F8';
+const MUTED = '#ABABAB';
+const DIM = '#888888';
+const CARD = '#111111';
+const LINE_COLOR = 'rgba(255,255,255,0.08)';
+const GOLD = '#C8B89A';
+const INK = '#0A0A0A';
+const SUCCESS = '#22C55E';
+const DANGER = '#EF4444';
+const WARNING = '#F59E0B';
+const PLAN_LINE = '#888888';
+const NOW_LINE = 'rgba(200,184,154,0.4)';
 
 type SaleToDate = ReturnType<typeof saleToDate>;
 
@@ -54,16 +61,22 @@ function reason(figure: Figure): string | undefined {
 }
 
 function toneColor(tone: 'green' | 'red' | 'neutral'): string {
-  if (tone === 'green') return GREEN;
-  if (tone === 'red') return RED;
+  if (tone === 'green') return SUCCESS;
+  if (tone === 'red') return DANGER;
   return MUTED;
 }
 
 function callColor(call: SurfView['recommendation']['call']): string {
   if (call === 'HOLD') return GOLD;
-  if (call === 'PUSH') return GREEN;
-  if (call === 'PULL') return RED;
+  if (call === 'PUSH') return SUCCESS;
+  if (call === 'PULL') return DANGER;
   return MUTED;
+}
+
+function feedColor(label: string): string {
+  if (label === 'No Shopify connected') return DANGER;
+  if (label === 'delayed (Triple Whale)') return WARNING;
+  return GOLD;
 }
 
 function dateChip(date: string): string {
@@ -76,7 +89,7 @@ function dateChip(date: string): string {
 
 function Kpi({ card, currency }: { card: SurfView['kpis'][number]; currency: string }) {
   const width = card.progress == null ? 0 : Math.max(0, Math.min(100, card.progress * 100));
-  const bar = card.tone === 'red' ? RED : GREEN;
+  const bar = card.tone === 'red' ? DANGER : GOLD;
   const sub = card.id === 'roas'
     ? card.dayPlan.status === 'value'
       ? `target ${roas(card.dayPlan.value)}`
@@ -182,7 +195,7 @@ export default function SurfTracker({
         </div>
         <div>
           <div className="text-[11px] uppercase tracking-wide" style={{ color: MUTED }}>Sync</div>
-          <div className="text-sm" style={{ color: feedLabel === 'No Shopify connected' ? RED : GREEN }}>{feedLabel}</div>
+          <div className="text-sm" style={{ color: feedColor(feedLabel) }}>{feedLabel}</div>
         </div>
         <div>
           <div className="text-[11px] uppercase tracking-wide" style={{ color: MUTED }}>Target ROAS</div>
@@ -208,7 +221,7 @@ export default function SurfTracker({
       </div>
 
       <div className="rounded-2xl px-4 py-3 flex flex-wrap items-start gap-4" style={{ backgroundColor: CARD, border: `1px solid ${LINE_COLOR}` }}>
-        <div className="rounded-full px-3 py-1 text-xs font-semibold tracking-wide" style={{ color: '#0A0A0A', backgroundColor: callColor(call) }}>
+        <div className="rounded-full px-3 py-1 text-xs font-semibold tracking-wide" style={{ color: INK, backgroundColor: callColor(call) }}>
           {call === 'NO_PLAN' ? 'NO PLAN' : call === 'NO_CALL' ? 'NO CALL' : call}
         </div>
         <div className="min-w-0 flex-1">
@@ -223,7 +236,7 @@ export default function SurfTracker({
         </div>
         <div className="flex gap-2">
           <button type="button" onClick={() => setWhy((open) => !open)} className="rounded-full px-3 py-1 text-xs" style={{ color: TEXT, border: `1px solid ${LINE_COLOR}` }}>Why?</button>
-          <button type="button" onClick={onChangeBudgets} className="rounded-full px-3 py-1 text-xs" style={{ color: '#0A0A0A', backgroundColor: GREEN }}>Change budgets</button>
+          <button type="button" onClick={onChangeBudgets} className="rounded-full px-3 py-1 text-xs" style={{ color: INK, backgroundColor: GOLD }}>Change budgets</button>
         </div>
       </div>
 
@@ -242,7 +255,7 @@ export default function SurfTracker({
       </div>
 
       <div className="flex items-center justify-between gap-3">
-        <div className="rounded-full px-3 py-1 text-xs" style={{ backgroundColor: GREEN, color: '#0A0A0A' }}>{dateChip(date)} · today</div>
+        <div className="rounded-full px-3 py-1 text-xs" style={{ backgroundColor: GOLD, color: INK }}>{dateChip(date)} · today</div>
       </div>
 
       <div className="rounded-2xl p-4" style={{ backgroundColor: CARD, border: `1px solid ${LINE_COLOR}` }}>
@@ -254,7 +267,7 @@ export default function SurfTracker({
                 type="button"
                 onClick={() => setChart(key)}
                 className="rounded-full px-3 py-1 text-xs"
-                style={{ backgroundColor: chart === key ? GREEN : 'transparent', color: chart === key ? '#0A0A0A' : MUTED }}
+                style={{ backgroundColor: chart === key ? GOLD : 'transparent', color: chart === key ? INK : MUTED }}
               >
                 {key === 'spend' ? 'Ad spend' : 'Store sales'}
               </button>
@@ -263,7 +276,7 @@ export default function SurfTracker({
           <div className="text-xs tabular-nums text-right" style={{ color: MUTED }}>
             <div>So far <span style={{ color: TEXT }}>{series.soFar == null ? 'unavailable' : money(series.soFar, currency)}</span></div>
             <div>Plan by now <span style={{ color: TEXT }}>{series.planByNow == null ? 'no plan' : money(series.planByNow, currency)}</span>
-              {series.pacePct != null && <span style={{ color: series.pacePct >= 0 ? GREEN : RED }}> {series.pacePct >= 0 ? '+' : ''}{series.pacePct.toFixed(1)}%</span>}
+              {series.pacePct != null && <span style={{ color: series.pacePct >= 0 ? SUCCESS : DANGER }}> {series.pacePct >= 0 ? '+' : ''}{series.pacePct.toFixed(1)}%</span>}
             </div>
             <div>Day plan <span style={{ color: TEXT }}>{series.dayPlan == null ? 'no plan' : money(series.dayPlan, currency)}</span></div>
           </div>
@@ -272,15 +285,15 @@ export default function SurfTracker({
           <div className="h-56">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={series.points} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                <XAxis dataKey="label" tick={{ fill: MUTED, fontSize: 10 }} interval={3} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fill: MUTED, fontSize: 10 }} axisLine={false} tickLine={false} width={48} tickFormatter={(n: number) => money(n, currency)} />
+                <XAxis dataKey="label" tick={{ fill: DIM, fontSize: 10 }} interval={3} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: DIM, fontSize: 10 }} axisLine={false} tickLine={false} width={48} tickFormatter={(n: number) => money(n, currency)} />
                 <Tooltip
-                  contentStyle={{ backgroundColor: '#0A0A0A', border: `1px solid ${LINE_COLOR}`, borderRadius: 12, fontSize: 12 }}
+                  contentStyle={{ backgroundColor: '#1a1a1a', border: `1px solid ${LINE_COLOR}`, borderRadius: 8, fontSize: 12, color: TEXT }}
                   formatter={(n) => (typeof n === 'number' ? money(n, currency) : '—')}
                 />
-                {liveLabel && <ReferenceLine x={liveLabel} stroke={MUTED} strokeDasharray="3 3" />}
-                <Line type="monotone" dataKey="actual" stroke={GREEN} strokeWidth={2} dot={false} connectNulls={false} name="Actual" />
-                <Line type="monotone" dataKey="plan" stroke={GREEN} strokeWidth={1.5} strokeDasharray="5 5" dot={false} name="Plan" />
+                {liveLabel && <ReferenceLine x={liveLabel} stroke={NOW_LINE} strokeDasharray="3 3" />}
+                <Line type="monotone" dataKey="actual" stroke={GOLD} strokeWidth={2} dot={false} connectNulls={false} name="Actual" />
+                <Line type="monotone" dataKey="plan" stroke={PLAN_LINE} strokeWidth={1.5} strokeDasharray="5 5" dot={false} name="Plan" />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -307,7 +320,7 @@ export default function SurfTracker({
         <Stat label="Backfill default" value={view.rate.curveLabel} title={reason(view.rate.googleBackfill)} />
         <div className="ml-auto flex gap-2">
           <button type="button" onClick={() => setCompact((on) => !on)} className="rounded-full px-3 py-1" style={{ color: TEXT, border: `1px solid ${LINE_COLOR}` }}>{compact ? 'Expanded' : 'Compact'}</button>
-          <button type="button" onClick={onRefresh} className="rounded-full px-3 py-1" style={{ color: '#0A0A0A', backgroundColor: GREEN }}>Refresh now</button>
+          <button type="button" onClick={onRefresh} className="rounded-full px-3 py-1" style={{ color: INK, backgroundColor: GOLD }}>Refresh now</button>
         </div>
       </div>
 
@@ -323,12 +336,12 @@ export default function SurfTracker({
           <tbody>
             {view.hours.map((row) => (
               <tr key={row.hour} style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
-                <td className="px-2 py-1.5" style={{ color: row.settled === 'live' ? GREEN : TEXT }}>{row.label}</td>
-                <td className="px-2 py-1.5 whitespace-nowrap" style={{ color: row.settled === 'final' ? MUTED : row.settled === 'upcoming' ? '#556055' : GOLD }}>{row.settledLabel}</td>
+                <td className="px-2 py-1.5" style={{ color: row.settled === 'live' ? GOLD : TEXT }}>{row.label}</td>
+                <td className="px-2 py-1.5 whitespace-nowrap" style={{ color: row.settled === 'final' ? MUTED : row.settled === 'upcoming' ? DIM : GOLD }}>{row.settledLabel}</td>
                 <HourCells row={row} currency={currency} estimate={row.expectedFinalIsEstimate} />
                 <td className="px-2 py-1.5 min-w-[140px]">
                   {row.settled === 'upcoming' ? (
-                    <span style={{ color: '#556055' }}>—</span>
+                    <span style={{ color: DIM }}>—</span>
                   ) : notes.status === 'unavailable' ? (
                     <span title={notes.reason} style={{ color: MUTED }}>unavailable</span>
                   ) : canEditNotes ? (
