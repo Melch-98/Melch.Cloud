@@ -1754,9 +1754,9 @@ export default function BfcmPacingPage() {
                   onClick={() => setTab(item)}
                   className="rounded-full px-4 py-1.5 text-sm"
                   style={{
-                    backgroundColor: tab === item ? '#3DDC84' : '#101814',
-                    color: tab === item ? '#0A0A0A' : '#E7F6EC',
-                    border: '1px solid rgba(61,220,132,0.22)',
+                    backgroundColor: tab === item ? '#C8B89A' : '#111111',
+                    color: tab === item ? '#0A0A0A' : '#F5F5F8',
+                    border: tab === item ? '1px solid #C8B89A' : '1px solid rgba(255,255,255,0.08)',
                   }}
                 >
                   {item === 'tracker' ? 'Tracker' : item === 'plan' ? 'Plan' : 'History'}
